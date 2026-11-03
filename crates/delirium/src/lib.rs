@@ -113,6 +113,7 @@ pub mod nmbw;
 pub mod nmcf;
 pub mod nmdbm;
 pub mod nmdbm_rdr2;
+pub mod rig;
 pub mod limbreq;
 pub mod nmfl;
 pub mod nmfow;

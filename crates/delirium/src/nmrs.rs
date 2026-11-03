@@ -127,6 +127,8 @@ pub fn joints(build: &Build, asset: &[nm_asset::Joint]) -> Option<Vec<JointDef>>
     let zero = zero_pose(build);
     let (body, off) = (bodies(parts), Vec3::from(parts[0][delirium_data::kv!(0 int)]));
     asset.iter().enumerate().map(|(i, j)| {
+        // RDR2's rig, when chosen: its joint values on this body
+        let j = &crate::rig::patch(build.nm, i, j);
         let child = i + 1;
         let parent = build.parts[child].parent?;
         let z = ours(j.twist_axis).normalize_or(Vec3::Z);
