@@ -19,6 +19,8 @@
 //! - the injured-leg limp (from shotInjuredLeg): the hurt leg, while planted, bends by
 //!   (1 - 2.5 (clamp(feet apart, 0.6, 1) - 0.6)) x the injury, more on a short stance (the injury taken as
 //!   limpScale x legInjury, our 0.25).
+//! - owned requests: behaviours ask the balancer for the limp (dbm_limp) and hip pitch (dbm_hip_pitch) instead of
+//!   bending the legs themselves, so they don't fight it under the limb requests (limbreq.rs).
 //! Not here yet: stepIfInSupport (its speed threshold isn't known), more foot friction on slopes, running, crouch
 //! start, the injured-leg limp, obstacle avoidance, lean channels, the turn step, hip pitch on failing, the sideways
 //! cheat force.
@@ -153,12 +155,14 @@ pub struct Rdr2 {
     pub running: bool,
     /// the injured leg (0 left, 1 right) and how badly (0..1), from shotInjuredLeg
     pub limp: (usize, f32),
+    /// hip pitch asked of the balancer by a behaviour (rad), added to both hips' pitch
+    pub hip_pitch: f32,
 }
 
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
         Rdr2 { p, time: 0.0, still: 0.0, steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
-               since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0) }
+               since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0), hip_pitch: 0.0 }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.

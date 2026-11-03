@@ -1208,6 +1208,9 @@ impl Agent {
             if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
                 r.limp = x;
             }
+            if let (Some(x), Some(r)) = (out.dbm_hip_pitch, d.p.rdr2.as_mut()) {
+                r.hip_pitch = x;
+            }
         }
         if out.head_look_stop {
             self.nm_head.deactivate();
@@ -1577,8 +1580,11 @@ impl Agent {
             r.mark(&ch.eff, 0x20);
         }
         let mut shot_out = if nm_tick { self.nm_shot_step(build, &frames, dbm_lost, dt, true) } else { Default::default() };
+        // once catchFall has taken over, the shot's leftover requests rank below it (ours: what RDR2 does here isn't
+        // known; its shot hands over to catchFall)
+        let shot_slot = if self.nm_cf.as_ref().is_some_and(|f| f.active) { crate::limbreq::CORE } else { crate::limbreq::SHOT };
         if let (Some(r), Some(ch)) = (self.limb_reqs.as_mut(), self.ch.as_ref()) {
-            r.mark(&ch.eff, 0x38);
+            r.mark(&ch.eff, shot_slot);
         }
         walked |= walk_actives!(self) & !b & (W_CF() | W_TWIST());
         let (shot_cf, shot_ru) = (!msgs.0 && self.nm_cf_msg.is_some(), !msgs.1 && self.nm_ru_msg.is_some());
@@ -1755,7 +1761,7 @@ impl Agent {
             if !waits(walk_actives!(self), W_TWIST()) {
                 self.nm_twist.tick(c.ch, &body);
             }
-            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x38); }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, shot_slot); }
             if !waits(walk_actives!(self), W_CF()) {
                 if let Some(f) = self.nm_cf.as_mut() {
                     f.tick(&mut c, world, obstacles, &mut self.nm_head, &mut self.nm_twist, dt);
@@ -1853,6 +1859,9 @@ impl Agent {
                 // RDR2 core: shotInjuredLeg's limp
                 if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
                     r.limp = x;
+                }
+                if let (Some(x), Some(r)) = (out.dbm_hip_pitch, d.p.rdr2.as_mut()) {
+                    r.hip_pitch = x;
                 }
             }
             // an extra (RDR2's leans, onFire) may ask for a lean; it lapses a moment after the extra stops asking

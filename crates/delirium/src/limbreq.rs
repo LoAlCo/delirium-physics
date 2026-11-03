@@ -33,6 +33,9 @@ fn set(e: &mut Effector, k: usize, v: f32) {
     }
 }
 
+/// The shot's slot: its strength, damping and muscle-stiffness requests only ever lower (RDR2's scale layer).
+pub const SHOT: u32 = 0x38;
+
 /// The core's own requests (setStiffness and the like, sent by the game) come after every behaviour.
 pub const CORE: u32 = 0x138;
 
@@ -98,6 +101,13 @@ impl Requests {
         for &(_, _, j, k, v) in &self.list {
             if !done[j][k] {
                 done[j][k] = true;
+                set(&mut eff[j], k, v);
+            }
+        }
+        // RDR2's scale layer: the shot's looseness law lowers strength, damping and muscle stiffness through per-joint
+        // scales where the lowest request wins, not through the queue
+        for &(p, _, j, k, v) in &self.list {
+            if p == SHOT && k >= 4 && v < channels(&eff[j])[k] {
                 set(&mut eff[j], k, v);
             }
         }

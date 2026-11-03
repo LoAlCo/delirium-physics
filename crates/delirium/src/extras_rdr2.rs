@@ -1086,14 +1086,19 @@ impl Extra for InjuredLeg {
         let kd = knee_dir(c, knee);
         let lift_b = self.lift_b.get_or_insert_with(|| Bends::new(vec![(hip, 0, lift), (knee, 0, 2.0 * lift * kd)]));
         lift_b.apply(c, swell(self.t, 0.0, self.lift_time * 2.0), 0.0);
+        // the RDR2 core's balancer bends the hurt knee (its limp) and pitches the hips when asked; GTA IV's doesn't
+        let rdr2 = c.ch.rdr2;
         let limp_b = self.limp_b.get_or_insert_with(|| {
-            let mut v = vec![(knee, 0, limp * kd), (hip, 0, pitch)];
+            let mut v = if rdr2 { vec![] } else { vec![(knee, 0, limp * kd), (hip, 0, pitch)] };
             v.extend(SPINE().iter().map(|&j| (j, 0, bend / 4.0)));
             Bends::new(v)
         });
         let t = self.t - self.lift_time;
         let w = if t < 0.0 { 0.0 } else if t < 0.15 { t / 0.15 } else if t < self.time { 1.0 } else { (1.0 - (t - self.time) / self.blend).max(0.0) };
         limp_b.apply(c, w, 0.0);
+        if rdr2 {
+            c.out.dbm_hip_pitch = Some(pitch * w);
+        }
         if w > 0.0 {
             // the weak leg: its strength down by legInjury (stiffness by its square root)
             let k = (1.0 - self.injury * w).max(0.05).sqrt();
@@ -1119,6 +1124,7 @@ impl Extra for InjuredLeg {
         if self.sag > 0.0 {
             c.out.dbm_leg_offset = Some(0.0);
         }
+        (c.out.dbm_limp, c.out.dbm_hip_pitch) = (Some((self.side, 0.0)), Some(0.0));
     }
 }
 

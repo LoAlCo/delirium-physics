@@ -1415,6 +1415,10 @@ impl Dbm {
             if self.p.rdr2.is_some() && !touching {
                 ch.eff[(*ANKLE())[i]].oppose_gravity = 1.0;
             }
+            // RDR2 core: a hip pitch a behaviour asked the balancer for
+            if let Some(r) = self.p.rdr2.filter(|r| r.hip_pitch != 0.0) {
+                ch.eff[(*HIP())[i]].desired[0] += r.hip_pitch;
+            }
             if self.p.rdr2.is_some_and(|r| r.running) {
                 let h = if planted { k } else { k * crate::nmdbm_rdr2::RUN_SWING };
                 ch.eff[(*HIP())[i]].strength = h * h;
