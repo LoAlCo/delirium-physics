@@ -142,6 +142,11 @@ impl Extras {
     }
 
     pub fn tick(&mut self, c: &mut Ctx, obs: &[crate::ragdoll::Obstacle], dt: f32) {
+        self.tick_marked(c, obs, dt, None);
+    }
+
+    /// As `tick`; with the RDR2 core's limb requests, each extra's writes are a request at its RDR2 behaviour's slot.
+    pub fn tick_marked(&mut self, c: &mut Ctx, obs: &[crate::ragdoll::Obstacle], dt: f32, mut reqs: Option<&mut crate::limbreq::Requests>) {
         for e in c.ch.eff.iter_mut() {
             e.offset = [0.0; 3];
         }
@@ -155,9 +160,12 @@ impl Extras {
             self.outbox.extend(e.lines());
         }
         self.want.clear();
-        for (_, e) in &mut self.on {
+        for (n, e) in &mut self.on {
             e.objects(obs);
             e.tick(c, dt);
+            if let Some(r) = reqs.as_deref_mut() {
+                r.mark(&c.ch.eff, crate::limbreq::slot(n));
+            }
             self.outbox.extend(e.lines());
             self.want.extend(e.constraints());
         }

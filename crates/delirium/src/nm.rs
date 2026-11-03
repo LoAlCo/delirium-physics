@@ -313,6 +313,8 @@ pub struct Agent {
     pub(crate) balance: Option<Balance>,
     /// The RDR2 core's balancer (nmdbm_rdr2.rs) with these parameters; None: GTA IV's. Experimental.
     pub rdr2_core: Option<crate::nmdbm_rdr2::Params>,
+    /// RDR2 core's limb requests this frame (limbreq.rs), while it's on
+    limb_reqs: Option<crate::limbreq::Requests>,
     pub(crate) lean: Option<(crate::nmdbm::LeanMode, f32, f32, bool)>,
     pub task_look: Option<bool>,
     shot: Option<(Shot, f32)>,
@@ -426,7 +428,7 @@ impl Agent {
             .map(|(i, p)| p.parent.map_or(frames[i].rotation, |j| frames[j].rotation.inverse() * frames[i].rotation)).collect();
         let roles = Roles::new(build);
         let pelvis_up = facing.inverse() * frames[roles.pelvis].rotation;
-        let mut a = Agent { locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
+        let mut a = Agent { locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
                 stiffness: (delirium_data::kv!(31), 1.0), relax: None, config: ConfigureBalance::default(), feedback: vec![], balance: None, lean: None,
                 shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
                 brace: None, head_look: vec![], shot_look: false, eff_override: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(200), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0 * build.parts[0].grown, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
@@ -1369,6 +1371,10 @@ impl Agent {
         if let Some(ch) = self.ch.as_mut() {
             ch.rdr2 = self.rdr2_core.is_some();
         }
+        self.limb_reqs = match (self.ch.as_ref(), self.rdr2_core) {
+            (Some(ch), Some(p)) if p.limb_requests && nm_tick => Some(crate::limbreq::Requests::begin(&ch.eff)),
+            _ => None,
+        };
         let mut started = if let Some(o) = self.nm_shot_started.take() { o } else if awake && self.nm_hit.is_some() { self.nm_shot_step(build, &frames, false, dt, false) } else { Default::default() };
         let mut brace_out = crate::nmshot::Out::default();
         let mut brace_started = crate::nmbr::BraceOut::default();
@@ -1385,6 +1391,9 @@ impl Agent {
         } else if let Some(o) = self.nm_br_started.take().filter(|_| nm_tick) {
             self.nm_br.place(obstacles);
             brace_started = o;
+        }
+        if let (Some(r), Some(ch)) = (self.limb_reqs.as_mut(), self.ch.as_ref()) {
+            r.mark(&ch.eff, 0x28);
         }
         if let Some(s) = brace_started.leg_stiffness.take() {
             self.config.leg_stiffness = s;
@@ -1430,6 +1439,9 @@ impl Agent {
                 let failed = match tick {
                     Some(s) => {
                         dbm.apply(&s, ch);
+                        if let Some(r) = self.limb_reqs.as_mut() {
+                            r.mark(&ch.eff, 0x18);
+                        }
                         if was == 0 && dbm.f.stepping != 0 {
                             b.steps += 1;
                         }
@@ -1454,7 +1466,13 @@ impl Agent {
                 if let Some(bb) = b.bb.as_mut() {
                     let snap = ch.clone();
                     let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
+                    if let Some(r) = self.limb_reqs.as_mut() {
+                        r.mark(&ch.eff, 0x18);
+                    }
                     let out = bb.tick(ch, &body, obstacles, dbm.f.stepping, failed, self.catch_fall.is_some(), dt);
+                    if let Some(r) = self.limb_reqs.as_mut() {
+                        r.mark(&ch.eff, 0x20);
+                    }
                     (dbm.pv.fixed_vel, dbm.pv.vel) = (out.turn.is_some(), out.turn.unwrap_or(Vec3::ZERO));
                     if let Some(k) = out.step_clamp {
                         self.config.step_clamp_scale = k;
@@ -1555,7 +1573,13 @@ impl Agent {
         let hl_was = self.nm_head.active;
         let msgs = (self.nm_cf_msg.is_some() || self.nm_cf.as_ref().is_some_and(|f| f.active), self.nm_ru_msg.is_some() || self.nm_ru.active);
         let b = walk_actives!(self);
+        if let (Some(r), Some(ch)) = (self.limb_reqs.as_mut(), self.ch.as_ref()) {
+            r.mark(&ch.eff, 0x20);
+        }
         let mut shot_out = if nm_tick { self.nm_shot_step(build, &frames, dbm_lost, dt, true) } else { Default::default() };
+        if let (Some(r), Some(ch)) = (self.limb_reqs.as_mut(), self.ch.as_ref()) {
+            r.mark(&ch.eff, 0x38);
+        }
         walked |= walk_actives!(self) & !b & (W_CF() | W_TWIST());
         let (shot_cf, shot_ru) = (!msgs.0 && self.nm_cf_msg.is_some(), !msgs.1 && self.nm_ru_msg.is_some());
         shot_out.feedback.extend(std::mem::take(&mut started.feedback));
@@ -1592,12 +1616,14 @@ impl Agent {
                     f.deactivate(&mut self.nm_head, &mut self.nm_twist);
                 }
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x70); }
             if let Some(m) = self.nm_fl_msg.take() {
                 start_flinch(m, &mut self.nm_fl, &mut c, &mut self.nm_head, &mut self.nm_twist);
             }
             if self.flinch.is_none() {
                 self.nm_fl.deactivate(c.ch, &mut self.nm_head, &mut self.nm_twist);
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x90); }
             match self.nm_fow_msg.take() {
                 Some(Some(p)) => {
                     self.nm_fow.p = p;
@@ -1625,6 +1651,7 @@ impl Agent {
                 }
                 None => crate::nmhf::HighFallOut::default(),
             };
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xa0); }
             if let Some(m) = self.nm_bw_msg.take() {
                 let w = self.nm_bw.get_or_insert_with(|| crate::nmbw::Writhe::new(c.ch));
                 (w.arm_stiffness, w.back_stiffness, w.leg_stiffness) = (m.arm_stiffness, m.back_stiffness, m.leg_stiffness);
@@ -1640,6 +1667,7 @@ impl Agent {
                     w.deactivate(c.ch);
                 }
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xe8); }
             if let Some(m) = self.nm_aw_msg.take() {
                 let w = &mut self.nm_aw;
                 (w.body_stiffness, w.period, w.amplitude, w.phase) = (m.body_stiffness, m.period, m.amplitude, m.phase);
@@ -1649,6 +1677,7 @@ impl Agent {
             if self.windmill.is_none() && !self.nm_hf.active() {
                 self.nm_aw.deactivate();
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x58); }
             if let Some(m) = self.nm_pd_msg.take() {
                 let p = &mut self.nm_pd;
                 (p.leg_stiffness, p.radius, p.angular_speed) = (m.leg_stiffness, m.radius, m.angular_speed);
@@ -1661,6 +1690,7 @@ impl Agent {
             if self.pedal.is_none() && !self.nm_br.active && !self.nm_hf.active() {
                 self.nm_pd.deactivate();
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xc0); }
             if let Some(m) = self.nm_ru_msg.take() {
                 let r = &mut self.nm_ru;
                 (r.stiffness, r.leg_push, r.arm_reach_amount) = (m.stiffness, m.leg_push, m.arm_reach_amount);
@@ -1679,6 +1709,7 @@ impl Agent {
             if self.roll_up.is_none() && !self.rds_on && !self.nm_br.active && !self.nm_hf.active() {
                 self.nm_ru.deactivate();
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x80); }
             if let Some(m) = self.nm_rds_msg.take() {
                 let r = &mut self.nm_rds;
                 (r.stiffness, r.damping, r.forcemag, r.asymmetry, r.asymmetrical_legs) = (m.stiffness, m.damping, m.forcemag, m.asymmetry, m.asymmetrical_legs);
@@ -1690,6 +1721,7 @@ impl Agent {
             if !self.rds_on && !self.nm_br.active && !self.nm_hf.active() {
                 self.nm_rds.deactivate(&mut self.nm_ru);
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xb8); }
             {
                 let dbm = self.balance.as_mut().and_then(|b| b.dbm.as_mut());
                 match self.nm_gr_msg.take() {
@@ -1702,6 +1734,7 @@ impl Agent {
                     None => {}
                 }
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xd0); }
             match self.nm_pa_msg.take() {
                 Some(Some(p)) => self.nm_pa.activate(p),
                 Some(None) => self.nm_pa.deactivate(),
@@ -1716,24 +1749,30 @@ impl Agent {
                     None => self.nm_head.deactivate(),
                 }
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xf8); }
             let b0 = walk_actives!(self);
             let waits = move |now: u32, bit: u32| (walked | now & !b0) & bit != 0;
             if !waits(walk_actives!(self), W_TWIST()) {
                 self.nm_twist.tick(c.ch, &body);
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x38); }
             if !waits(walk_actives!(self), W_CF()) {
                 if let Some(f) = self.nm_cf.as_mut() {
                     f.tick(&mut c, world, obstacles, &mut self.nm_head, &mut self.nm_twist, dt);
                 }
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x70); }
             if !waits(walk_actives!(self), W_RU()) {
                 self.nm_ru.tick(&mut c, self.nm_br.active, dt);
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x80); }
             {
                 let dbm = self.balance.as_mut().and_then(|b| b.dbm.as_mut()).filter(|_| !self.fallen);
                 self.nm_fl.tick(&mut c, &mut self.nm_head, &mut self.nm_twist, dbm, self.fallen, dt);
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x90); }
             self.nm_fow.tick(&mut c, dt);
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x98); }
             {
                 let balancing = self.balance.as_ref().is_some_and(|b| b.bb.is_some());
                 let fallen = self.fallen || !self.balance.as_ref().is_some_and(Balance::on);
@@ -1751,6 +1790,7 @@ impl Agent {
                     self.config.taper_knee_strength = false;
                 }
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xa0); }
             if let Some(p) = hf.catch_fall {
                 self.catch_fall = Some(CatchFall { torso_stiffness: p.torso_stiffness, legs_stiffness: p.legs_stiffness,
                                                    arms_stiffness: p.arms_stiffness, z_axis_spin_reduction: p.z_axis_spin_reduction });
@@ -1765,30 +1805,38 @@ impl Agent {
                     f.deactivate(&mut self.nm_head, &mut self.nm_twist);
                 }
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x70); }
             stop_dbm |= hf.stop_balance;
             hf_balance = hf.balance.map(|p| (p, hf.dbm_set));
             if !waits(walk_actives!(self), W_RDS()) {
                 self.nm_rds.tick(&mut c, dt);
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xb8); }
             if let Some(w) = self.nm_bw.as_mut() {
                 w.tick(&mut c, dt);
             }
-            self.extras.tick(&mut c, obstacles, dt);
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xe8); }
+            self.extras.tick_marked(&mut c, obstacles, dt, self.limb_reqs.as_mut());
             if !waits(walk_actives!(self), W_PD()) {
                 self.nm_pd.tick(&mut c, dt);
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xc0); }
             if !waits(walk_actives!(self), W_AW()) {
                 self.nm_aw.tick(&mut c, dt);
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x58); }
             if !waits(walk_actives!(self), W_GR()) {
                 let dbm = self.balance.as_mut().and_then(|b| b.dbm.as_mut());
                 self.nm_gr.place(obstacles);
                 self.nm_gr.tick(&mut c, &mut self.nm_head, &mut self.nm_twist, dbm, dt);
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xd0); }
             if (hl_was || (shot_out.head_look_start.is_none() && !shot_out.head_look_activate)) && !waits(walk_actives!(self), W_HEAD()) {
                 self.nm_head.tick(c.ch, &body);
             }
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xf8); }
             self.nm_pa.tick(&mut c);
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x100); }
             // an extra (RDR2's duck) may ask the balancer to crouch; nothing else here sets these, so they're None
             // unless one does
             if let Some(d) = self.balance.as_mut().and_then(|b| b.dbm.as_mut()) {
@@ -1853,6 +1901,10 @@ impl Agent {
                 _ => self.zero[i],
             }
         };
+        if let (Some(mut r), Some(ch)) = (self.limb_reqs.take(), self.ch.as_mut()) {
+            r.mark(&ch.eff, crate::limbreq::CORE);
+            r.resolve(&mut ch.eff, self.rdr2_core.is_some_and(|p| p.limb_order_reversed));
+        }
         if let (Some(ch), Some(d), false) = (self.ch.as_mut(), self.balance.as_ref().and_then(|b| b.dbm.as_ref()), self.fallen) {
             d.drain(ch);
         }

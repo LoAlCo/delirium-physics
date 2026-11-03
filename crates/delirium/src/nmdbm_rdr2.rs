@@ -58,6 +58,12 @@ pub struct Params {
     /// share of shotInjuredLeg's legInjury the limp takes as its amount. Ours (0.25): RDR2's own source of the amount
     /// isn't known, and the whole legInjury (0.3) took a quarter-metre off the leg and dropped him
     pub limp_scale: f32,
+    /// behaviours' joint writes resolved as RDR2's prioritised limb requests (limbreq.rs); off: the last write wins.
+    /// Off by default: with the balancer first, it overrides the leg bends Delirium's walk and shotInjuredLeg write
+    /// directly (in RDR2 those ask the balancer instead), and he falls walking and after a leg shot
+    pub limb_requests: bool,
+    /// limb requests resolved highest slot first (the other reading of RDR2's queue order)
+    pub limb_order_reversed: bool,
 }
 
 impl Default for Params {
@@ -67,7 +73,7 @@ impl Default for Params {
                  slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.0, 0.0], legs_apart_restep: 0.2,
                  legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
                  always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
-                 taper_knee_strength_run: false, limp_scale: 0.25 }
+                 taper_knee_strength_run: false, limp_scale: 0.25, limb_requests: false, limb_order_reversed: false }
     }
 }
 
@@ -102,6 +108,8 @@ impl Params {
             "stepHeightRun" => self.step_height_run = v,
             "taperKneeStrengthRun" => self.taper_knee_strength_run = v != 0.0,
             "limpScale" => self.limp_scale = v,
+            "limbRequests" => self.limb_requests = v != 0.0,
+            "limbOrderReversed" => self.limb_order_reversed = v != 0.0,
             _ => return false,
         }
         true
