@@ -1212,8 +1212,10 @@ impl Agent {
             if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
                 r.limp = x;
             }
-            if let (Some(x), Some(r)) = (out.dbm_hip_pitch, d.p.rdr2.as_mut()) {
-                r.hip_pitch = x;
+            if let Some(r) = d.p.rdr2.as_mut() {
+                for &(o, k, h) in &out.dbm_owned {
+                    r.owned.ask(o, k, h, f32::INFINITY);
+                }
             }
         }
         if out.head_look_stop {
@@ -1867,8 +1869,11 @@ impl Agent {
                 if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
                     r.limp = x;
                 }
-                if let (Some(x), Some(r)) = (out.dbm_hip_pitch, d.p.rdr2.as_mut()) {
-                    r.hip_pitch = x;
+                // RDR2 core: the crouch requests (owner, knee bend, hip pitch)
+                if let Some(r) = d.p.rdr2.as_mut() {
+                    for &(o, k, h) in &out.dbm_owned {
+                        r.owned.ask(o, k, h, f32::INFINITY);
+                    }
                 }
             }
             // an extra (RDR2's leans, onFire) may ask for a lean; it lapses a moment after the extra stops asking

@@ -107,9 +107,9 @@ pub struct Out {
     pub dbm_turn: Option<Vec3>,
     /// RDR2 core: the injured leg (0 left, 1 right) and how badly, for the balancer's limp
     pub dbm_limp: Option<(usize, f32)>,
-    /// RDR2 core: a hip pitch asked of the balancer (rad, both hips), as RDR2's behaviours ask it rather than bend the
-    /// hips themselves
-    pub dbm_hip_pitch: Option<f32>,
+    /// RDR2 core: the balancer's crouch request this step, (owner id, knee bend as leg straightness, hip pitch in
+    /// rad), as RDR2's behaviours ask it rather than bend the legs themselves
+    pub dbm_owned: Vec<(u32, f32, f32)>,
     /// A lean asked for by an extra (RDR2's lean family, onFire's stagger): the balancer leans that way from the next
     /// step; None unless one does.
     pub lean: Option<(crate::nmdbm::LeanMode, f32, bool)>,

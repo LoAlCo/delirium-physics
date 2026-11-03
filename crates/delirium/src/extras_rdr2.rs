@@ -458,6 +458,7 @@ impl Extra for Duck {
         }
         if self.crouch > 0.0 {
             c.out.dbm_leg_offset = Some(-self.crouch * w);
+            c.out.dbm_owned.push((9, -self.crouch * w, 0.0));
         }
     }
 
@@ -990,14 +991,22 @@ impl Extra for FromBehind {
         let trunk = self.trunk.get_or_insert_with(|| {
             let mut v: Vec<_> = SPINE().iter().map(|&j| (j, 0, -spine / 4.0)).collect();
             v.extend(NECK().iter().map(|&j| (j, 0, -neck / 2.0)));
-            v.extend(HIP().iter().map(|&j| (j, 0, -hip)));
+            if !c.ch.rdr2 {
+                v.extend(HIP().iter().map(|&j| (j, 0, -hip)));
+            }
             Bends::new(v)
         });
         let w = swell(self.t, 0.0, self.period);
         let w = if self.noise > 0.0 && w > 0.0 { w * (1.0 + self.noise * 0.2 * (c.ch.random() - 0.5)) } else { w };
         trunk.apply(c, w, self.stiffness);
-        let knees = self.knees.get_or_insert_with(|| Bends::new(KNEE().iter().map(|&j| (j, 0, knee * knee_dir(c, j))).collect()));
-        knees.apply(c, swell(self.t, self.knees_onset, self.period), 0.0);
+        let wk = swell(self.t, self.knees_onset, self.period);
+        if c.ch.rdr2 {
+            // RDR2's from-behind module asks the balancer (owner 6) to bend the knees and pitch the hips
+            c.out.dbm_owned.push((6, -knee * wk, -hip * w));
+        } else {
+            let knees = self.knees.get_or_insert_with(|| Bends::new(KNEE().iter().map(|&j| (j, 0, knee * knee_dir(c, j))).collect()));
+            knees.apply(c, wk, 0.0);
+        }
         if self.t > self.arms_onset && self.t < self.arms_onset + self.period * 0.5 {
             c.ch.set_stiffness(self.stiffness * 0.4, 1.0, "ua", None);
         }
@@ -1037,11 +1046,17 @@ impl Extra for InGuts {
         let bends = self.bends.get_or_insert_with(|| {
             let mut v: Vec<_> = SPINE().iter().map(|&j| (j, 0, spine / 4.0)).collect();
             v.extend(NECK().iter().map(|&j| (j, 0, neck / 2.0)));
-            v.extend(KNEE().iter().map(|&j| (j, 0, knee * knee_dir(c, j))));
-            v.extend(HIP().iter().map(|&j| (j, 0, knee * 0.5)));
+            if !c.ch.rdr2 {
+                v.extend(KNEE().iter().map(|&j| (j, 0, knee * knee_dir(c, j))));
+                v.extend(HIP().iter().map(|&j| (j, 0, knee * 0.5)));
+            }
             Bends::new(v)
         });
         bends.apply(c, w, self.stiffness);
+        if c.ch.rdr2 {
+            // RDR2's in-guts module asks the balancer (owner 7)
+            c.out.dbm_owned.push((7, -knee * w, knee * 0.5 * w));
+        }
     }
 
     fn done(&self) -> bool {
@@ -1097,7 +1112,7 @@ impl Extra for InjuredLeg {
         let w = if t < 0.0 { 0.0 } else if t < 0.15 { t / 0.15 } else if t < self.time { 1.0 } else { (1.0 - (t - self.time) / self.blend).max(0.0) };
         limp_b.apply(c, w, 0.0);
         if rdr2 {
-            c.out.dbm_hip_pitch = Some(pitch * w);
+            c.out.dbm_owned.push((6, -self.sag * w, pitch * w));
         }
         if w > 0.0 {
             // the weak leg: its strength down by legInjury (stiffness by its square root)
@@ -1124,7 +1139,7 @@ impl Extra for InjuredLeg {
         if self.sag > 0.0 {
             c.out.dbm_leg_offset = Some(0.0);
         }
-        (c.out.dbm_limp, c.out.dbm_hip_pitch) = (Some((self.side, 0.0)), Some(0.0));
+        c.out.dbm_limp = Some((self.side, 0.0));
     }
 }
 

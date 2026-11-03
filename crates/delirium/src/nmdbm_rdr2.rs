@@ -19,11 +19,21 @@
 //! - the injured-leg limp (from shotInjuredLeg): the hurt leg, while planted, bends by
 //!   (1 - 2.5 (clamp(feet apart, 0.6, 1) - 0.6)) x the injury, more on a short stance (the injury taken as
 //!   limpScale x legInjury, our 0.25).
-//! - owned requests: behaviours ask the balancer for the limp (dbm_limp) and hip pitch (dbm_hip_pitch) instead of
-//!   bending the legs themselves, so they don't fight it under the limb requests (limbreq.rs).
-//! Not here yet: stepIfInSupport (its speed threshold isn't known), more foot friction on slopes, running, crouch
-//! start, the injured-leg limp, obstacle avoidance, lean channels, the turn step, hip pitch on failing, the sideways
-//! cheat force.
+//! - the owned crouch request: a knee bend (leg straightness) and hip pitch that behaviours ask the balancer for
+//!   instead of bending the legs themselves (duck 9, shot from behind 6, in the guts 7, the injured leg's sag 6, the
+//!   balancer's own fail 14: RDR2's owner ids, which are also priorities, the highest wins). Each owner asks every
+//!   step it wants it (ours: RDR2 keeps it until its owner releases it, but stopAllBehaviours would leave it held
+//!   here). On failing, rampHipPitchOnFail pitches the hips 0.4 forward at 0.6 rad/s (RDR2's -0.4, its sign read as
+//!   its knee bend's: negative bends more);
+//! - maxFootSpeed (off unless set: RDR2's 5 made him fall in our reading); fallType 1: no new step once failing;
+//! - off unless set (as RDR2's defaults leave them): the predictionTime, stepClampScale and liftFeet variances drawn
+//!   for each step, leanAgainstVelocity, standUp, extraFeetApart, the feetApart randomisation (feetApartMin/Max
+//!   above feetApartVel) with stopWaddling, the sideways cheat force (sidewaysCheatForce over sidewaysThresh) and
+//!   the 0.06 m alternation bias while moving sideways.
+//! Not here: stepIfInSupport (its speed threshold isn't known), extra foot friction on slopes, the slope pelvis drop
+//! (off), crouch start (it needs a character value not read), obstacle and other-leg avoidance, the three lean
+//! channels, the turn step, minKneeAngle and fallReduceGravityComp (their effect isn't read), the leg-twist limits,
+//! hipError, ankle balance's offset and gains, the pelvis control's single-support and turn changes.
 
 /// configureBalance's RDR2 parameters this port uses (RDR2's names and defaults).
 #[derive(Clone, Copy, Debug)]
@@ -64,6 +74,25 @@ pub struct Params {
     pub limb_requests: bool,
     /// limb requests resolved highest slot first (the other reading of RDR2's queue order)
     pub limb_order_reversed: bool,
+    /// how fast the swing foot's target may move along the ground (m/s). RDR2 has 5, but how it limits it is only partly
+    /// read and our reading (either way) made him fall after a leg shot, so off (1000) unless set
+    pub max_foot_speed: f32,
+    pub ramp_hip_pitch_on_fail: bool,
+    pub prediction_time: f32,
+    pub prediction_time_variance: f32,
+    pub step_clamp_scale_variance: f32,
+    pub lift_feet: f32,
+    pub lift_feet_variance: f32,
+    pub lean_against_velocity: f32,
+    pub stand_up: bool,
+    pub extra_feet_apart: f32,
+    pub feet_apart_min: f32,
+    pub feet_apart_max: f32,
+    pub feet_apart_vel: f32,
+    /// 1: no left step width when fast, 2: no right
+    pub stop_waddling: i32,
+    pub sideways_cheat_force: f32,
+    pub sideways_thresh: f32,
 }
 
 impl Default for Params {
@@ -73,7 +102,11 @@ impl Default for Params {
                  slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.0, 0.0], legs_apart_restep: 0.2,
                  legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
                  always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
-                 taper_knee_strength_run: false, limp_scale: 0.25, limb_requests: true, limb_order_reversed: false }
+                 taper_knee_strength_run: false, limp_scale: 0.25, limb_requests: true, limb_order_reversed: false,
+                 max_foot_speed: 1000.0, ramp_hip_pitch_on_fail: true, prediction_time: 0.2, prediction_time_variance: 0.0,
+                 step_clamp_scale_variance: 0.0, lift_feet: 0.07, lift_feet_variance: 0.0, lean_against_velocity: 0.0,
+                 stand_up: false, extra_feet_apart: 0.0, feet_apart_min: 1.0, feet_apart_max: 1.0, feet_apart_vel: 100.0,
+                 stop_waddling: 0, sideways_cheat_force: 0.0, sideways_thresh: 0.8 }
     }
 }
 
@@ -110,6 +143,22 @@ impl Params {
             "limpScale" => self.limp_scale = v,
             "limbRequests" => self.limb_requests = v != 0.0,
             "limbOrderReversed" => self.limb_order_reversed = v != 0.0,
+            "maxFootSpeed" => self.max_foot_speed = v,
+            "rampHipPitchOnFail" => self.ramp_hip_pitch_on_fail = v != 0.0,
+            "predictionTime" => self.prediction_time = v,
+            "predictionTimeVariance" => self.prediction_time_variance = v,
+            "stepClampScaleVariance" => self.step_clamp_scale_variance = v,
+            "liftFeet" => self.lift_feet = v,
+            "liftFeetVariance" => self.lift_feet_variance = v,
+            "leanAgainstVelocity" => self.lean_against_velocity = v,
+            "standUp" => self.stand_up = v != 0.0,
+            "extraFeetApart" => self.extra_feet_apart = v,
+            "feetApartMin" => self.feet_apart_min = v,
+            "feetApartMax" => self.feet_apart_max = v,
+            "feetApartVel" => self.feet_apart_vel = v,
+            "stopWaddling" => self.stop_waddling = v as i32,
+            "sidewaysCheatForce" => self.sideways_cheat_force = v,
+            "sidewaysThresh" => self.sideways_thresh = v,
             _ => return false,
         }
         true
@@ -134,6 +183,42 @@ const STEP_WAIT_SPEED: f32 = 0.7;
 const SLOPE_FLOOR: f32 = 0.2;
 /// Running: the swing leg's stiffness share.
 pub const RUN_SWING: f32 = 0.5;
+/// The balancer's own owner id for its crouch request when failing, and the hip pitch it asks for (rad, ours: RDR2's
+/// -0.4 with its knee bend's sign, negative bending more) and how fast.
+const FAIL_OWNER: u32 = 14;
+const FAIL_HIP_PITCH: f32 = 0.4;
+const FAIL_HIP_RATE: f32 = 0.6;
+/// Moving sideways: the other foot's lead in the step decision after each step (m), and the speed (squared) it
+/// takes to count.
+const ALTERNATE: f32 = 0.06;
+const SIDEWAYS_SPEED2: f32 = 0.25;
+
+/// RDR2's crouch request the balancer owns: a knee bend (added to leg straightness) and a hip pitch (rad, flexing
+/// the hips), each followed at `rate` (rad or straightness per second; infinite when the asker ramps it itself).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Owned {
+    pub owner: u32,
+    pub knee: f32,
+    pub hip: f32,
+    target: (f32, f32, f32),
+    asked: Option<(u32, f32, f32, f32)>,
+}
+
+impl Owned {
+    /// One owner's ask this step; the highest owner id wins.
+    pub fn ask(&mut self, owner: u32, knee: f32, hip: f32, rate: f32) {
+        if self.asked.is_none_or(|a| owner >= a.0) && (knee != 0.0 || hip != 0.0) {
+            self.asked = Some((owner, knee, hip, rate));
+        }
+    }
+
+    fn step(&mut self, dt: f32) {
+        let (owner, k, h, rate) = self.asked.take().unwrap_or((0, 0.0, 0.0, f32::INFINITY));
+        (self.owner, self.target) = (owner, (k, h, rate));
+        let follow = |x: f32, to: f32| if rate.is_finite() { x + (to - x).clamp(-rate * dt, rate * dt) } else { to };
+        (self.knee, self.hip) = (follow(self.knee, k), follow(self.hip, h));
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Rdr2 {
@@ -153,14 +238,27 @@ pub struct Rdr2 {
     pub running: bool,
     /// the injured leg (0 left, 1 right) and how badly (0..1), from shotInjuredLeg
     pub limp: (usize, f32),
-    /// hip pitch asked of the balancer by a behaviour (rad), added to both hips' pitch
-    pub hip_pitch: f32,
+    /// the crouch request: knee bend and hip pitch, by owner
+    pub owned: Owned,
+    rng: u32,
+    /// this step's draws: prediction time, step clamp change, lift, step width scale
+    pub prediction: f32,
+    pub clamp_add: f32,
+    pub lift: f32,
+    pub width_scale: f32,
+    /// the swing foot's target last tick (foot, where), for maxFootSpeed
+    pub prev_swing: Option<(usize, bevy_math::Vec3)>,
+    pub sideways: bool,
+    /// the foot that stepped last (0 left, 1 right)
+    pub last_foot: usize,
 }
 
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
         Rdr2 { p, time: 0.0, still: 0.0, steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
-               since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0), hip_pitch: 0.0 }
+               since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0), owned: Owned::default(),
+               rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
+               width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0 }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.
@@ -169,6 +267,13 @@ impl Rdr2 {
         (self.since_step, self.step_age) = if stepping { (0.0, self.step_age + dt) } else { (self.since_step + dt, 0.0) };
         self.still = if angvel2 < STILL { self.still + dt } else { 0.0 };
         self.steps += stepped as u32;
+        if stepped {
+            self.draw();
+        }
+        if self.failing.is_some() && self.p.ramp_hip_pitch_on_fail {
+            self.owned.ask(FAIL_OWNER, 0.0, FAIL_HIP_PITCH, FAIL_HIP_RATE);
+        }
+        self.owned.step(dt);
         if self.failing.is_none() && !self.p.balance_indefinitely
             && (self.time >= self.p.max_balance_time || self.still >= self.p.max_still_time || self.steps >= self.p.max_steps)
         {
@@ -187,6 +292,59 @@ impl Rdr2 {
         let leg = (k / (t * m * 0.6 + 1.3)).max(LEG_FLOOR);
         let hip = |a: f32| (k / ((0.4 + a) * m * t + 1.1)).max(HIP_FLOOR);
         Some((leg, [hip(-self.asym), hip(self.asym)]))
+    }
+
+    /// Uniform in [-1, 1].
+    fn rand(&mut self) -> f32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 17;
+        self.rng ^= self.rng << 5;
+        (self.rng as f32 / u32::MAX as f32) * 2.0 - 1.0
+    }
+
+    /// RDR2 draws these for each new step (all fixed with its defaults).
+    fn draw(&mut self) {
+        let p = self.p;
+        self.prediction = p.prediction_time + p.prediction_time_variance * self.rand();
+        self.clamp_add = p.step_clamp_scale_variance * self.rand();
+        self.lift = p.lift_feet + p.lift_feet_variance * self.rand();
+        let u = (self.rand() + 1.0) * 0.5;
+        self.width_scale = p.feet_apart_min + (p.feet_apart_max - p.feet_apart_min) * u;
+    }
+
+    /// Do the variances or leanAgainstVelocity change the prediction time from GTA IV's?
+    pub fn own_prediction(&self) -> bool {
+        self.p.prediction_time_variance != 0.0 || self.p.lean_against_velocity > 0.0 || self.p.prediction_time != 0.2
+    }
+
+    /// leanAgainstVelocity: the lean (against the horizontal velocity `v`) and the added prediction time.
+    pub fn lean_against(&self, v: bevy_math::Vec3) -> (bevy_math::Vec3, f32) {
+        let l = self.p.lean_against_velocity;
+        if l <= 0.0 {
+            return (bevy_math::Vec3::ZERO, 0.0);
+        }
+        let f = (v.length() - 1.0).clamp(0.0, 3.0) / 3.0;
+        (-v.normalize_or_zero() * l * f * 0.5, l * f * 0.3)
+    }
+
+    /// Each foot's step width from the minimum spread `min` (GTA IV's: min x 0.3 + 0.08).
+    pub fn widths(&self, min: f32, speed: f32) -> [f32; 2] {
+        let w = (min + self.p.extra_feet_apart).mul_add(0.3, 0.08);
+        if speed <= self.p.feet_apart_vel {
+            return [w; 2];
+        }
+        let w = w * self.width_scale;
+        [if self.p.stop_waddling == 1 { 0.0 } else { w }, if self.p.stop_waddling == 2 { 0.0 } else { w }]
+    }
+
+    /// Moving sideways: `along_side` is the velocity direction along the pelvis's side axis.
+    pub fn sideways(&mut self, stepping: bool, speed2: f32, along_side: f32) {
+        self.sideways = !stepping && self.p.sideways_cheat_force.abs() >= 0.01 && speed2 > SIDEWAYS_SPEED2
+            && along_side.abs() > self.p.sideways_thresh;
+    }
+
+    pub fn alternate() -> f32 {
+        ALTERNATE
     }
 
     pub fn giveup_height(&self) -> f32 {

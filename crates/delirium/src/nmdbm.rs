@@ -378,7 +378,7 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
         if f.stepping != 0 && r.redecide() {
             f.stepping = 0;
         }
-        if f.stepping == 0 && !r.may_step() {
+        if f.stepping == 0 && (!r.may_step() || (r.failing.is_some() && r.p.fall_type == 1)) {
             return;
         }
     }
@@ -419,7 +419,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     f.pos[1] = sat(s.legs[1].foot.m.d, up, f.height[1], b"zyx");
     if s.flags & delirium_data::kv!(251 int) == 0 || s.flags & delirium_data::kv!(7 int) == 0 {
         let [l, r] = &mut f.pos;
-        separate(l, r, p.foot_width);
+        separate(l, r, p.rdr2.map_or(p.foot_width, |r| p.foot_width + r.p.extra_feet_apart));
     }
     f.centre = (f.pos[0] + f.pos[1]) * 0.5;
     f.dist = [0.0; 2];
@@ -442,11 +442,16 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
         },
     }
     let (a, c, so) = (s.m.a, s.m.c, p.step_offset);
+    let [sa, sb] = p.rdr2.map_or([so; 2], |r| r.widths(p.foot_width, slen(s.hvel, b"zyx")));
     let dir_b = vnorm(shz(pc - rpos, up, b"yxz"));
-    let target_a = (c * sdot(c, dir_b, b"zyx") * sdot(a, dir_b, b"zyx")).mul_add(Vec3::splat(-so), pc) - a * so;
+    let target_a = (c * sdot(c, dir_b, b"zyx") * sdot(a, dir_b, b"zyx")).mul_add(Vec3::splat(-sa), pc) - a * sa;
     let dir_a = vnorm(shz(pc - lpos, up, b"yxz"));
-    let target_b = a.mul_add(Vec3::splat(so), (c * sdot(c, dir_a, b"zyx") * sdot(a, dir_a, b"zyx")).mul_add(Vec3::splat(so), pc));
+    let target_b = a.mul_add(Vec3::splat(sb), (c * sdot(c, dir_a, b"zyx") * sdot(a, dir_a, b"zyx")).mul_add(Vec3::splat(sb), pc));
     f.dist = [slen(shz(target_a - lpos, up, b"yxz"), b"zyx"), slen(shz(target_b - rpos, up, b"yzx"), b"zyx")];
+    // RDR2, moving sideways: after each step the other foot leads the decision
+    if let Some(r) = p.rdr2.filter(|r| r.sideways) {
+        f.dist[1 - r.last_foot] += crate::nmdbm_rdr2::Rdr2::alternate();
+    }
     decide(s, f, p.rdr2.as_ref());
     if f.stepping == 0 {
         f.flags = (f.flags & delirium_data::kv!(252 int)) | (s.flags & delirium_data::kv!(251 int)) | (s.flags & delirium_data::kv!(7 int)) << 1;
@@ -490,7 +495,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     let mut h = toe.abs().min(1.0).fma(delirium_data::kv!(78), lift).min(room);
     let mut g = p.target[i];
     if f.flags & delirium_data::kv!(54 int) == 0 {
-        h += delirium_data::kv!(112);
+        h += p.rdr2.map_or(delirium_data::kv!(112), |r| r.lift);
         g = p.gup.mul_add(Vec3::splat(sdot(p.gup, f.start - g, b"zyx").max(0.0)), g);
     }
     let h = g.x.fma(up.x, g.z.fma(up.z, tilt.fma(h, g.y * up.y)));
@@ -1317,9 +1322,24 @@ impl Dbm {
         self.pv.centre = self.f.centre;
         self.pv.planted = [self.f.flags & delirium_data::kv!(251 int) != 0, self.f.flags & delirium_data::kv!(253 int) != 0];
         self.p.leg_stiffness = c.leg_stiffness;
-        self.p.leg_length = c.legs.0 + self.leg_offset;
+        self.p.leg_length = match self.p.rdr2 {
+            // RDR2: the crouch request's knee bend instead of the extras' offset; standUp straightens him while moving
+            Some(r) => {
+                let up = if r.p.stand_up { (2.0 * slen(s.hvel, b"zyx")).min(1.0) * (1.0 - c.legs.0) } else { 0.0 };
+                c.legs.0 + r.owned.knee + up
+            }
+            None => c.legs.0 + self.leg_offset,
+        };
         self.pv.acc = self.acc;
         self.lean_vec = self.lean_vector(s.com);
+        if let Some(r) = self.p.rdr2 {
+            let (lean, more) = r.lean_against(horizontal(s.hvel, self.p.up));
+            self.lean_vec += lean;
+            if r.own_prediction() {
+                self.p.lead = r.prediction + more;
+            }
+            self.p.step_clamp += r.clamp_add;
+        }
         self.push = self.lean_force(b.doll.mass());
         self.probe(b, world);
         if let Ok(path) = std::env::var("NM_DBMDUMP") {
@@ -1345,6 +1365,28 @@ impl Dbm {
         }
         foot_placement(&self.p, &s, &mut self.f);
         if let Some(r) = self.p.rdr2.as_mut() {
+            match self.f.stepping {
+                i @ 1..=2 => {
+                    let i = i as usize - 1;
+                    if let Some((j, was_at)) = r.prev_swing.filter(|w| w.0 == i) {
+                        // along the ground only: the lift stays the step's
+                        let (d, most) = (horizontal(self.f.pos[i] - was_at, self.p.up), r.p.max_foot_speed * dt);
+                        if d.length() > most {
+                            self.f.pos[j] -= d - d.normalize() * most;
+                        }
+                    }
+                    (r.prev_swing, r.last_foot) = (Some((i, self.f.pos[i])), i);
+                }
+                _ => r.prev_swing = None,
+            }
+            let v = horizontal(s.hvel, self.p.up);
+            r.sideways(self.f.stepping != 0, v.length_squared(), sdot(v.normalize_or_zero(), s.m.a, b"zyx"));
+            if r.sideways {
+                let feet = (self.f.pos[0] + self.f.pos[1]) * 0.5;
+                let dir = horizontal(s.pelvis.m.d - feet, self.p.up).normalize_or_zero();
+                let back = sdot(v, s.m.c, b"zyx") < 0.0;
+                self.push += dir * if back { -r.p.sideways_cheat_force } else { r.p.sideways_cheat_force };
+            }
             r.update(dt, s.angvel.length_squared(), was == 0 && self.f.stepping != 0, self.f.stepping != 0);
         }
         pelvis_control(&self.p, &s, &mut self.pv);
@@ -1416,8 +1458,8 @@ impl Dbm {
                 ch.eff[(*ANKLE())[i]].oppose_gravity = 1.0;
             }
             // RDR2 core: a hip pitch a behaviour asked the balancer for
-            if let Some(r) = self.p.rdr2.filter(|r| r.hip_pitch != 0.0) {
-                ch.eff[(*HIP())[i]].desired[0] += r.hip_pitch;
+            if let Some(r) = self.p.rdr2.filter(|r| r.owned.hip != 0.0) {
+                ch.eff[(*HIP())[i]].desired[0] += r.owned.hip;
             }
             if self.p.rdr2.is_some_and(|r| r.running) {
                 let h = if planted { k } else { k * crate::nmdbm_rdr2::RUN_SWING };
