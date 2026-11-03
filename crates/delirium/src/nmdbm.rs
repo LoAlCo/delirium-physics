@@ -371,7 +371,8 @@ fn hip_room(hip: &Eff3, l1: f32, l2: f32, l3: f32, l4: f32) -> f32 {
 }
 
 fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
-    let free = f.flags & delirium_data::kv!(1 int) == 0;
+    // RDR2's stepIfInSupport: moving (or turning), he may step though the COM is over his feet
+    let free = f.flags & delirium_data::kv!(1 int) == 0 || r.is_some_and(|r| (r.p.step_if_in_support && r.speed > 0.0) || r.turning);
     let a = f.dist[0] > f.dist[1] && free;
     let b = f.dist[1] > f.dist[0] && free;
     if let Some(r) = r {
@@ -497,6 +498,9 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     if f.flags & delirium_data::kv!(54 int) == 0 {
         h += p.rdr2.map_or(delirium_data::kv!(112), |r| r.lift);
         g = p.gup.mul_add(Vec3::splat(sdot(p.gup, f.start - g, b"zyx").max(0.0)), g);
+    } else if let Some(r) = p.rdr2.filter(|r| r.turning) {
+        // RDR2's turn step lifts the foot even when it wasn't planted
+        h += r.turn_lift;
     }
     let h = g.x.fma(up.x, g.z.fma(up.z, tilt.fma(h, g.y * up.y)));
     if toe < 0.0 || passed {
@@ -553,7 +557,8 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
         pv.yaw[1] = blend(yaw(-1.0, m, w, toward, false, s.angvel), pv.yaw[1]);
         pv.yaw[0] = pv.yaw[1] * 0.5;
     } else if pv.fixed_vel {
-        pv.yaw[0] = (yaw(1.0, m, w, toward, true, s.angvel) + (pv.yaw[0] - pv.yaw[1]) * 0.5).clamp(-delirium_data::kv!(119), delirium_data::kv!(119));
+        let most = if p.rdr2.is_some_and(|r| r.turning) { crate::nmdbm_rdr2::TURN_TWIST } else { delirium_data::kv!(119) };
+        pv.yaw[0] = (yaw(1.0, m, w, toward, true, s.angvel) + (pv.yaw[0] - pv.yaw[1]) * 0.5).clamp(-most, most);
         pv.yaw[1] = -pv.yaw[0];
     } else {
         let step = p.dt * 0.5;
@@ -575,12 +580,21 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
         pv.p52 = p.dt.fma(a, pv.p52).clamp(p.lean_bias - delirium_data::kv!(78), p.lean_bias + delirium_data::kv!(78));
         pv.p56 = p.dt.fma(b, pv.p56).clamp(-delirium_data::kv!(78), delirium_data::kv!(78));
     }
-    pv.out[0] = b.fma(delirium_data::kv!(257), (f4 * 0.5).fma(e, pv.p56 * delirium_data::kv!(258))) * delirium_data::kv!(259);
+    // RDR2's ankle balance takes the roll integrator out
+    let roll_i = if p.rdr2.is_some_and(|r| r.p.ankle_balance) { 0.0 } else { pv.p56 };
+    pv.out[0] = b.fma(delirium_data::kv!(257), (f4 * 0.5).fma(e, roll_i * delirium_data::kv!(258))) * delirium_data::kv!(259);
     if both {
         pv.out[1] = a.fma(delirium_data::kv!(256), c.fma(f4, pv.p52 * delirium_data::kv!(260))) * -delirium_data::kv!(261);
+        // RDR2: on both feet, once he has stepped, moving backward lowers the pitch target too
+        if let Some(r) = p.rdr2.filter(|r| r.steps > 0) {
+            pv.acc -= if r.p.ankle_balance { (-0.4 * c).clamp(-0.03, 0.2) + 0.03 } else { (-0.7 * c).clamp(0.0, 0.5) };
+        }
     } else {
         pv.out[1] = 0.0;
-        pv.acc -= (-delirium_data::kv!(60) * c).clamp(0.0, 0.5);
+        pv.acc -= match p.rdr2 {
+            Some(r) if r.p.ankle_balance => (-0.26 * c).clamp(0.0, 0.2),
+            _ => (-delirium_data::kv!(60) * c).clamp(0.0, 0.5),
+        };
     }
     let g = -sdot(p.normal[1], s.legs[1].foot.m.c, b"yzx") + -sdot(p.normal[0], s.legs[0].foot.m.c, b"yzx");
     if g > delirium_data::kv!(68) {
@@ -820,15 +834,26 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     let lfoot_v = s.legs[0].foot.v;
     for (i, planted) in [lp, rp].into_iter().enumerate() {
         let leg = &mut s.legs[i];
-        let mut c = LegIk { target: target[i], lead: 0.0, yaw: pv.yaw[i], side: if i == 0 { 1.0 } else { -1.0 }, bend: -1.0,
+        let yaw = match p.rdr2.filter(|r| r.turning) {
+            Some(r) => pv.yaw[i].clamp(r.leg_twist.0, r.leg_twist.1) * (1.0 - crate::nmdbm_rdr2::TURN_ANKLE[!planted as usize]),
+            None => pv.yaw[i],
+        };
+        let mut c = LegIk { target: target[i], lead: 0.0, yaw, side: if i == 0 { 1.0 } else { -1.0 }, bend: -1.0,
                             w: 1.0, reach: 0.0, lift: 0.0, swing: !planted, free: false };
         if !planted {
             let ahead = target[i] - (lfoot_v - p.gvel[0]).mul_add(Vec3::splat(delirium_data::kv!(68)), leg.foot.m.d);
-            (c.lead, c.reach, c.lift) = (p.p168, delirium_data::kv!(64), sdot(up, ahead, b"yxz").fma(delirium_data::kv!(84), delirium_data::kv!(78)).clamp(delirium_data::kv!(9), delirium_data::kv!(119)));
+            (c.lead, c.reach, c.lift) = (p.p168, p.rdr2.map_or(delirium_data::kv!(64), |r| r.p.max_foot_speed), sdot(up, ahead, b"yxz").fma(delirium_data::kv!(84), delirium_data::kv!(78)).clamp(delirium_data::kv!(9), delirium_data::kv!(119)));
         }
         let limb = leg.limb;
         leg_ik(&mut c, &limb, &mut leg.knee, &mut leg.hip, &leg.foot, &pelvis, vel);
     }
+    // RDR2's ankle balance: each planted ankle's pitch with its foot aimed at the tilted normal
+    let aim = p.rdr2.filter(|r| r.p.ankle_balance).map(|_| {
+        let ahead = s.com + s.vel * 0.2;
+        let d = [0, 1].map(|i| horizontal(s.legs[i].foot.m.d - ahead, up).length());
+        (crate::nmdbm_rdr2::Rdr2::ankle_shares(d), crate::nmdbm_rdr2::Rdr2::ankle_aim(Vec3::Z, up, s.com, horizontal(s.vel, up), f.centre))
+    });
+    let mut bal = [0.0f32; 2];
     for (i, planted) in [lp, rp].into_iter().enumerate() {
         let side = if i == 0 { 1.0 } else { -1.0 };
         let leg = &mut s.legs[i];
@@ -842,6 +867,10 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             a + acos(p.leg_length.clamp(delirium_data::kv!(72), delirium_data::kv!(263)))
         } else {
             let k = predict_knee(&leg.hip, &leg.knee, side);
+            if let Some((_, tilt)) = aim {
+                let n = bevy_math::Quat::from_rotation_arc(Vec3::Z, tilt) * normal[i];
+                bal[i] = asin(sdot(leg.knee.m.c, vnorm(k - target[i]).vx(n), b"xyz"));
+            }
             asin(sdot(leg.knee.m.c, vnorm(k - target[i]).vx(normal[i]), b"xyz"))
         };
         leg.ankle.desired[0] = a;
@@ -854,20 +883,31 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     let (ol, or) = (over(&s.legs[0].hip), over(&s.legs[1].hip));
     // RDR2's ankle balance: the balancing pitch fades as the foot tilts off flat
     let w = [0, 1].map(|i| p.rdr2.map(|r| r.ankle_weight(s.legs[i].ankle.actual[0] - s.legs[i].ankle.desired[0])));
+    let rd = p.rdr2.filter(|r| r.p.ankle_balance && !r.p.ankle_keep_pelvis);
+    let ankle = |i: usize, flat: f32, w: f32| match (rd, aim) {
+        (Some(r), Some((share, _))) => flat + r.p.ankle_mult * share[i] * w * (bal[i] - flat) + r.p.ankle_offset,
+        _ => flat,
+    };
     if lp {
         s.legs[0].ankle.desired[0] = match w[0] {
+            Some(w) if rd.is_some() => ankle(0, s.legs[0].ankle.desired[0], w),
             Some(w) => (pv.out[1] + lean).mul_add(w, s.legs[0].ankle.desired[0]),
             None => pv.out[1] + s.legs[0].ankle.desired[0] + lean,
         };
     }
-    s.legs[0].ankle.desired[1] = pv.yaw[0] * 0.5;
+    let twist = |i: usize, planted: bool| match p.rdr2.filter(|r| r.turning) {
+        Some(r) => pv.yaw[i].clamp(r.leg_twist.0, r.leg_twist.1) * crate::nmdbm_rdr2::TURN_ANKLE[!planted as usize],
+        None => pv.yaw[i] * 0.5,
+    };
+    s.legs[0].ankle.desired[1] = twist(0, lp);
     if rp {
-        s.legs[1].ankle.desired[0] += match w[1] {
-            Some(w) => (pv.out[1] - lean) * w,
-            None => pv.out[1] - lean,
+        s.legs[1].ankle.desired[0] = match w[1] {
+            Some(w) if rd.is_some() => ankle(1, s.legs[1].ankle.desired[0], w),
+            Some(w) => s.legs[1].ankle.desired[0] + (pv.out[1] - lean) * w,
+            None => s.legs[1].ankle.desired[0] + (pv.out[1] - lean),
         };
     }
-    s.legs[1].ankle.desired[1] = pv.yaw[1] * 0.5;
+    s.legs[1].ankle.desired[1] = twist(1, rp);
     let (a, b) = (ol.max(-or), or.max(-ol));
     if a > 0.0 && b <= 0.0 {
         s.legs[1].hip.desired[1] += a;
@@ -1353,6 +1393,7 @@ impl Dbm {
             let i = match was { 1 => 1, 2 => 0, _ => (up.vd(self.p.target[1]) > up.vd(self.p.target[0])) as usize };
             r.slope(self.p.normal[i].z);
             r.speed = s.hvel.length();
+            r.turning = self.pv.fixed_vel;
             r.running = r.speed >= r.p.run_vel;
             if r.running {
                 (self.p.leg_stiffness, self.p.step_height) = (r.p.leg_stiffness_run, r.p.step_height_run);
@@ -1365,19 +1406,8 @@ impl Dbm {
         }
         foot_placement(&self.p, &s, &mut self.f);
         if let Some(r) = self.p.rdr2.as_mut() {
-            match self.f.stepping {
-                i @ 1..=2 => {
-                    let i = i as usize - 1;
-                    if let Some((j, was_at)) = r.prev_swing.filter(|w| w.0 == i) {
-                        // along the ground only: the lift stays the step's
-                        let (d, most) = (horizontal(self.f.pos[i] - was_at, self.p.up), r.p.max_foot_speed * dt);
-                        if d.length() > most {
-                            self.f.pos[j] -= d - d.normalize() * most;
-                        }
-                    }
-                    (r.prev_swing, r.last_foot) = (Some((i, self.f.pos[i])), i);
-                }
-                _ => r.prev_swing = None,
+            if let i @ 1..=2 = self.f.stepping {
+                r.last_foot = i as usize - 1;
             }
             let v = horizontal(s.hvel, self.p.up);
             r.sideways(self.f.stepping != 0, v.length_squared(), sdot(v.normalize_or_zero(), s.m.a, b"zyx"));
@@ -1461,6 +1491,11 @@ impl Dbm {
             if let Some(r) = self.p.rdr2.filter(|r| r.owned.hip != 0.0) {
                 ch.eff[(*HIP())[i]].desired[0] += r.owned.hip;
             }
+            // RDR2's minKneeAngle: a swing knee too straight is held back
+            if let (Some(r), false) = (self.p.rdr2, planted) {
+                let k = &s.legs[i].knee;
+                ch.eff[(*KNEE())[i]].desired[0] = r.knee_limit(ch.eff[(*KNEE())[i]].desired[0], k.actual, 0.0, self.p.dt);
+            }
             if self.p.rdr2.is_some_and(|r| r.running) {
                 let h = if planted { k } else { k * crate::nmdbm_rdr2::RUN_SWING };
                 ch.eff[(*HIP())[i]].strength = h * h;
@@ -1480,6 +1515,13 @@ impl Dbm {
                     ch.eff[j].strength = leg * leg;
                 }
                 ch.eff[(*HIP())[i]].strength = hip[i] * hip[i];
+            }
+        }
+        if let Some(g) = self.p.rdr2.and_then(|r| r.gravity_share()) {
+            for i in 0..2 {
+                ch.eff[(*HIP())[i]].oppose_gravity = g;
+                ch.eff[(*KNEE())[i]].oppose_gravity = 2.0 * g;
+                ch.eff[(*ANKLE())[i]].oppose_gravity = 2.0 * g;
             }
         }
     }

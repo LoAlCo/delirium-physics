@@ -25,15 +25,25 @@
 //!   step it wants it (ours: RDR2 keeps it until its owner releases it, but stopAllBehaviours would leave it held
 //!   here). On failing, rampHipPitchOnFail pitches the hips 0.4 forward at 0.6 rad/s (RDR2's -0.4, its sign read as
 //!   its knee bend's: negative bends more);
-//! - maxFootSpeed (off unless set: RDR2's 5 made him fall in our reading); fallType 1: no new step once failing;
+//! - maxFootSpeed as the swing leg's reach (GTA IV's fixed 5); fallType 1: no new step once failing;
+//! - stepIfInSupport as a parameter, off unless set (RDR2's default on, threshold 0, made him step all the time and fall);
+//! - ankle balance: each planted ankle aims its foot at the contact normal tilted (at most 0.2 rad) toward the COM
+//!   0.4 s ahead (speed capped at 0.3), by ankleMult x its share (1/distance^5 of the feet from the COM 0.2 s ahead)
+//!   x the fade, plus ankleOffset, in place of the pelvis control's ankle term; the pelvis control loses its roll
+//!   integrator and lowers its pitch target by clamp(0.26 v, 0, 0.2) on one foot and clamp(0.4 v, -0.03, 0.2) + 0.03
+//!   on both once he has stepped (v his backward speed) (0.2 v / 0.7 v capped at 0.5 without ankle balance);
+//! - the turn step (when a behaviour asks the balancer to face a way): hip twist up to 1.9 rad, split with the ankle
+//!   (0.3 of it on a planted leg, 0.8 swinging), each leg's twist within minLegTwist/maxLegTwist (drawn +-0.3/0.2
+//!   per step), and a 0.17 +- 0.07 lift on every step;
+//! - minKneeAngle (a swing knee limit; never acts at RDR2's -0.5) and fallReduceGravityComp (oppose gravity drains
+//!   with the hips: hips r, knees and ankles 2r);
 //! - off unless set (as RDR2's defaults leave them): the predictionTime, stepClampScale and liftFeet variances drawn
 //!   for each step, leanAgainstVelocity, standUp, extraFeetApart, the feetApart randomisation (feetApartMin/Max
 //!   above feetApartVel) with stopWaddling, the sideways cheat force (sidewaysCheatForce over sidewaysThresh) and
 //!   the 0.06 m alternation bias while moving sideways.
-//! Not here: stepIfInSupport (its speed threshold isn't known), extra foot friction on slopes, the slope pelvis drop
-//! (off), crouch start (it needs a character value not read), obstacle and other-leg avoidance, the three lean
-//! channels, the turn step, minKneeAngle and fallReduceGravityComp (their effect isn't read), the leg-twist limits,
-//! hipError, ankle balance's offset and gains, the pelvis control's single-support and turn changes.
+//! Not here: extra foot friction on slopes, the slope pelvis drop (off), crouch start, obstacle and other-leg
+//! avoidance, the three lean channels, hipError, ankle balance's twist part, the turn step's random pauses and
+//! flat-foot test, fallType 3 (slump: it hands over to balancerCollisionsReaction).
 
 /// configureBalance's RDR2 parameters this port uses (RDR2's names and defaults).
 #[derive(Clone, Copy, Debug)]
@@ -74,8 +84,8 @@ pub struct Params {
     pub limb_requests: bool,
     /// limb requests resolved highest slot first (the other reading of RDR2's queue order)
     pub limb_order_reversed: bool,
-    /// how fast the swing foot's target may move along the ground (m/s). RDR2 has 5, but how it limits it is only partly
-    /// read and our reading (either way) made him fall after a leg shot, so off (1000) unless set
+    /// the swing leg solver's reach: the target at most 2 maxFootSpeed / k from the foot, k the hip stiffness (GTA IV's
+    /// fixed 5, a parameter in RDR2)
     pub max_foot_speed: f32,
     pub ramp_hip_pitch_on_fail: bool,
     pub prediction_time: f32,
@@ -93,6 +103,17 @@ pub struct Params {
     pub stop_waddling: i32,
     pub sideways_cheat_force: f32,
     pub sideways_thresh: f32,
+    /// moving, he may step though the COM is over his feet. RDR2 has it on with a speed threshold of 0, but on here he
+    /// steps all the time and falls (18 of 21 ramp runs): what else holds RDR2's steps back isn't read, so off unless set
+    pub step_if_in_support: bool,
+    pub ankle_offset: f32,
+    pub ankle_mult: f32,
+    pub min_knee_angle: f32,
+    pub fall_reduce_gravity_comp: bool,
+    pub min_leg_twist: f32,
+    pub max_leg_twist: f32,
+    /// ankle balance: also keep the pelvis control's ankle term (ours, for comparison: RDR2's ankle formula replaces it)
+    pub ankle_keep_pelvis: bool,
 }
 
 impl Default for Params {
@@ -103,10 +124,12 @@ impl Default for Params {
                  legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
                  always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
                  taper_knee_strength_run: false, limp_scale: 0.25, limb_requests: true, limb_order_reversed: false,
-                 max_foot_speed: 1000.0, ramp_hip_pitch_on_fail: true, prediction_time: 0.2, prediction_time_variance: 0.0,
+                 max_foot_speed: 5.0, ramp_hip_pitch_on_fail: true, prediction_time: 0.2, prediction_time_variance: 0.0,
                  step_clamp_scale_variance: 0.0, lift_feet: 0.07, lift_feet_variance: 0.0, lean_against_velocity: 0.0,
                  stand_up: false, extra_feet_apart: 0.0, feet_apart_min: 1.0, feet_apart_max: 1.0, feet_apart_vel: 100.0,
-                 stop_waddling: 0, sideways_cheat_force: 0.0, sideways_thresh: 0.8 }
+                 stop_waddling: 0, sideways_cheat_force: 0.0, sideways_thresh: 0.8,
+                 step_if_in_support: false, ankle_offset: -0.12, ankle_mult: 25.0, min_knee_angle: -0.5,
+                 fall_reduce_gravity_comp: false, min_leg_twist: -1.9, max_leg_twist: 0.2, ankle_keep_pelvis: false }
     }
 }
 
@@ -159,6 +182,14 @@ impl Params {
             "stopWaddling" => self.stop_waddling = v as i32,
             "sidewaysCheatForce" => self.sideways_cheat_force = v,
             "sidewaysThresh" => self.sideways_thresh = v,
+            "stepIfInSupport" => self.step_if_in_support = v != 0.0,
+            "ankleOffset" => self.ankle_offset = v,
+            "ankleMult" => self.ankle_mult = v,
+            "minKneeAngle" => self.min_knee_angle = v,
+            "fallReduceGravityComp" => self.fall_reduce_gravity_comp = v != 0.0,
+            "minLegTwist" => self.min_leg_twist = v,
+            "maxLegTwist" => self.max_leg_twist = v,
+            "ankleKeepPelvis" => self.ankle_keep_pelvis = v != 0.0,
             _ => return false,
         }
         true
@@ -191,6 +222,16 @@ const FAIL_HIP_RATE: f32 = 0.6;
 /// Moving sideways: the other foot's lead in the step decision after each step (m), and the speed (squared) it
 /// takes to count.
 const ALTERNATE: f32 = 0.06;
+/// The turn step: hip twist limit (rad), the ankle's share of a leg's twist (planted, swinging), the lift and its
+/// variance, the leg-twist limits' variances.
+pub const TURN_TWIST: f32 = 1.9;
+pub const TURN_ANKLE: [f32; 2] = [0.3, 0.8];
+const TURN_LIFT: (f32, f32) = (0.17, 0.07);
+const LEG_TWIST_VAR: (f32, f32) = (0.3, 0.2);
+/// Ankle balance: the COM look-ahead (s), its speed cap, the largest tilt of the aimed normal, the feet's share power.
+const ANKLE_AHEAD: f32 = 0.4;
+const ANKLE_SPEED: f32 = 0.3;
+pub const ANKLE_TILT: f32 = 0.2;
 const SIDEWAYS_SPEED2: f32 = 0.25;
 
 /// RDR2's crouch request the balancer owns: a knee bend (added to leg straightness) and a hip pitch (rad, flexing
@@ -251,6 +292,10 @@ pub struct Rdr2 {
     pub sideways: bool,
     /// the foot that stepped last (0 left, 1 right)
     pub last_foot: usize,
+    /// a behaviour asked the balancer to face a way (RDR2's turn step), and this step's leg-twist limits and lift
+    pub turning: bool,
+    pub leg_twist: (f32, f32),
+    pub turn_lift: f32,
 }
 
 impl Rdr2 {
@@ -258,7 +303,8 @@ impl Rdr2 {
         Rdr2 { p, time: 0.0, still: 0.0, steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
                since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0), owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
-               width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0 }
+               width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false,
+               leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0 }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.
@@ -308,6 +354,8 @@ impl Rdr2 {
         self.prediction = p.prediction_time + p.prediction_time_variance * self.rand();
         self.clamp_add = p.step_clamp_scale_variance * self.rand();
         self.lift = p.lift_feet + p.lift_feet_variance * self.rand();
+        self.leg_twist = (p.min_leg_twist + LEG_TWIST_VAR.0 * self.rand(), p.max_leg_twist + LEG_TWIST_VAR.1 * self.rand());
+        self.turn_lift = TURN_LIFT.0 + TURN_LIFT.1 * self.rand();
         let u = (self.rand() + 1.0) * 0.5;
         self.width_scale = p.feet_apart_min + (p.feet_apart_max - p.feet_apart_min) * u;
     }
@@ -341,6 +389,37 @@ impl Rdr2 {
     pub fn sideways(&mut self, stepping: bool, speed2: f32, along_side: f32) {
         self.sideways = !stepping && self.p.sideways_cheat_force.abs() >= 0.01 && speed2 > SIDEWAYS_SPEED2
             && along_side.abs() > self.p.sideways_thresh;
+    }
+
+    /// The ankles' shares of the balance: 1/d^5 of each foot's distance from the COM 0.2 s ahead.
+    pub fn ankle_shares(d: [f32; 2]) -> [f32; 2] {
+        let w = d.map(|d| (1.0 / (d + 1e-10)).powi(5));
+        let sum = w[0] + w[1];
+        if sum.is_finite() && sum > 0.0 { [w[0] / sum, w[1] / sum] } else { [0.5; 2] }
+    }
+
+    /// The normal an ankle aims at: `n` tilted toward the COM `ahead` of the support `centre`, at most ANKLE_TILT.
+    pub fn ankle_aim(n: bevy_math::Vec3, up: bevy_math::Vec3, com: bevy_math::Vec3, vel: bevy_math::Vec3, centre: bevy_math::Vec3) -> bevy_math::Vec3 {
+        let v = if vel.length() > ANKLE_SPEED { vel.normalize() * ANKLE_SPEED } else { vel };
+        let d = (com + v * ANKLE_AHEAD - centre).normalize_or_zero();
+        let axis = up.cross(d);
+        if axis.length_squared() < 1e-12 {
+            return n;
+        }
+        let angle = up.dot(d).clamp(-1.0, 1.0).acos().min(ANKLE_TILT);
+        bevy_math::Quat::from_axis_angle(axis.normalize(), angle) * n
+    }
+
+    /// minKneeAngle: a swing knee at `angle` (moving at `speed`) straighter than -minKneeAngle is held back.
+    pub fn knee_limit(&self, target: f32, angle: f32, speed: f32, dt: f32) -> f32 {
+        let m = self.p.min_knee_angle;
+        if angle > -m { target.min(angle - speed.clamp(0.0, 5.0) - 20.0 * dt * (angle + m)) } else { target }
+    }
+
+    /// fallReduceGravityComp: the hips' oppose-gravity share while failing (knees and ankles get twice it).
+    pub fn gravity_share(&self) -> Option<f32> {
+        let t = self.time - self.failing?;
+        self.p.fall_reduce_gravity_comp.then(|| 1.0 / ((0.4 + self.asym) * self.p.fall_mult * t + 1.1))
     }
 
     pub fn alternate() -> f32 {
