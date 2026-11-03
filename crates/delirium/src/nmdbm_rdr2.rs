@@ -26,7 +26,8 @@
 //!   here). On failing, rampHipPitchOnFail pitches the hips 0.4 forward at 0.6 rad/s (RDR2's -0.4, its sign read as
 //!   its knee bend's: negative bends more);
 //! - maxFootSpeed as the swing leg's reach (GTA IV's fixed 5); fallType 1: no new step once failing;
-//! - stepIfInSupport as a parameter, off unless set (RDR2's default on, threshold 0, made him step all the time and fall);
+//! - stepIfInSupport: moving, a foot that lost the ground may step though the COM is over his feet (the farther-foot
+//!   test stays masked there, except when turning); off, nothing steps while the COM is over his feet;
 //! - ankle balance: each planted ankle aims its foot at the contact normal tilted (at most 0.2 rad) toward the COM
 //!   0.4 s ahead (speed capped at 0.3), by ankleMult x its share (1/distance^5 of the feet from the COM 0.2 s ahead)
 //!   x the fade, plus ankleOffset, in place of the pelvis control's ankle term; the pelvis control loses its roll
@@ -103,8 +104,8 @@ pub struct Params {
     pub stop_waddling: i32,
     pub sideways_cheat_force: f32,
     pub sideways_thresh: f32,
-    /// moving, he may step though the COM is over his feet. RDR2 has it on with a speed threshold of 0, but on here he
-    /// steps all the time and falls (18 of 21 ramp runs): what else holds RDR2's steps back isn't read, so off unless set
+    /// moving, a foot that lost the ground may step again though the COM is over his feet (the farther-foot test stays
+    /// masked there, as in GTA IV); off: no step at all while the COM is over his feet
     pub step_if_in_support: bool,
     pub ankle_offset: f32,
     pub ankle_mult: f32,
@@ -128,7 +129,7 @@ impl Default for Params {
                  step_clamp_scale_variance: 0.0, lift_feet: 0.07, lift_feet_variance: 0.0, lean_against_velocity: 0.0,
                  stand_up: false, extra_feet_apart: 0.0, feet_apart_min: 1.0, feet_apart_max: 1.0, feet_apart_vel: 100.0,
                  stop_waddling: 0, sideways_cheat_force: 0.0, sideways_thresh: 0.8,
-                 step_if_in_support: false, ankle_offset: -0.12, ankle_mult: 25.0, min_knee_angle: -0.5,
+                 step_if_in_support: true, ankle_offset: -0.12, ankle_mult: 25.0, min_knee_angle: -0.5,
                  fall_reduce_gravity_comp: false, min_leg_twist: -1.9, max_leg_twist: 0.2, ankle_keep_pelvis: false }
     }
 }

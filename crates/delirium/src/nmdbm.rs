@@ -371,8 +371,15 @@ fn hip_room(hip: &Eff3, l1: f32, l2: f32, l3: f32, l4: f32) -> f32 {
 }
 
 fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
-    // RDR2's stepIfInSupport: moving (or turning), he may step though the COM is over his feet
-    let free = f.flags & delirium_data::kv!(1 int) == 0 || r.is_some_and(|r| (r.p.step_if_in_support && r.speed > 0.0) || r.turning);
+    // with the COM over his feet neither foot counts as farther, unless (RDR2) he is turning on the spot
+    let inside = f.flags & delirium_data::kv!(1 int) != 0;
+    let free = !inside || r.is_some_and(|r| r.turning);
+    // RDR2's stepIfInSupport off (or standing still): no step at all while the COM is over his feet
+    if let Some(r) = r {
+        if f.stepping == 0 && inside && !r.turning && (!r.p.step_if_in_support || r.speed <= 0.0) {
+            return;
+        }
+    }
     let a = f.dist[0] > f.dist[1] && free;
     let b = f.dist[1] > f.dist[0] && free;
     if let Some(r) = r {
