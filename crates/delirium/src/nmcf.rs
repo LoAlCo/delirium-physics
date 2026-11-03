@@ -561,7 +561,9 @@ impl CatchFall {
         let look = c.b.part(HEAD()).m.d + r.dir;
         let chest = c.b.part(SPINE3());
         if p.use_head_look {
-            (head.pos, head.vel, head.stiffness) = (look, chest.v, 2.0 + torso);
+            // at catchFall's priority; once down, headLook leans the head away from the ground instead
+            head.look(crate::nmhl::PRIO_CATCH_FALL, look, chest.v, true);
+            (head.stiffness, head.keep_head_away) = (2.0 + torso, r.on_ground);
         } else if r.on_ground {
             let n = c.b.pmat(NECK_PART()).m;
             let away = -r.dir;

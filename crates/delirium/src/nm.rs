@@ -262,12 +262,12 @@ fn dbm_config(c: ConfigureBalance, params: &BodyBalance, lean_bias: f32, hip_yaw
 impl BodyBalance {
     fn from(p: crate::nmbb::Params) -> BodyBalance {
         BodyBalance { body_stiffness: p.body_stiffness, damping: p.damping, elbow: p.elbow, shoulder: p.shoulder, max_steps: p.max_steps,
-                      spine_stiffness: p.head_look_always_timeout, spine_damping: p.body_turn_timeout }
+                      spine_stiffness: p.spine_stiffness, spine_damping: p.spine_damping }
     }
 
     fn onto(self, p: &mut crate::nmbb::Params) {
         (p.body_stiffness, p.damping, p.elbow, p.shoulder, p.max_steps) = (self.body_stiffness, self.damping, self.elbow, self.shoulder, self.max_steps);
-        (p.head_look_always_timeout, p.body_turn_timeout) = (self.spine_stiffness, self.spine_damping);
+        (p.spine_stiffness, p.spine_damping) = (self.spine_stiffness, self.spine_damping);
     }
 }
 
@@ -566,7 +566,7 @@ impl Agent {
 
     pub fn body_balance_full(&mut self, build: &Build, world: &Collision, p: crate::nmbb::Params) {
         let params = BodyBalance { body_stiffness: p.body_stiffness, damping: p.damping, elbow: p.elbow, shoulder: p.shoulder,
-                                   max_steps: p.max_steps, spine_stiffness: p.head_look_always_timeout, spine_damping: p.body_turn_timeout };
+                                   max_steps: p.max_steps, spine_stiffness: p.spine_stiffness, spine_damping: p.spine_damping };
         self.body_balance_with(build, world, params, Some(p));
     }
 
@@ -592,7 +592,13 @@ impl Agent {
             if p.use_head_look {
                 let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
                 let (h, (pos, vel)) = (&mut self.nm_head, crate::nmbb::look_at(&p, &body, &self.obstacles));
-                (h.pos, h.vel, h.stiffness, h.damping, h.always_look) = (pos, vel, delirium_data::kv!(117), 1.0, true);
+                if ch.rdr2 {
+                    // RDR2: headLook reset, stiffness 1 + spineStiffness, the target at bodyBalance's priority
+                    *h = crate::nmhl::HeadLook { stiffness: 1.0 + p.spine_stiffness, damping: 1.0, always_look: true, ..Default::default() };
+                    h.look(crate::nmhl::PRIO_BODY_BALANCE, pos, vel, true);
+                } else {
+                    (h.pos, h.vel, h.stiffness, h.damping, h.always_look) = (pos, vel, delirium_data::kv!(117), 1.0, true);
+                }
                 h.activate(ch, &body);
                 self.head_look = vec![(pos, f32::INFINITY)];
             }
@@ -912,10 +918,16 @@ impl Agent {
                 self.head_look = vec![(pos, f32::INFINITY)];
                 (self.nm_head.vel, self.nm_head.stiffness, self.nm_head.damping) = (vel, stiffness, damping);
                 (self.nm_head.always_look, self.nm_head.always_eyes_horizontal) = (always_look, always_eyes_horizontal);
-                let owned = self.nm_cf.as_ref().is_some_and(|f| f.p.use_head_look) || self.nm_fl.active || self.nm_gr.active || self.nm_br.active || self.nm_hf.active();
+                if self.rdr2_core.is_some() {
+                    // RDR2: a headLook message's target beats every behaviour's
+                    self.nm_head.look(crate::nmhl::PRIO_MESSAGE, pos, vel, always_eyes_horizontal);
+                }
+                let owned =self.nm_cf.as_ref().is_some_and(|f| f.p.use_head_look) || self.nm_fl.active || self.nm_gr.active || self.nm_br.active || self.nm_hf.active();
                 if let Some(ch) = self.ch.as_mut().filter(|_| !owned) {
                     let (snap, frames): (_, Vec<Transform>) = (ch.clone(), self.doll.frames().collect());
-                    self.nm_head.pos = pos;
+                    if !ch.rdr2 {
+                        self.nm_head.pos = pos;
+                    }
                     self.nm_head.activate(ch, &crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames });
                 }
             }
@@ -1251,7 +1263,10 @@ impl Agent {
             if self.shot_look || out.head_look_activate {
                 self.head_look = vec![(pos, dt)];
             }
-            if cf_was || !self.nm_cf.as_ref().is_some_and(|f| f.active) {
+            if self.rdr2_core.is_some() {
+                // RDR2: the shot's head look at its priority (above bodyBalance's, below catchFall's)
+                self.nm_head.look(crate::nmhl::PRIO_SHOT, pos, Vec3::ZERO, true);
+            } else if cf_was || !self.nm_cf.as_ref().is_some_and(|f| f.active) {
                 (self.nm_head.pos, self.nm_head.vel) = (pos, Vec3::ZERO);
             }
         }
@@ -1511,9 +1526,10 @@ impl Agent {
                     }
                     if let Some((pos, vel)) = out.head_look {
                         self.head_look = vec![(pos, dt)];
-                        let h = &mut self.nm_head;
-                        (h.pos, h.vel, h.stiffness, h.damping, h.always_look) = (pos, vel, out.head_look_stiffness, 1.0, true);
-                        h.activate(ch, &body);
+                        bb_look(&mut self.nm_head, ch, &body, pos, vel, out.head_look_stiffness);
+                    }
+                    if let Some((mode, amount, as_force)) = out.lean {
+                        self.lean = Some((mode, amount, 0.1, as_force));
                     }
                     catch = out.catch_fall;
                 }
@@ -1526,9 +1542,10 @@ impl Agent {
                 }
                 if let Some((pos, vel)) = out.head_look {
                     self.head_look = vec![(pos, dt)];
-                    let h = &mut self.nm_head;
-                    (h.pos, h.vel, h.stiffness, h.damping, h.always_look) = (pos, vel, out.head_look_stiffness, 1.0, true);
-                    h.activate(ch, &body);
+                    bb_look(&mut self.nm_head, ch, &body, pos, vel, out.head_look_stiffness);
+                }
+                if let Some((mode, amount, as_force)) = out.lean {
+                    self.lean = Some((mode, amount, 0.1, as_force));
                 }
                 catch = out.catch_fall;
             }
@@ -1778,7 +1795,10 @@ impl Agent {
             if !self.nm_cf.as_ref().is_some_and(|f| f.p.use_head_look) && !self.nm_fl.active && !self.nm_gr.active && !self.nm_br.active && !self.nm_hf.active() {
                 match self.head_look.first() {
                     Some(&(pos, _)) => {
-                        self.nm_head.pos = pos;
+                        // with the RDR2 core the target came in through the priority setter
+                        if !c.ch.rdr2 {
+                            self.nm_head.pos = pos;
+                        }
                         self.nm_head.activate(c.ch, &body);
                     }
                     None => self.nm_head.deactivate(),
@@ -1799,6 +1819,10 @@ impl Agent {
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x70); }
             if !waits(walk_actives!(self), W_RU()) {
                 self.nm_ru.tick(&mut c, self.nm_br.active, dt);
+                // RDR2: bodyRollUp sets headLook's keepHeadAwayFromGround every tick (it lasts until headLook is reset)
+                if c.ch.rdr2 && self.nm_ru.active {
+                    self.nm_head.keep_head_away = true;
+                }
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x80); }
             {
@@ -1867,7 +1891,7 @@ impl Agent {
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xd0); }
             if (hl_was || (shot_out.head_look_start.is_none() && !shot_out.head_look_activate)) && !waits(walk_actives!(self), W_HEAD()) {
-                self.nm_head.tick(c.ch, &body);
+                self.nm_head.tick(c.ch, &body, dt);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xf8); }
             self.nm_pa.tick(&mut c);
@@ -2300,6 +2324,21 @@ fn hold_stiffness(ch: &mut crate::nmrs::Character) {
 
 fn eff_words(ch: &crate::nmrs::Character) -> Vec<[f32; 6]> {
     ch.eff.iter().map(|e| [e.desired[0], e.desired[1], e.desired[2], e.muscle_stiffness, e.strength, e.damping]).collect()
+}
+
+/// bodyBalance's head look: GTA IV sets the target; with the RDR2 core it is reset if it had stopped, and the
+/// target goes in at bodyBalance's priority.
+fn bb_look(h: &mut crate::nmhl::HeadLook, ch: &mut crate::nmrs::Character, body: &crate::nmdbm::Body, pos: Vec3, vel: Vec3, stiffness: f32) {
+    if ch.rdr2 {
+        if !h.active {
+            *h = crate::nmhl::HeadLook::default();
+        }
+        (h.stiffness, h.damping, h.always_look) = (stiffness, 1.0, true);
+        h.look(crate::nmhl::PRIO_BODY_BALANCE, pos, vel, true);
+    } else {
+        (h.pos, h.vel, h.stiffness, h.damping, h.always_look) = (pos, vel, stiffness, 1.0, true);
+    }
+    h.activate(ch, body);
 }
 
 fn start_flinch(m: UpperBodyFlinch, f: &mut crate::nmfl::Flinch, c: &mut crate::nmshot::Ctx, head: &mut crate::nmhl::HeadLook,

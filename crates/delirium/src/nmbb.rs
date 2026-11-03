@@ -16,7 +16,9 @@ pub struct Params {
     pub max_steps: u32,
     pub head_look_pos: Vec3,
     pub head_look_instance_index: i32,
-    pub head_look_always_timeout: f32,
+    /// The spine's stiffness (RDR2's spineStiffness; GTA IV's message calls it headLookAlwaysTimeout, the same
+    /// number in the same place)
+    pub spine_stiffness: f32,
     pub head_look_at_vel_prob: f32,
     pub somersault_angle: f32,
     pub somersault_angle_threshold: f32,
@@ -29,7 +31,8 @@ pub struct Params {
     pub returning_to_balance_arms_out: f32,
     pub arms_out_straighten_elbows: f32,
     pub arms_out_min_lean2: f32,
-    pub body_turn_timeout: f32,
+    /// The spine's damping (RDR2's spineDamping; GTA IV's bodyTurnTimeout)
+    pub spine_damping: f32,
     pub turn_off_prob: f32,
     pub turn2_target_prob: f32,
     pub turn2_vel_prob: f32,
@@ -42,20 +45,53 @@ pub struct Params {
     pub use_head_look: bool,
     pub arms_out_on_push: bool,
     pub use_body_turn: bool,
+    /// RDR2's further parameters (read with the RDR2 core)
+    pub rdr2: Rdr2Params,
+}
+
+/// bodyBalance's RDR2-only parameters (RDR2's names and defaults).
+#[derive(Clone, Copy, Debug)]
+pub struct Rdr2Params {
+    /// shoulder lean1 offset (divided by shoulder)
+    pub shoulder_l1: f32,
+    /// shoulder lean2 offset
+    pub shoulder_l2: f32,
+    /// shoulder lean2 from the hip's lean2
+    pub hip_l2_arm_l2: f32,
+    pub shoulder_twist: f32,
+    /// the arms swing only within this long (s) without a foot down
+    pub airborne_arms: f32,
+    /// arms-out ignores each arm's random on/off windows
+    pub axis_weights_simulation_blocked: bool,
+    /// lean away from a target moving past closer than this (m; <= 0 off)
+    pub move_radius: f32,
+    pub move_amount: f32,
+    pub move_amount_still: f32,
+    /// lean away only while bracing (no brace here: never)
+    pub move_when_bracing: bool,
+}
+
+impl Default for Rdr2Params {
+    fn default() -> Rdr2Params {
+        Rdr2Params { shoulder_l1: 0.0, shoulder_l2: 0.5, hip_l2_arm_l2: 0.3, shoulder_twist: -0.35, airborne_arms: 0.0,
+                     axis_weights_simulation_blocked: true, move_radius: -1.0, move_amount: 0.3, move_amount_still: 0.3,
+                     move_when_bracing: false }
+    }
 }
 
 impl Default for Params {
     fn default() -> Params {
         Params {
             body_stiffness: delirium_data::kv!(137), elbow: delirium_data::kv!(13), shoulder: 1.0, damping: delirium_data::kv!(74), max_steps: delirium_data::kv!(197 int), head_look_pos: Vec3::ZERO,
-            head_look_instance_index: -1, head_look_always_timeout: delirium_data::kv!(31), head_look_at_vel_prob: -1.0,
+            head_look_instance_index: -1, spine_stiffness: delirium_data::kv!(31), head_look_at_vel_prob: -1.0,
             somersault_angle: 1.0, somersault_angle_threshold: delirium_data::kv!(17), side_somersault_angle: 1.0,
             side_somersault_angle_threshold: delirium_data::kv!(17), ang_vel_multiplier: Vec3::new(delirium_data::kv!(84), 1.0, delirium_data::kv!(84)),
             ang_vel_threshold: Vec3::new(delirium_data::kv!(136), delirium_data::kv!(5), delirium_data::kv!(136)), arms_out_on_push_multiplier: 0.0, arms_out_on_push_timeout: 1.0,
             returning_to_balance_arms_out: 0.0, arms_out_straighten_elbows: 0.0, arms_out_min_lean2: -delirium_data::kv!(188),
-            body_turn_timeout: 1.0, turn_off_prob: delirium_data::kv!(78), turn2_target_prob: delirium_data::kv!(60), turn2_vel_prob: delirium_data::kv!(24), turn_away_prob: delirium_data::kv!(9),
+            spine_damping: 1.0, turn_off_prob: delirium_data::kv!(78), turn2_target_prob: delirium_data::kv!(60), turn2_vel_prob: delirium_data::kv!(24), turn_away_prob: delirium_data::kv!(9),
             turn_left_prob: delirium_data::kv!(187), turn_right_prob: delirium_data::kv!(187), elbow_angle_on_contact: delirium_data::kv!(186), bend_elbows_time: 0.5,
             bend_elbows_gait: delirium_data::kv!(74), use_head_look: false, arms_out_on_push: false, use_body_turn: false,
+            rdr2: Rdr2Params::default(),
         }
     }
 }
@@ -67,6 +103,8 @@ pub struct Out {
     pub head_look_stiffness: f32,
     pub step_clamp: Option<f32>,
     pub turn: Option<Vec3>,
+    /// RDR2: a lean asked of the balancer (leaning away from a target moving past)
+    pub lean: Option<(crate::nmdbm::LeanMode, f32, bool)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -85,10 +123,32 @@ pub struct BodyBalance {
     look_vel: bool,
     pub use_char_frame: bool,
     frame: [Vec3; 3],
+    rd: Rdr2Bb,
+}
+
+/// RDR2's further state (with the RDR2 core).
+#[derive(Clone, Copy, Debug, Default)]
+struct Rdr2Bb {
+    /// each arm's arms-out on/off timer (off below 0) and its off time
+    arm_on: [f32; 2],
+    arm_off: [f32; 2],
+    /// time without a foot down
+    airborne: f32,
+    /// the chosen turn (0 off, 1 to the target, 2 along the velocity, 3 away, 4 left, 5 right)
+    turn: u8,
+    /// the target's position and velocity estimate, its last move, held while it pauses, the last dt
+    target: Vec3,
+    target_vel: Vec3,
+    moved: f32,
+    paused: bool,
+    last_dt: f32,
 }
 
 impl BodyBalance {
     pub fn activate(p: Params, ch: &mut Character, b: &Body) -> BodyBalance {
+        if ch.rdr2 {
+            return BodyBalance::activate_rdr2(p, ch, b);
+        }
         for (e, j) in ch.eff.iter_mut().zip(&ch.joints) {
             e.reset(j);
             e.desired = [0.0; 3];
@@ -105,7 +165,7 @@ impl BodyBalance {
         let mut s = BodyBalance {
             p, arms_out: p.arms_out_on_push_timeout, floor: delirium_data::kv!(131), euler: [0.0; 3], bend: 0.0, cut: ch.random() * delirium_data::kv!(20),
             stepping: 0, look_time: 0.0, look_rand: 0.0, turn_rand: 0.0, turn_time: 0.0, look_vel: false,
-            use_char_frame: false, frame: [Vec3::ZERO; 3],
+            use_char_frame: false, frame: [Vec3::ZERO; 3], rd: Rdr2Bb::default(),
         };
         s.look_rand = ch.random();
         s.turn_rand = ch.random();
@@ -136,6 +196,9 @@ impl BodyBalance {
 
     #[allow(clippy::too_many_arguments)]
     pub fn tick(&mut self, ch: &mut Character, b: &Body, obstacles: &[crate::ragdoll::Obstacle], stepping: u32, failed: bool, catching: bool, dt: f32) -> Out {
+        if ch.rdr2 {
+            return self.tick_rdr2(ch, b, obstacles, stepping, failed, catching, dt);
+        }
         let p = self.p;
         let mut out = Out::default();
         if failed {
@@ -156,7 +219,7 @@ impl BodyBalance {
         for i in (*SPINE()).into_iter().chain((*NECK())) {
             ch.eff[i].muscle_stiffness = delirium_data::kv!(12);
         }
-        ch.set_stiffness(p.head_look_always_timeout, p.body_turn_timeout, "ub", None);
+        ch.set_stiffness(p.spine_stiffness, p.spine_damping, "ub", None);
         ch.set_stiffness(p.body_stiffness, p.damping, "ua", None);
         ch.set_stiffness(p.body_stiffness, 1.0, "un", None);
         ch.set_stiffness(delirium_data::kv!(137), 1.0, "uc", None);
@@ -168,7 +231,7 @@ impl BodyBalance {
         let speed = (b.doll.kinetic() * 2.0).sqrt();
         let snap = b.snap(Vec3::Z);
         if p.use_head_look {
-            out.head_look_stiffness = p.head_look_always_timeout + 1.0;
+            out.head_look_stiffness = p.spine_stiffness + 1.0;
             let mut look = look_at(&p, b, obstacles);
             if stepping != 0 {
                 self.look_time -= dt;
@@ -367,5 +430,284 @@ pub fn to_own(at: Vec3, b: &Body) -> Vec3 {
     }
     let (o, r) = own(b);
     r.inverse() * (at - o) + crate::nmrs::cg(b.build.nm)
+}
+
+// ---- RDR2's bodyBalance (with the RDR2 core), from a study of RDR2's own (rdr2_bodybalance.md) ----
+
+/// RDR2: the body turn only above this speed (sqrt(2E), m/s)
+const RDR2_TURN_SPEED: f32 = 0.3;
+
+/// Blend an effector's angles toward `to` by `w`.
+fn blend(d: &mut [f32; 3], to: [f32; 3], w: f32) {
+    for k in 0..3 {
+        d[k] += (to[k] - d[k]) * w;
+    }
+}
+
+impl BodyBalance {
+    /// RDR2's activation: the non-leg joints' angles to 0 (their gains as they were), oppose gravity 1 on the neck
+    /// and head and 2 on spine0-2 and the clavicles, the clavicles to their zero pose; each arm's arms-out window
+    /// drawn; the torso frame and its angles.
+    fn activate_rdr2(p: Params, ch: &mut Character, b: &Body) -> BodyBalance {
+        let legs = Character::mask("lb");
+        for j in (0..ch.eff.len()).filter(|j| !legs.contains(j)) {
+            ch.eff[j].desired = [0.0; 3];
+        }
+        for i in (*NECK()) {
+            ch.eff[i].oppose_gravity = 1.0;
+        }
+        for i in [(*SPINE())[0], (*SPINE())[1], (*SPINE())[2], (*CLAVICLE())[0], (*CLAVICLE())[1]] {
+            ch.eff[i].oppose_gravity = 2.0;
+        }
+        for i in (*CLAVICLE()) {
+            ch.eff[i].blend_to_zero(1.0);
+        }
+        let mut rd = Rdr2Bb { last_dt: 1.0 / 60.0, ..Default::default() };
+        for i in 0..2 {
+            rd.arm_on[i] = 1.4 * ch.random() - 0.7;
+            rd.arm_off[i] = 0.4 * ch.random() + 0.3;
+        }
+        let mut s = BodyBalance {
+            p, arms_out: p.arms_out_on_push_timeout, floor: 0.03, euler: [0.0; 3], bend: 0.0, cut: 0.0, stepping: 0,
+            look_time: 0.0, look_rand: 0.0, turn_rand: 0.0, turn_time: 0.0, look_vel: true, use_char_frame: false,
+            frame: [Vec3::ZERO; 3], rd,
+        };
+        s.frame = s.frame(b);
+        s.euler = s.angles();
+        s.cut = 0.8 * ch.random();
+        s.look_rand = ch.random();
+        s.rd.target = look_at(&p, b, &[]).0;
+        s
+    }
+
+    /// RDR2's tick: the falling hand-over to catchFall; stiffness (spine; neck and head at the arms' stiffness;
+    /// arms; clavicles 9; elbows (0.9 s)^2); the head look at its priority, sometimes along the velocity; the body
+    /// turn chosen every 0.4-1 s; leaning away from a target moving past; spine lean and twist from the hips; arms
+    /// out from the torso's tilt and spin, in random on/off windows per arm; the arm swing from the hips; then all
+    /// but the legs blended toward a rest pose, more the slower he goes.
+    #[allow(clippy::too_many_arguments)]
+    fn tick_rdr2(&mut self, ch: &mut Character, b: &Body, obstacles: &[crate::ragdoll::Obstacle], stepping: u32, failed: bool, catching: bool, dt: f32) -> Out {
+        let p = self.p;
+        let r = p.rdr2;
+        let mut out = Out::default();
+        if failed {
+            // fallingReaction 0: catchFall with its defaults (8.25, 10, 13) scaled by armStiffness / 9
+            if !catching {
+                ch.stabilise = None;
+                let k = p.body_stiffness / 9.0;
+                out.catch_fall = Some([8.25 * k, 10.0 * k, 13.0 * k]);
+            }
+            return out;
+        }
+        if stepping != 0 && self.stepping != stepping {
+            self.stepping = stepping;
+            self.cut = 0.8 * ch.random();
+        }
+        // stiffness
+        for i in (*SPINE()).into_iter().chain(*NECK()) {
+            ch.eff[i].muscle_stiffness = 1.5;
+        }
+        ch.set_stiffness(p.spine_stiffness, p.spine_damping, "ub", None);
+        ch.set_stiffness(p.body_stiffness, 1.0, "un", None);
+        ch.set_stiffness(p.body_stiffness, p.damping, "ua", None);
+        ch.set_stiffness(9.0, 1.0, "uc", None);
+        let k = 0.9 * p.body_stiffness;
+        for i in (*ELBOW()) {
+            (ch.eff[i].strength, ch.eff[i].damping) = (k * k, 2.0 * k * 0.8 * p.damping);
+        }
+        let f = (b.doll.kinetic() * 2.0).sqrt().clamp(0.001, 1.0);
+        let snap = b.snap(Vec3::Z);
+        let up = ch.up;
+        let (target, target_vel) = look_at(&p, b, obstacles);
+        // the head look (headLook's priority 0xc); along the velocity for a while on some steps
+        if p.use_head_look {
+            out.head_look_stiffness = 1.0 + p.spine_stiffness;
+            let mut look = (target, target_vel);
+            if stepping == 0 {
+                self.look_time = 0.0;
+            } else {
+                self.look_time -= dt;
+                if self.look_time < 0.0 {
+                    self.look_time = 0.2 * ch.random() + 0.2;
+                    if p.head_look_at_vel_prob < -0.001 {
+                        self.p.head_look_at_vel_prob = self.look_rand;
+                    }
+                    self.look_vel = ch.random() < self.p.head_look_at_vel_prob;
+                }
+                if self.look_vel {
+                    let head = b.at(b.ch.joints[(*NECK())[1]].child);
+                    let chest = b.doll.motion(b.ch.joints[(*SPINE())[3]].child).0;
+                    look = (head + crate::rigid::nrm(snap.vel), chest);
+                }
+            }
+            out.head_look = Some(look);
+        }
+        // the body turn
+        if p.use_body_turn {
+            self.turn_time -= dt;
+            if self.turn_time < 0.0 {
+                self.turn_time = 0.6 * ch.random() + 0.4;
+                let w = [p.turn_off_prob, p.turn2_target_prob, p.turn2_vel_prob, p.turn_away_prob, p.turn_left_prob, p.turn_right_prob];
+                let sum: f32 = w.iter().sum();
+                let u = ch.random();
+                if sum > 0.0 {
+                    let mut edge = 0.0;
+                    self.rd.turn = w.iter().position(|x| { edge += x / sum; edge >= u }).unwrap_or(0) as u8;
+                }
+            }
+            let d = match self.rd.turn {
+                1 => Some(target - snap.com),
+                2 => Some(snap.vel),
+                3 => Some(snap.com - target),
+                4 => Some(from_own(Vec3::new(-1.0, 0.0, 0.0), b).0 - snap.com),
+                5 => Some(from_own(Vec3::new(1.0, 0.0, 0.0), b).0 - snap.com),
+                _ => None,
+            };
+            if let Some(d) = d.filter(|_| f > RDR2_TURN_SPEED) {
+                out.turn = Some(d.normalize_or_zero());
+            }
+        }
+        // the target's velocity from its moves (kept while it pauses)
+        let moved = target - self.rd.target;
+        let dv = moved / dt;
+        if dv.length() >= 1e-6 || self.rd.moved <= 1e-6 {
+            self.rd.target_vel = moved / (dt + if self.rd.paused { self.rd.last_dt } else { 0.0 });
+            self.rd.paused = false;
+        } else {
+            self.rd.paused = true;
+        }
+        (self.rd.moved, self.rd.target, self.rd.last_dt) = (dv.length(), target, dt);
+        // lean away from a target moving past (the force lean only: our balancer has one lean channel)
+        let vt = self.rd.target_vel;
+        let flat = |v: Vec3| v - up * up.dot(v);
+        let d = flat((snap.com - target) - vt * 0.05);
+        if vt.length() > 0.2 && !r.move_when_bracing && d.length() < r.move_radius {
+            let mut side = up.cross(vt);
+            if side.dot(d) < 0.0 {
+                side = -side;
+            }
+            // RDR2 also asks something of the balancer here (+0x44c, unknown) before the still amount
+            let amount = if snap.vel.length() < 1.0 { r.move_amount_still } else { r.move_amount };
+            out.lean = Some((crate::nmdbm::LeanMode::Dir(side.normalize_or_zero()), amount, true));
+        }
+        // spine and neck
+        for i in (*NECK()) {
+            ch.eff[i].desired = [0.0; 3];
+        }
+        for (k, (i, l1)) in (*SPINE()).into_iter().zip([-0.07, 0.25, -0.07, 0.07]).enumerate() {
+            ch.eff[i].desired[0] = l1;
+            if k > 0 {
+                ch.eff[i].desired[1] = 0.0;
+            }
+        }
+        let act = |j: usize| b.ch.actual(j, b.frames);
+        let (hl, hr) = ((*HIP())[0], (*HIP())[1]);
+        let tw = ((act(hl)[0] - act(hr)[0]) + 0.15 * (ch.eff[hl].desired[0] - ch.eff[hr].desired[0])).clamp(-0.8, 0.8);
+        for (i, k) in (*SPINE()).into_iter().zip([0.35, 0.3, 0.2, 0.15]) {
+            ch.eff[i].desired[2] = k * tw;
+        }
+        // arms out: the torso's pitch and roll past their thresholds, and its spin
+        let m: M34 = snap.m;
+        let side = m.b.cross(up);
+        let pitch = -2.0 * m.a.dot(side).sin();
+        let roll = 2.0 * m.c.dot(side).sin();
+        let over = |x: f32, thr: f32| x.abs().max(thr).min(0.8) - thr;
+        let (tilt, side_tilt) = (over(pitch, p.somersault_angle_threshold), over(roll, p.side_somersault_angle_threshold));
+        self.frame = self.frame(b);
+        let now = self.angles();
+        let rate = [0, 1, 2].map(|k| (now[k] - self.euler[k]) / dt);
+        self.euler = now;
+        let f5 = if rate[1] * pitch > 0.0 { p.returning_to_balance_arms_out } else { 1.0 };
+        let f4 = if rate[0] * roll > 0.0 { 1.0 } else { p.returning_to_balance_arms_out };
+        let spin = |x: f32, thr: f32| x.abs().max(thr).min(7.0) - thr;
+        let (t, mu) = (p.ang_vel_threshold, p.ang_vel_multiplier);
+        let arms_out = -tilt * p.somersault_angle * f5 - side_tilt * p.side_somersault_angle * f4 - mu.x * spin(rate[1], t.x) * f5
+            - mu.y * spin(rate[2], t.y) - mu.z * spin(rate[0], t.z) * f4;
+        let out_arm = [0, 1].map(|i| if self.rd.arm_on[i] < 0.0 { 0.0 } else { arms_out });
+        let mut push = 0.0;
+        if self.arms_out > 0.0 {
+            self.arms_out -= dt;
+            push = p.arms_out_on_push_multiplier;
+        }
+        if self.bend > 0.0 {
+            self.bend -= dt;
+        }
+        let upper: Vec<usize> = Character::mask("uk").into_iter().chain(Character::mask("ua")).map(|i| b.ch.joints[i].child).collect();
+        if b.doll.collided(&upper) {
+            self.bend = p.bend_elbows_time;
+        }
+        let foot = |side: usize| b.doll.touch[b.ch.joints[(*crate::nmrs::ANKLE())[side]].child];
+        let down = |t: u8| t & delirium_data::kv!(7 int) != 0 && t & delirium_data::kv!(23 int) == 0;
+        self.rd.airborne = if down(foot(0)) || down(foot(1)) { 0.0 } else { self.rd.airborne + dt };
+        let windows = self.rd.arm_on;
+        for i in 0..2 {
+            self.rd.arm_on[i] -= dt;
+            if self.rd.arm_on[i] < -self.rd.arm_off[i] {
+                self.rd.arm_on[i] = 0.6 * ch.random() + 0.1;
+                self.rd.arm_off[i] = 0.4 * ch.random() + 0.3;
+            }
+        }
+        // the arm swing
+        let mut push_l = 0.0;
+        for s in 0..2 {
+            if ch.busy[s] || self.rd.airborne > r.airborne_arms {
+                continue;
+            }
+            let o = 1 - s;
+            let (ho_des, ho_act, hs_act) = (ch.eff[(*HIP())[o]].desired, act((*HIP())[o]), act((*HIP())[s]));
+            let sh = (*SHOULDER())[s];
+            let mut x = (ho_des[0] - 1.2 * ho_act[0]) - 0.6 * (1.1 * ho_act[0] - hs_act[0]);
+            if p.shoulder > 0.1 {
+                x += r.shoulder_l1 / p.shoulder;
+            }
+            ch.eff[sh].desired[0] = (x * p.shoulder + act(sh)[0]).clamp(-9.99, 9.99);
+            ch.eff[sh].desired[2] = r.shoulder_twist;
+            let pushing = p.arms_out_on_push && (windows[s] > 0.0 || r.axis_weights_simulation_blocked);
+            let el = (*ELBOW())[s];
+            let mut e = p.elbow * (ho_des[0] - ho_act[0]) + act(el)[0];
+            if pushing {
+                e += p.arms_out_straighten_elbows * if s == 0 { out_arm[0] } else { out_arm[1] + push_l };
+            }
+            let mut cut = 0.0;
+            if self.bend > 0.0 {
+                let v = crate::rigid::nrm(snap.vel);
+                let (fwd, lat) = (self.frame[2].dot(v), self.frame[1].dot(v));
+                let toward = if s == 0 { lat > 0.0 } else { lat < 0.0 };
+                if (fwd > 0.0 && toward) || fwd > 0.5 {
+                    e = e.max(p.elbow_angle_on_contact);
+                } else {
+                    cut = self.cut;
+                }
+            }
+            ch.eff[el].desired[0] = e.max(p.bend_elbows_gait).min(6.0);
+            let base = hs_act[1] * r.hip_l2_arm_l2 + r.shoulder_l2;
+            let mut l2 = base;
+            if pushing {
+                let c = |x: f32| x.abs().max(self.floor).min(10.0) - self.floor;
+                let o = -push * (0.5 * c(ho_des[1]) + 0.25 * c(ch.eff[(*HIP())[s]].desired[1]) + 0.5 * c(ho_act[1]) + 0.25 * c(hs_act[1]));
+                if s == 0 {
+                    push_l = o;
+                }
+                l2 = (base + out_arm[s] + o).max(p.arms_out_min_lean2).min(base - cut);
+            }
+            ch.eff[sh].desired[1] = l2;
+            ch.eff[(*WRIST())[s]].desired = [0.0; 3];
+        }
+        // toward rest, more the slower he goes: clavicles and wrists 0, elbows 0.4, shoulders lean2 0.5; spine, neck
+        // and head 0
+        let w = 0.2 + 0.8 * (1.0 - f);
+        for s in 0..2 {
+            blend(&mut ch.eff[(*CLAVICLE())[s]].desired, [0.0; 3], w);
+            blend(&mut ch.eff[(*WRIST())[s]].desired, [0.0; 3], w);
+            blend(&mut ch.eff[(*SHOULDER())[s]].desired, [0.0, 0.5, 0.0], w);
+            let e = &mut ch.eff[(*ELBOW())[s]].desired[0];
+            *e += (0.4 - *e) * w;
+        }
+        for i in Character::mask("ub") {
+            blend(&mut ch.eff[i].desired, [0.0; 3], w);
+        }
+        ch.stabilise = Some((2.0, delirium_data::kv!(223)));
+        out
+    }
 }
 

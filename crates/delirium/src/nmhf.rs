@@ -347,14 +347,14 @@ impl HighFall {
             let s = c.ch.random_bits() & 1 != 0;
             out.balance = Some(crate::nmbb::Params {
                 body_stiffness: self.p.body_stiffness * delirium_data::kv!(512), elbow: delirium_data::kv!(136), shoulder: delirium_data::kv!(28), damping: delirium_data::kv!(74), max_steps: delirium_data::kv!(197 int),
-                head_look_pos: Vec3::new(0.0, 0.0, -delirium_data::kv!(84)), head_look_instance_index: c.ch.inst_id, head_look_always_timeout: delirium_data::kv!(31),
+                head_look_pos: Vec3::new(0.0, 0.0, -delirium_data::kv!(84)), head_look_instance_index: c.ch.inst_id, spine_stiffness: delirium_data::kv!(31),
                 head_look_at_vel_prob: delirium_data::kv!(28), somersault_angle: 1.0, somersault_angle_threshold: delirium_data::kv!(17), side_somersault_angle: 1.0,
                 side_somersault_angle_threshold: delirium_data::kv!(17), ang_vel_multiplier: Vec3::new(delirium_data::kv!(33), delirium_data::kv!(28), delirium_data::kv!(33)),
                 ang_vel_threshold: Vec3::new(delirium_data::kv!(136), delirium_data::kv!(5), delirium_data::kv!(136)), arms_out_on_push_multiplier: 1.0, arms_out_on_push_timeout: 1.0,
                 returning_to_balance_arms_out: delirium_data::kv!(78), arms_out_straighten_elbows: 0.0, arms_out_min_lean2: -delirium_data::kv!(31),
-                body_turn_timeout: 1.0, turn_off_prob: delirium_data::kv!(68), turn2_target_prob: delirium_data::kv!(68), turn2_vel_prob: delirium_data::kv!(74), turn_away_prob: 0.0,
+                spine_damping: 1.0, turn_off_prob: delirium_data::kv!(68), turn2_target_prob: delirium_data::kv!(68), turn2_vel_prob: delirium_data::kv!(74), turn_away_prob: 0.0,
                 turn_left_prob: delirium_data::kv!(78), turn_right_prob: delirium_data::kv!(78), elbow_angle_on_contact: delirium_data::kv!(74), bend_elbows_time: 0.0,
-                bend_elbows_gait: delirium_data::kv!(74), use_head_look: true, arms_out_on_push: true, use_body_turn: s,
+                bend_elbows_gait: delirium_data::kv!(74), use_head_look: true, arms_out_on_push: true, use_body_turn: s, rdr2: Default::default(),
             });
             self.timer = 0.0;
         }

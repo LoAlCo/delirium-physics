@@ -111,13 +111,13 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "bendElbowsGait", kind: Kind::Float, used: true, doc: "" },
         Param { name: "armsOutOnPush", kind: Kind::Bool, used: true, doc: "" },
         Param { name: "elbowAngleOnContact", kind: Kind::Float, used: true, doc: "" },
-        Param { name: "bodyTurnTimeout", kind: Kind::Float, used: true, doc: "The upper body's (\"ub\") damping as the tick uses it." },
+        Param { name: "bodyTurnTimeout", kind: Kind::Float, used: true, doc: "The spine's damping (RDR2 calls it spineDamping): GTA IV's name for it." },
         Param { name: "turnOffProb", kind: Kind::Float, used: true, doc: "" },
         Param { name: "turn2VelProb", kind: Kind::Float, used: true, doc: "" },
         Param { name: "damping", kind: Kind::Float, used: true, doc: "" },
         Param { name: "headLookPos", kind: Kind::Vec3, used: true, doc: "" },
         Param { name: "sideSomersaultAngle", kind: Kind::Float, used: true, doc: "" },
-        Param { name: "headLookAlwaysTimeout", kind: Kind::Float, used: true, doc: "The upper body's (\"ub\") stiffness as the tick uses it." },
+        Param { name: "headLookAlwaysTimeout", kind: Kind::Float, used: true, doc: "The spine's stiffness (RDR2 calls it spineStiffness): GTA IV's name for it." },
         Param { name: "turnAwayProb", kind: Kind::Float, used: true, doc: "" },
         Param { name: "shoulder", kind: Kind::Float, used: true, doc: "" },
         Param { name: "turnRightProb", kind: Kind::Float, used: true, doc: "" },
@@ -130,6 +130,18 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "headLookInstanceIndex", kind: Kind::Int, used: true, doc: "" },
         Param { name: "armsOutOnPushTimeout", kind: Kind::Float, used: true, doc: "" },
         Param { name: "maxSteps", kind: Kind::Int, used: true, doc: "" },
+        Param { name: "spineStiffness", kind: Kind::Float, used: true, doc: "RDR2's name for headLookAlwaysTimeout (the same number)" },
+        Param { name: "spineDamping", kind: Kind::Float, used: true, doc: "RDR2's name for bodyTurnTimeout (the same number)" },
+        Param { name: "shoulderL1", kind: Kind::Float, used: true, doc: "RDR2 core only: shoulder lean1 offset (0)" },
+        Param { name: "shoulderL2", kind: Kind::Float, used: true, doc: "RDR2 core only: shoulder lean2 offset (0.5)" },
+        Param { name: "hipL2ArmL2", kind: Kind::Float, used: true, doc: "RDR2 core only: shoulder lean2 per hip lean2 (0.3)" },
+        Param { name: "shoulderTwist", kind: Kind::Float, used: true, doc: "RDR2 core only (-0.35)" },
+        Param { name: "airbornearms", kind: Kind::Float, used: true, doc: "RDR2 core only: the arms swing within this long (s) without a foot down (0)" },
+        Param { name: "axisweightssimulationblocked", kind: Kind::Bool, used: true, doc: "RDR2 core only: arms out ignores each arm's on/off windows (true)" },
+        Param { name: "moveRadius", kind: Kind::Float, used: true, doc: "RDR2 core only: lean away from a target moving past closer than this (-1: off)" },
+        Param { name: "moveAmount", kind: Kind::Float, used: true, doc: "RDR2 core only (0.3)" },
+        Param { name: "moveamountstill", kind: Kind::Float, used: true, doc: "RDR2 core only: moveAmount when nearly still (0.3)" },
+        Param { name: "moveWhenBracing", kind: Kind::Bool, used: true, doc: "RDR2 core only: lean away only while bracing (no bracing here) (false)" },
     ] },
     Message { name: "bodyFoetal", params: &[
         Param { name: "mask", kind: Kind::Str, used: true, doc: "+80: the effectors it may drive (the rest locked while it runs)." },
@@ -753,13 +765,13 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("bodyBalance", "bendElbowsGait") => { let p = &mut st.body_balance; p.bend_elbows_gait = v.f()?; }
         ("bodyBalance", "armsOutOnPush") => { let p = &mut st.body_balance; p.arms_out_on_push = v.b()?; }
         ("bodyBalance", "elbowAngleOnContact") => { let p = &mut st.body_balance; p.elbow_angle_on_contact = v.f()?; }
-        ("bodyBalance", "bodyTurnTimeout") => { let p = &mut st.body_balance; p.body_turn_timeout = v.f()?; }
+        ("bodyBalance", "bodyTurnTimeout") => { let p = &mut st.body_balance; p.spine_damping = v.f()?; }
         ("bodyBalance", "turnOffProb") => { let p = &mut st.body_balance; p.turn_off_prob = v.f()?; }
         ("bodyBalance", "turn2VelProb") => { let p = &mut st.body_balance; p.turn2_vel_prob = v.f()?; }
         ("bodyBalance", "damping") => { let p = &mut st.body_balance; p.damping = v.f()?; }
         ("bodyBalance", "headLookPos") => { let p = &mut st.body_balance; p.head_look_pos = v.v()?; }
         ("bodyBalance", "sideSomersaultAngle") => { let p = &mut st.body_balance; p.side_somersault_angle = v.f()?; }
-        ("bodyBalance", "headLookAlwaysTimeout") => { let p = &mut st.body_balance; p.head_look_always_timeout = v.f()?; }
+        ("bodyBalance", "headLookAlwaysTimeout") => { let p = &mut st.body_balance; p.spine_stiffness = v.f()?; }
         ("bodyBalance", "turnAwayProb") => { let p = &mut st.body_balance; p.turn_away_prob = v.f()?; }
         ("bodyBalance", "shoulder") => { let p = &mut st.body_balance; p.shoulder = v.f()?; }
         ("bodyBalance", "turnRightProb") => { let p = &mut st.body_balance; p.turn_right_prob = v.f()?; }
@@ -771,6 +783,18 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("bodyBalance", "useHeadLook") => { let p = &mut st.body_balance; p.use_head_look = v.b()?; }
         ("bodyBalance", "headLookInstanceIndex") => { let p = &mut st.body_balance; p.head_look_instance_index = v.i()?; }
         ("bodyBalance", "armsOutOnPushTimeout") => { let p = &mut st.body_balance; p.arms_out_on_push_timeout = v.f()?; }
+        ("bodyBalance", "spineStiffness") => { let p = &mut st.body_balance; p.spine_stiffness = v.f()?; }
+        ("bodyBalance", "spineDamping") => { let p = &mut st.body_balance; p.spine_damping = v.f()?; }
+        ("bodyBalance", "shoulderL1") => { let p = &mut st.body_balance; p.rdr2.shoulder_l1 = v.f()?; }
+        ("bodyBalance", "shoulderL2") => { let p = &mut st.body_balance; p.rdr2.shoulder_l2 = v.f()?; }
+        ("bodyBalance", "hipL2ArmL2") => { let p = &mut st.body_balance; p.rdr2.hip_l2_arm_l2 = v.f()?; }
+        ("bodyBalance", "shoulderTwist") => { let p = &mut st.body_balance; p.rdr2.shoulder_twist = v.f()?; }
+        ("bodyBalance", "airbornearms") => { let p = &mut st.body_balance; p.rdr2.airborne_arms = v.f()?; }
+        ("bodyBalance", "axisweightssimulationblocked") => { let p = &mut st.body_balance; p.rdr2.axis_weights_simulation_blocked = v.b()?; }
+        ("bodyBalance", "moveRadius") => { let p = &mut st.body_balance; p.rdr2.move_radius = v.f()?; }
+        ("bodyBalance", "moveAmount") => { let p = &mut st.body_balance; p.rdr2.move_amount = v.f()?; }
+        ("bodyBalance", "moveamountstill") => { let p = &mut st.body_balance; p.rdr2.move_amount_still = v.f()?; }
+        ("bodyBalance", "moveWhenBracing") => { let p = &mut st.body_balance; p.rdr2.move_when_bracing = v.b()?; }
         ("bodyBalance", "maxSteps") => { let p = &mut st.body_balance; p.max_steps = v.i()?.max(0) as u32; }
         ("bodyFoetal", "mask") => { let p = &mut st.body_foetal; p.mask = intern(v.s()?); }
         ("bodyFoetal", "stiffness") => { let p = &mut st.body_foetal; p.stiffness = v.f()?; }
@@ -1065,13 +1089,13 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("bodyBalance", "bendElbowsGait") => { let p = &st.body_balance; Value::Float(p.bend_elbows_gait) }
         ("bodyBalance", "armsOutOnPush") => { let p = &st.body_balance; Value::Bool(p.arms_out_on_push) }
         ("bodyBalance", "elbowAngleOnContact") => { let p = &st.body_balance; Value::Float(p.elbow_angle_on_contact) }
-        ("bodyBalance", "bodyTurnTimeout") => { let p = &st.body_balance; Value::Float(p.body_turn_timeout) }
+        ("bodyBalance", "bodyTurnTimeout") => { let p = &st.body_balance; Value::Float(p.spine_damping) }
         ("bodyBalance", "turnOffProb") => { let p = &st.body_balance; Value::Float(p.turn_off_prob) }
         ("bodyBalance", "turn2VelProb") => { let p = &st.body_balance; Value::Float(p.turn2_vel_prob) }
         ("bodyBalance", "damping") => { let p = &st.body_balance; Value::Float(p.damping) }
         ("bodyBalance", "headLookPos") => { let p = &st.body_balance; Value::Vec3(p.head_look_pos) }
         ("bodyBalance", "sideSomersaultAngle") => { let p = &st.body_balance; Value::Float(p.side_somersault_angle) }
-        ("bodyBalance", "headLookAlwaysTimeout") => { let p = &st.body_balance; Value::Float(p.head_look_always_timeout) }
+        ("bodyBalance", "headLookAlwaysTimeout") => { let p = &st.body_balance; Value::Float(p.spine_stiffness) }
         ("bodyBalance", "turnAwayProb") => { let p = &st.body_balance; Value::Float(p.turn_away_prob) }
         ("bodyBalance", "shoulder") => { let p = &st.body_balance; Value::Float(p.shoulder) }
         ("bodyBalance", "turnRightProb") => { let p = &st.body_balance; Value::Float(p.turn_right_prob) }
@@ -1084,6 +1108,18 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("bodyBalance", "headLookInstanceIndex") => { let p = &st.body_balance; Value::Int(p.head_look_instance_index) }
         ("bodyBalance", "armsOutOnPushTimeout") => { let p = &st.body_balance; Value::Float(p.arms_out_on_push_timeout) }
         ("bodyBalance", "maxSteps") => { let p = &st.body_balance; Value::Int(p.max_steps as i32) }
+        ("bodyBalance", "spineStiffness") => { let p = &st.body_balance; Value::Float(p.spine_stiffness) }
+        ("bodyBalance", "spineDamping") => { let p = &st.body_balance; Value::Float(p.spine_damping) }
+        ("bodyBalance", "shoulderL1") => { let p = &st.body_balance; Value::Float(p.rdr2.shoulder_l1) }
+        ("bodyBalance", "shoulderL2") => { let p = &st.body_balance; Value::Float(p.rdr2.shoulder_l2) }
+        ("bodyBalance", "hipL2ArmL2") => { let p = &st.body_balance; Value::Float(p.rdr2.hip_l2_arm_l2) }
+        ("bodyBalance", "shoulderTwist") => { let p = &st.body_balance; Value::Float(p.rdr2.shoulder_twist) }
+        ("bodyBalance", "airbornearms") => { let p = &st.body_balance; Value::Float(p.rdr2.airborne_arms) }
+        ("bodyBalance", "axisweightssimulationblocked") => { let p = &st.body_balance; Value::Bool(p.rdr2.axis_weights_simulation_blocked) }
+        ("bodyBalance", "moveRadius") => { let p = &st.body_balance; Value::Float(p.rdr2.move_radius) }
+        ("bodyBalance", "moveAmount") => { let p = &st.body_balance; Value::Float(p.rdr2.move_amount) }
+        ("bodyBalance", "moveamountstill") => { let p = &st.body_balance; Value::Float(p.rdr2.move_amount_still) }
+        ("bodyBalance", "moveWhenBracing") => { let p = &st.body_balance; Value::Bool(p.rdr2.move_when_bracing) }
         ("bodyFoetal", "mask") => { let p = &st.body_foetal; Value::Str(p.mask.to_string()) }
         ("bodyFoetal", "stiffness") => { let p = &st.body_foetal; Value::Float(p.stiffness) }
         ("bodyFoetal", "asymmetry") => { let p = &st.body_foetal; Value::Float(p.asymmetry) }
