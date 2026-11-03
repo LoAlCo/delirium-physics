@@ -146,7 +146,7 @@ impl Default for Params {
                  slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.7, 1.8], legs_apart_restep: 0.2,
                  legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
                  always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
-                 taper_knee_strength_run: false, limp_scale: 0.25, limb_requests: true, limb_order_reversed: false,
+                 taper_knee_strength_run: false, limp_scale: 1.0, limb_requests: true, limb_order_reversed: false,
                  max_foot_speed: 5.0, ramp_hip_pitch_on_fail: true, prediction_time: 0.2, prediction_time_variance: 0.0,
                  step_clamp_scale_variance: 0.0, lift_feet: 0.07, lift_feet_variance: 0.0, lean_against_velocity: 0.0,
                  stand_up: false, extra_feet_apart: 0.0, feet_apart_min: 1.0, feet_apart_max: 1.0, feet_apart_vel: 100.0,
@@ -362,6 +362,10 @@ pub struct Rdr2 {
     pub running: bool,
     /// the injured leg (0 left, 1 right) and how badly (0..1), from shotInjuredLeg
     pub limp: (usize, f32),
+    /// RDR2's forced step: this foot (0 left, 1 right) steps next, for one step from the step count it was asked at;
+    /// and whether to drop the step in progress first
+    pub forced: Option<(usize, u32)>,
+    pub cancel_step: bool,
     /// the crouch request: knee bend and hip pitch, by owner
     pub owned: Owned,
     rng: u32,
@@ -396,7 +400,7 @@ pub struct Rdr2 {
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
         Rdr2 { p, time: 0.0, still: 0.0, steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
-               since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0), owned: Owned::default(),
+               since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false,
                leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, pause: 0.0, aligned: false, landed: false, crouching: None,

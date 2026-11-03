@@ -114,6 +114,8 @@ pub struct Out {
     pub dbm_crouch: Vec<crate::nmdbm_rdr2::Crouch>,
     /// RDR2 core: no new steps this step (force balance), and the turn request's facing threshold (cosine)
     pub dbm_force_balance: bool,
+    /// RDR2 core: force this foot (0 left, 1 right) to step next, dropping the step in progress (Some(None): no more)
+    pub dbm_force_step: Option<Option<usize>>,
     pub dbm_turn_facing: Option<f32>,
     /// RDR2 core: a hip lean asked of the balancer (hipsLean*)
     pub hip_lean: Option<Vec3>,

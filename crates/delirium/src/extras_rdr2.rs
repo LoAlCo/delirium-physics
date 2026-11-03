@@ -1137,6 +1137,15 @@ impl Extra for InGuts {
 pub struct InjuredLeg {
     side: usize, lift_time: f32, lift: f32, time: f32, injury: f32, hip_pitch: f32, spine_bend: f32, limp: f32,
     lean: f32, sag: f32, blend: f32, stiffness: f32, t: f32, lift_b: Option<Bends>, limp_b: Option<Bends>,
+    rdr2: LegRdr2, spine: f32, forced: f32, left: f32, started: bool,
+}
+
+/// RDR2's injured-leg parameters (its defaults: the hurt foot steps at once; after 0.3 s, for 0.4 s, the leg 0.3
+/// loose, the spine bending to 0.1 at 0.5 rad/s; no limp).
+#[derive(Clone, Copy)]
+struct LegRdr2 {
+    force_step: bool, collapse: f32, bend_rate: f32, bend_rate_spine: f32, straighten: f32, straighten_rate: f32,
+    straighten_rate_spine: f32,
 }
 
 impl InjuredLeg {
@@ -1150,12 +1159,22 @@ impl InjuredLeg {
             hip_pitch: p.f("legInjuryHipPitch", 0.0)?, spine_bend: p.f("legInjurySpineBend", 0.1)?, limp: p.f("legLimpBend", 0.0)?,
             lean: p.f("legLean", 15.0)?, sag: p.f("legSag", 0.04)?.max(0.0), blend: p.f("legBlend", 0.5)?.max(0.05), stiffness: p.f("stiffness", 10.0)?,
             t: 0.0, lift_b: None, limp_b: None,
+            rdr2: LegRdr2 {
+                force_step: p.b("legForceStep", true)?, collapse: p.f("timeBeforeCollapseWoundLeg", 0.3)?,
+                bend_rate: p.f("limpBendRate", 0.5)?, bend_rate_spine: p.f("limpBendRateSpine", 0.5)?,
+                straighten: p.f("limpStraightenMult", 0.2)?, straighten_rate: p.f("limpStraightenRate", 0.7)?,
+                straighten_rate_spine: p.f("limpStraightenRateSpine", 0.7)?,
+            },
+            spine: 0.0, forced: 0.0, left: 0.0, started: false,
         })
     }
 }
 
 impl Extra for InjuredLeg {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c, dt);
+        }
         self.t += dt;
         let s = self.side;
         // the RDR2 core's balancer limps on the hurt leg while it's weak (ignored by GTA IV's)
@@ -1197,14 +1216,86 @@ impl Extra for InjuredLeg {
     }
 
     fn done(&self) -> bool {
+        if self.started {
+            return self.left <= 0.0 && self.t > self.rdr2.collapse;
+        }
         self.t > self.lift_time + self.time + self.blend
     }
 
     fn stop(&mut self, c: &mut Ctx) {
+        if self.started {
+            // RDR2's release: the hip pitch at once, the spine, the leg's looseness, the limp and the forced foot
+            c.out.dbm_crouch.push(Crouch::ReleaseHip(f32::INFINITY));
+            c.out.dbm_force_step = Some(None);
+            for &j in SPINE().iter() {
+                c.ch.eff[j].desired[0] = 0.0;
+            }
+            for j in [HIP()[self.side], KNEE()[self.side], ANKLE()[self.side]] {
+                c.ch.eff[j].injury = 0.0;
+            }
+        }
         if self.sag > 0.0 {
             c.out.dbm_leg_offset = Some(0.0);
         }
         c.out.dbm_limp = Some((self.side, 0.0));
+    }
+}
+
+impl InjuredLeg {
+    /// RDR2's injured leg: the hurt foot steps at once (for 0.2 s); after timeBeforeCollapseWoundLeg, for
+    /// legInjuryTime, the leg goes legInjury loose, the balancer pitches the hips (legInjuryHipPitch, owner 7, at
+    /// limpBendRate) and the spine bends toward legInjurySpineBend on every joint at limpBendRateSpine. With
+    /// legLimpBend over 0 the balancer limps: half as loose and the straighten share while the leg swings, all of it
+    /// while it carries him. (Its lift, legLiftTime, is off by default and not here.)
+    fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let s = self.side;
+        let r = self.rdr2;
+        if !self.started {
+            self.started = true;
+            self.left = self.time;
+            if r.force_step {
+                c.out.dbm_force_step = Some(Some(s));
+                self.forced = 0.2;
+            }
+            self.spine = SPINE().iter().map(|&j| c.ch.actual(j, c.b.frames)[0]).sum::<f32>() / 4.0;
+        }
+        if self.forced > 0.0 {
+            self.forced -= dt;
+            if self.forced <= 0.0 {
+                c.out.dbm_force_step = Some(None);
+            }
+        }
+        let leg = [HIP()[s], KNEE()[s], ANKLE()[s]];
+        let injured = self.t > r.collapse && self.left > 0.0 && self.time > 0.0;
+        c.out.dbm_limp = Some((s, 0.0));
+        if injured {
+            let (mut loose, mut pitch, mut prate, mut bend, mut brate) =
+                (self.injury, self.hip_pitch, r.bend_rate, self.spine_bend, r.bend_rate_spine);
+            if self.limp > 0.0 {
+                c.out.dbm_limp = Some((s, self.limp));
+                // while the hurt leg carries him (its foot down, the other's up) all of it, else the straighten share
+                let feet = [c.b.doll.collided(&[3]), c.b.doll.collided(&[6])];
+                if !(feet[s] && !feet[1 - s]) {
+                    (loose, pitch, prate, bend, brate) = (0.5 * self.injury, r.straighten * self.hip_pitch, r.straighten_rate,
+                                                          r.straighten * self.spine_bend, r.straighten_rate_spine);
+                }
+            }
+            for j in leg {
+                c.ch.eff[j].injury = loose;
+            }
+            c.out.dbm_crouch.push(Crouch::Hip(7, -pitch.clamp(-2.0, 2.0), prate));
+            self.spine += (bend - self.spine).clamp(-brate * dt, brate * dt);
+            for &j in SPINE().iter() {
+                c.ch.eff[j].desired[0] = self.spine;
+            }
+            self.left -= dt;
+        } else {
+            c.out.dbm_crouch.push(Crouch::ReleaseHip(f32::INFINITY));
+            for j in leg {
+                c.ch.eff[j].injury = 0.0;
+            }
+        }
+        self.t += dt;
     }
 }
 
@@ -1213,7 +1304,13 @@ impl Extra for InjuredLeg {
 /// loose (its stiffness down by armLoose) for armLooseTime. The arm is bodyPart's (13..=20), or leftArm's.
 pub struct InjuredArm {
     side: usize, dir: Vec3, time: f32, yaw: f32, roll: f32, loose: f32, loose_time: f32, stiffness: f32, t: f32,
+    rdr2: ArmRdr2,
 }
+
+/// RDR2's injured-arm parameters (its defaults: 0.25 s; a forced step and a turn below 0.8 m/s; full effect below
+/// 1 m/s, none above 5).
+#[derive(Clone, Copy)]
+struct ArmRdr2 { force_step: bool, step_turn: bool, vel_scales: bool, vel_start: f32, vel_end: f32, vel_force_step: f32 }
 
 impl InjuredArm {
     fn new(p: &mut P) -> Result<InjuredArm, Error> {
@@ -1224,12 +1321,63 @@ impl InjuredArm {
             time: p.f("injuredArmTime", 0.25)?.max(0.0), yaw: p.f("hipYaw", 80.0)?, roll: p.f("hipRoll", 0.0)?,
             loose: p.f("armLoose", 0.7)?.clamp(0.0, 1.0), loose_time: p.f("armLooseTime", 1.0)?.max(0.0),
             stiffness: p.f("stiffness", 10.0)?, t: 0.0,
+            rdr2: ArmRdr2 {
+                force_step: p.b("forceStep", true)?, step_turn: p.b("stepTurn", true)?, vel_scales: p.b("velScales", true)?,
+                vel_start: p.f("velMultiplierStart", 1.0)?, vel_end: p.f("velMultiplierEnd", 5.0)?,
+                vel_force_step: p.f("velForceStep", 0.8)?,
+            },
         })
+    }
+}
+
+impl InjuredArm {
+    /// RDR2's injured arm, for injuredArmTime: both clavicles thrown to their limits (the hit side one way, the other
+    /// the other, by a hit from in front or behind), a step with the same-side foot and a turn of the balancer across
+    /// the bullet, all only when slow (below velForceStep). Its velocity scale (velMultiplierStart..End) only scales its pelvis yaw and roll offsets (hipYaw, hipRoll), which aren't here.
+    fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let r = self.rdr2;
+        let first = self.t == 0.0;
+        self.t += dt;
+        if self.t > self.time {
+            if self.t - dt <= self.time {
+                c.out.dbm_turn = Some(Vec3::ZERO);
+                c.out.dbm_force_step = Some(None);
+            }
+            return;
+        }
+        let up = c.up;
+        let v = c.vel.length();
+        let back = { let b = c.m.c; b - up * b.dot(up) };
+        let dir = self.dir - up * self.dir.dot(up);
+        let front = back.dot(dir) >= 0.0;
+        if r.force_step && v <= r.vel_force_step {
+            if first {
+                c.out.dbm_force_step = Some(Some(self.side));
+            }
+        } else {
+            c.out.dbm_force_step = Some(None);
+        }
+        let (own, other) = (crate::nmshot::limb(self.side).e[0], crate::nmshot::limb(1 - self.side).e[0]);
+        let (lo, hi) = (c.ch.limits(own), c.ch.limits(other));
+        c.ch.eff[own].desired[0] = if front { lo[0] } else { lo[1] };
+        c.ch.eff[own].desired[1] = lo[2];
+        c.ch.eff[other].desired[0] = if front { hi[1] } else { hi[0] };
+        c.ch.eff[other].desired[1] = if front { hi[3] } else { hi[2] };
+        if r.step_turn && (!r.vel_scales || v <= r.vel_force_step) {
+            let d = if self.side == 0 { dir } else { -dir };
+            let heading = d.normalize_or_zero().cross(up);
+            if heading != Vec3::ZERO {
+                c.out.dbm_turn = Some(heading * 0.5);
+            }
+        }
     }
 }
 
 impl Extra for InjuredArm {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c, dt);
+        }
         self.t += dt;
         let up = c.ch.up.normalize_or(Vec3::Z);
         let r = c.b.part([13, 17][self.side]).m.d - c.com;

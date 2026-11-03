@@ -406,6 +406,10 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
     if r.is_some_and(|r| r.p.always_step_with_farthest) {
         (left, right) = (a, b);
     }
+    // RDR2's forced foot: it takes the next step
+    if let Some((i, _)) = r.and_then(|r| r.forced.filter(|&(_, at)| r.steps < at + 1)) {
+        (left, right) = (i == 0, i == 1);
+    }
     if left || right {
         if f.countdown >= 0 {
             f.countdown -= 1;
@@ -1455,6 +1459,10 @@ impl Dbm {
         if let (Some(r), i @ 1..=2) = (self.p.rdr2, was) {
             let (i, up) = (i as usize - 1, self.p.up);
             self.p.step_height += r.step_up(up.vd(self.p.target[i]), up.vd(self.p.target[1 - i]));
+        }
+        if let Some(r) = self.p.rdr2.as_mut().filter(|r| r.cancel_step) {
+            r.cancel_step = false;
+            self.f.stepping = 0;
         }
         foot_placement(&self.p, &s, &mut self.f);
         if let Some(r) = self.p.rdr2.as_mut() {

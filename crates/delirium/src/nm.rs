@@ -1228,6 +1228,11 @@ impl Agent {
                     }
                 }
                 r.force_balance = out.dbm_force_balance;
+                match out.dbm_force_step {
+                    Some(Some(i)) => (r.forced, r.cancel_step) = (Some((i, r.steps)), true),
+                    Some(None) => r.forced = None,
+                    None => {}
+                }
                 if out.dbm_turn_facing.is_some() {
                     r.turn_facing = out.dbm_turn_facing;
                 }
@@ -1901,6 +1906,11 @@ impl Agent {
                         }
                     }
                     r.force_balance = out.dbm_force_balance;
+                    match out.dbm_force_step {
+                        Some(Some(i)) => (r.forced, r.cancel_step) = (Some((i, r.steps)), true),
+                        Some(None) => r.forced = None,
+                        None => {}
+                    }
                     if out.dbm_turn_facing.is_some() {
                         r.turn_facing = out.dbm_turn_facing;
                     }
