@@ -1078,6 +1078,9 @@ impl Extra for InjuredLeg {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
         self.t += dt;
         let s = self.side;
+        // the RDR2 core's balancer limps on the hurt leg while it's weak (ignored by GTA IV's)
+        let weak = self.t > self.lift_time && self.t < self.lift_time + self.time + self.blend;
+        c.out.dbm_limp = Some((s, if weak { self.injury } else { 0.0 }));
         let (hip, knee) = (HIP()[s], KNEE()[s]);
         let (lift, limp, pitch, bend) = (self.lift, self.limp, self.hip_pitch, self.spine_bend);
         let kd = knee_dir(c, knee);

@@ -757,6 +757,14 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             }
         }
     }
+    if let Some(rd) = p.rdr2 {
+        let apart = (f.pos[1] - f.pos[0]).length();
+        for (i, planted) in [lp, rp].into_iter().enumerate() {
+            if planted {
+                t[i] += up * (rd.limp_bend(i, apart) * r);
+            }
+        }
+    }
     if lp {
         t[0] = up.mul_add(Vec3::splat(pv.out[0] * p.hip_dist), t[0]);
     }
@@ -1325,7 +1333,11 @@ impl Dbm {
             let i = match was { 1 => 1, 2 => 0, _ => (up.vd(self.p.target[1]) > up.vd(self.p.target[0])) as usize };
             r.slope(self.p.normal[i].z);
             r.speed = s.hvel.length();
-            self.p.taper = c.taper && !r.on_slope;
+            r.running = r.speed >= r.p.run_vel;
+            if r.running {
+                (self.p.leg_stiffness, self.p.step_height) = (r.p.leg_stiffness_run, r.p.step_height_run);
+            }
+            self.p.taper = if r.running { r.p.taper_knee_strength_run } else { c.taper } && !r.on_slope;
         }
         if let (Some(r), i @ 1..=2) = (self.p.rdr2, was) {
             let (i, up) = (i as usize - 1, self.p.up);
@@ -1402,6 +1414,13 @@ impl Dbm {
             ch.eff[(*ANKLE())[i]].oppose_gravity = sdot(self.p.normal[i], s.legs[i].foot.m.b, b"yzx").powi(2) * 2.0;
             if self.p.rdr2.is_some() && !touching {
                 ch.eff[(*ANKLE())[i]].oppose_gravity = 1.0;
+            }
+            if self.p.rdr2.is_some_and(|r| r.running) {
+                let h = if planted { k } else { k * crate::nmdbm_rdr2::RUN_SWING };
+                ch.eff[(*HIP())[i]].strength = h * h;
+                if !planted {
+                    ch.eff[(*KNEE())[i]].strength = h * h;
+                }
             }
         }
     }

@@ -3876,6 +3876,10 @@ impl Sim {
             self.fire(CHEST, None, false, &[]);
             return;
         }
+        if b == "shot leg" {
+            self.fire(1, None, false, &[]);
+            return;
+        }
         if b == "shot back" {
             let s = self.ours();
             self.fire(CHEST, Some((s.p(CHEST) - s.fwd * 0.1, s.fwd, -s.fwd)), false, &[]);

@@ -13,6 +13,12 @@
 //!   unnamed values there, but how it uses them isn't known and our reading made him fall, so off by default);
 //! - step rules as parameters: legsApartRestep, legsTogetherRestep, stepDecisionThreshold, stepWait,
 //!   changeStepTime, alwaysStepWithFarthest (RDR2's defaults leave all but legsApartRestep off).
+//! - running: at runVel or faster (RDR2's default 100 m/s leaves it off; the game sets it for running peds) the legs
+//!   use legStiffnessRun, the swing foot stepHeightRun, the knees taperKneeStrengthRun, and the swing leg goes half as
+//!   stiff;
+//! - the injured-leg limp (from shotInjuredLeg): the hurt leg, while planted, bends by
+//!   (1 - 2.5 (clamp(feet apart, 0.6, 1) - 0.6)) x the injury, more on a short stance (the injury taken as
+//!   limpScale x legInjury, our 0.25).
 //! Not here yet: stepIfInSupport (its speed threshold isn't known), more foot friction on slopes, running, crouch
 //! start, the injured-leg limp, obstacle avoidance, lean channels, the turn step, hip pitch on failing, the sideways
 //! cheat force.
@@ -45,6 +51,13 @@ pub struct Params {
     pub step_wait: f32,
     pub change_step_time: f32,
     pub always_step_with_farthest: bool,
+    pub run_vel: f32,
+    pub leg_stiffness_run: f32,
+    pub step_height_run: f32,
+    pub taper_knee_strength_run: bool,
+    /// share of shotInjuredLeg's legInjury the limp takes as its amount. Ours (0.25): RDR2's own source of the amount
+    /// isn't known, and the whole legInjury (0.3) took a quarter-metre off the leg and dropped him
+    pub limp_scale: f32,
 }
 
 impl Default for Params {
@@ -53,7 +66,8 @@ impl Default for Params {
                  fall_type: 0, fall_mult: 1.0, step_height_inc4_step: 0.1, ankle_balance: true, start_flat: 0.1, end_flat: 0.3,
                  slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.0, 0.0], legs_apart_restep: 0.2,
                  legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
-                 always_step_with_farthest: false }
+                 always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
+                 taper_knee_strength_run: false, limp_scale: 0.25 }
     }
 }
 
@@ -83,6 +97,11 @@ impl Params {
             "stepWait" => self.step_wait = v,
             "changeStepTime" => self.change_step_time = v,
             "alwaysStepWithFarthest" => self.always_step_with_farthest = v != 0.0,
+            "runVel" => self.run_vel = v,
+            "legStiffnessRun" => self.leg_stiffness_run = v,
+            "stepHeightRun" => self.step_height_run = v,
+            "taperKneeStrengthRun" => self.taper_knee_strength_run = v != 0.0,
+            "limpScale" => self.limp_scale = v,
             _ => return false,
         }
         true
@@ -105,6 +124,8 @@ const SLOPE_RESTEP: f32 = 0.7;
 const STEP_WAIT_SPEED: f32 = 0.7;
 /// The pelvis never sinks below this over the feet on a slope.
 const SLOPE_FLOOR: f32 = 0.2;
+/// Running: the swing leg's stiffness share.
+pub const RUN_SWING: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Rdr2 {
@@ -121,12 +142,15 @@ pub struct Rdr2 {
     pub since_step: f32,
     pub step_age: f32,
     pub speed: f32,
+    pub running: bool,
+    /// the injured leg (0 left, 1 right) and how badly (0..1), from shotInjuredLeg
+    pub limp: (usize, f32),
 }
 
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
         Rdr2 { p, time: 0.0, still: 0.0, steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
-               since_step: 100000.0, step_age: 0.0, speed: 0.0 }
+               since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0) }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.
@@ -201,6 +225,14 @@ impl Rdr2 {
     /// changeStepTime: a step this old may be re-decided (the other foot may take over).
     pub fn redecide(&self) -> bool {
         self.p.change_step_time > 0.0 && self.step_age > self.p.change_step_time
+    }
+
+    /// How much shorter the injured planted leg gets (a share of the leg), from the feet's spread.
+    pub fn limp_bend(&self, i: usize, feet_apart: f32) -> f32 {
+        if self.limp.0 != i || self.limp.1 <= 0.0 {
+            return 0.0;
+        }
+        (1.0 - 2.5 * (feet_apart.clamp(0.6, 1.0) - 0.6)) * self.limp.1 * self.p.limp_scale
     }
 
     /// Pelvis height on a slope: lowered by the feet's height difference beyond a step up's.

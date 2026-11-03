@@ -105,6 +105,8 @@ pub struct Out {
     pub dbm_knee_scale: Option<f32>,
     pub dbm_acc: Option<f32>,
     pub dbm_turn: Option<Vec3>,
+    /// RDR2 core: the injured leg (0 left, 1 right) and how badly, for the balancer's limp
+    pub dbm_limp: Option<(usize, f32)>,
     /// A lean asked for by an extra (RDR2's lean family, onFire's stagger): the balancer leans that way from the next
     /// step; None unless one does.
     pub lean: Option<(crate::nmdbm::LeanMode, f32, bool)>,

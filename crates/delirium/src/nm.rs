@@ -1203,6 +1203,9 @@ impl Agent {
             if let Some(v) = out.dbm_turn {
                 (d.pv.fixed_vel, d.pv.vel) = (true, v);
             }
+            if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
+                r.limp = x;
+            }
         }
         if out.head_look_stop {
             self.nm_head.deactivate();
@@ -1798,6 +1801,10 @@ impl Agent {
                 // a turn asked for by an extra (RDR2's shot spin and step turn): face along this
                 if let Some(v) = out.dbm_turn {
                     (d.pv.fixed_vel, d.pv.vel) = (v != Vec3::ZERO, v);
+                }
+                // RDR2 core: shotInjuredLeg's limp
+                if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
+                    r.limp = x;
                 }
             }
             // an extra (RDR2's leans, onFire) may ask for a lean; it lapses a moment after the extra stops asking
