@@ -216,6 +216,8 @@ pub struct BodyRollUp {
     pub asymmetrical_legs: f32,
     pub mask: Option<&'static str>,
     pub hips_from_vel: Option<bool>,
+    /// RDR2's further parameters (read with the RDR2 core)
+    pub rdr2: crate::nmru::Rdr2Params,
 }
 
 impl Default for UpperBodyFlinch {
@@ -243,7 +245,7 @@ impl Default for PedalLegs {
 impl Default for BodyRollUp {
     fn default() -> BodyRollUp {
         BodyRollUp { stiffness: delirium_data::kv!(31), leg_push: 0.0, arm_reach_amount: delirium_data::kv!(179), use_arm_to_slow_down: delirium_data::kv!(80), asymmetrical_legs: 0.0, mask: None,
-                     hips_from_vel: None }
+                     hips_from_vel: None, rdr2: Default::default() }
     }
 }
 
@@ -1243,7 +1245,7 @@ impl Agent {
             self.catch_fall_msg(c);
         }
         if let Some(k) = out.roll_up.filter(|_| self.roll_up.is_none()) {
-            self.body_roll_up(BodyRollUp { stiffness: k, leg_push: 0.0, arm_reach_amount: 0.0, use_arm_to_slow_down: 2.0, asymmetrical_legs: delirium_data::kv!(18), mask: Some("fb"), hips_from_vel: Some(true) });
+            self.body_roll_up(BodyRollUp { stiffness: k, leg_push: 0.0, arm_reach_amount: 0.0, use_arm_to_slow_down: 2.0, asymmetrical_legs: delirium_data::kv!(18), mask: Some("fb"), hips_from_vel: Some(true), rdr2: Default::default() });
         }
         out
     }
@@ -1709,7 +1711,7 @@ impl Agent {
             if let Some(m) = self.nm_ru_msg.take() {
                 let r = &mut self.nm_ru;
                 (r.stiffness, r.leg_push, r.arm_reach_amount) = (m.stiffness, m.leg_push, m.arm_reach_amount);
-                (r.use_arm_to_slow_down, r.asymmetrical_legs) = (m.use_arm_to_slow_down, m.asymmetrical_legs);
+                (r.use_arm_to_slow_down, r.asymmetrical_legs, r.rdr2) = (m.use_arm_to_slow_down, m.asymmetrical_legs, m.rdr2);
                 if let Some(k) = m.mask {
                     r.mask = k;
                 }

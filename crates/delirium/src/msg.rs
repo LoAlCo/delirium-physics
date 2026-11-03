@@ -152,6 +152,13 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "armReachAmount", kind: Kind::Float, used: true, doc: "" },
         Param { name: "useArmToSlowDown", kind: Kind::Float, used: true, doc: "" },
         Param { name: "asymmetricalLegs", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "damping", kind: Kind::Float, used: true, doc: "RDR2 core only: damping ratio everywhere (0.5)" },
+        Param { name: "muscleStiffness", kind: Kind::Float, used: true, doc: "RDR2 core only (1)" },
+        Param { name: "noRollTimeBeforeSuccess", kind: Kind::Float, used: true, doc: "RDR2 core only: s under rollVelForSuccess before success (0.5)" },
+        Param { name: "rollVelForSuccess", kind: Kind::Float, used: true, doc: "RDR2 core only (0.2)" },
+        Param { name: "rollVelLinearContribution", kind: Kind::Float, used: true, doc: "RDR2 core only: the linear speed's weight in the roll speed (1)" },
+        Param { name: "velocityScale", kind: Kind::Float, used: true, doc: "RDR2 core only: roll speed = (v x lin + |w| - offset) x scale (0.2)" },
+        Param { name: "velocityOffset", kind: Kind::Float, used: true, doc: "RDR2 core only (2)" },
     ] },
     Message { name: "bodyWrithe", params: &[
         Param { name: "armStiffness", kind: Kind::Float, used: true, doc: "" },
@@ -755,6 +762,13 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("bodyRollUp", "armReachAmount") => { let p = &mut st.body_roll_up; p.arm_reach_amount = v.f()?; }
         ("bodyRollUp", "useArmToSlowDown") => { let p = &mut st.body_roll_up; p.use_arm_to_slow_down = v.f()?; }
         ("bodyRollUp", "asymmetricalLegs") => { let p = &mut st.body_roll_up; p.asymmetrical_legs = v.f()?; }
+        ("bodyRollUp", "damping") => { let p = &mut st.body_roll_up; p.rdr2.damping = v.f()?; }
+        ("bodyRollUp", "muscleStiffness") => { let p = &mut st.body_roll_up; p.rdr2.muscle_stiffness = v.f()?; }
+        ("bodyRollUp", "noRollTimeBeforeSuccess") => { let p = &mut st.body_roll_up; p.rdr2.no_roll_time_before_success = v.f()?; }
+        ("bodyRollUp", "rollVelForSuccess") => { let p = &mut st.body_roll_up; p.rdr2.roll_vel_for_success = v.f()?; }
+        ("bodyRollUp", "rollVelLinearContribution") => { let p = &mut st.body_roll_up; p.rdr2.roll_vel_linear_contribution = v.f()?; }
+        ("bodyRollUp", "velocityScale") => { let p = &mut st.body_roll_up; p.rdr2.velocity_scale = v.f()?; }
+        ("bodyRollUp", "velocityOffset") => { let p = &mut st.body_roll_up; p.rdr2.velocity_offset = v.f()?; }
         ("bodyWrithe", "armStiffness") => { let p = &mut st.body_writhe; p.arm_stiffness = v.f()?; }
         ("bodyWrithe", "legStiffness") => { let p = &mut st.body_writhe; p.leg_stiffness = v.f()?; }
         ("bodyWrithe", "legPeriod") => { let p = &mut st.body_writhe; p.leg_period = v.f()?; }
