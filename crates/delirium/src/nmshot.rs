@@ -72,6 +72,8 @@ pub struct Params {
     pub stable_hands_and_neck: bool,
     pub use_catch_fall_on_fall: bool,
     pub reach_for_wound: bool,
+    /// RDR2's further parameters (read with the RDR2 core)
+    pub rdr2: ShotRdr2,
 }
 
 impl Default for Params {
@@ -86,6 +88,7 @@ impl Default for Params {
             shock_spin_scale_per_component: 0.5, chicken_arms: false, always_add_shock_spin: false,
             randomize_shock_spin_direction: false, add_shock_spin: false, use_head_look: false, crouching: false, fling: false,
             melee: false, no_reach: [false; 2], stable_hands_and_neck: false, use_catch_fall_on_fall: false, reach_for_wound: true,
+            rdr2: ShotRdr2::default(),
         }
     }
 }
@@ -228,6 +231,7 @@ pub struct Shot {
     flags: u8,
     grab_front: bool,
     sub: [bool; 15],
+    rd: ShotRdr2State,
 }
 
 const LOOSE_L: usize = 0;
@@ -378,12 +382,16 @@ impl Shot {
             reach_normal: [Vec3::ZERO; 2], chicken_t: 0.0, react_t: 0.0, react_elbow: 0.0, react_phase: 0.0,
             reach: [Reach::default(); 2], cur_reach: 0, cur_arm: 0, m228: 0.0, m248: 0.0, m24c: 0.0, m250: 0.0, m254: 0.0,
             f258: 0.0, f25c: 0.0, f260: 0.0, f264: 0.0, f268: 0.0, f26c: 0, f270: 0.0, f274: 0.0, f278: [false; 2],
-            flags: delirium_data::kv!(251 int), grab_front: false, sub: [false; 15],
+            flags: delirium_data::kv!(251 int), grab_front: false, sub: [false; 15], rd: ShotRdr2State::default(),
         };
+        // RDR2 resets only the joints off the legs: the legs keep the balancer's stiffness
+        let legs: Vec<usize> = if c.ch.rdr2 { Character::mask("lb") } else { vec![] };
         for j in 0..c.ch.eff.len() {
-            let jd = c.ch.joints[j].clone();
-            c.ch.eff[j].reset(&jd);
-            c.ch.eff[j].desired = [0.0; 3];
+            if !legs.contains(&j) {
+                let jd = c.ch.joints[j].clone();
+                c.ch.eff[j].reset(&jd);
+                c.ch.eff[j].desired = [0.0; 3];
+            }
             c.ch.eff[j].oppose_gravity = 1.0;
         }
         if !s.no_balance {
@@ -391,7 +399,9 @@ impl Shot {
             if !p.chicken_arms {
                 c.out.dbm_leg_offset = Some(-delirium_data::kv!(131));
             }
-            c.out.dbm_steps = Some(p.max_steps + 1);
+            if !c.ch.rdr2 {
+                c.out.dbm_steps = Some(p.max_steps + 1);
+            }
             if p.crouching {
                 c.out.dbm_knee_scale = Some(0.5);
             }
@@ -457,6 +467,9 @@ impl Shot {
     }
 
     pub fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c, dt);
+        }
         let p = self.p;
         self.t190 = (self.t190 + dt).min(self.t194);
         self.fall[0] = 1.0 - self.t190 / (self.t194 + delirium_data::kv!(4));
@@ -639,6 +652,9 @@ impl Shot {
         self.normal_local = Vec3::new(m.a.vd(normal), m.b.vd(normal), m.c.vd(normal));
         let from = if (*SP()).contains(&p.body_part) { c.b.at(p.body_part) } else { c.com };
         self.side = sdot(at - from, c.m.a, b"zyx").clamp(-2.0, 2.0);
+        if c.ch.rdr2 {
+            self.intake_rdr2(c, at);
+        }
     }
 
     fn hit_tick(&mut self, c: &mut Ctx, _dt: f32) {
@@ -652,7 +668,9 @@ impl Shot {
         if rl.p[1..].contains(&part) {
             self.flags |= 2;
         }
-        c.out.dbm_steps = Some(p.max_steps + 1);
+        if !c.ch.rdr2 {
+            c.out.dbm_steps = Some(p.max_steps + 1);
+        }
         let lhit = la.p.contains(&part);
         let rhit = ra.p.contains(&part);
         let thigh = (part == ll.p[1] || part == rl.p[1]) && self.reach_part == [None; 2];
@@ -855,12 +873,22 @@ impl Shot {
         for j in (*HIP()) {
             c.og(j, 2.0);
         }
-        if !p.use_catch_fall_on_fall {
+        // RDR2: fallingReaction 1 and 4 catch the fall (4's writhe after it isn't here), others roll up (rollDownStairs
+        // and smartFall aren't here)
+        let catch = match p.rdr2.falling_reaction.filter(|_| c.ch.rdr2) {
+            Some(r) => r == 1 || r == 4,
+            None => p.use_catch_fall_on_fall,
+        };
+        if !catch {
             c.out.roll_up = Some(k * delirium_data::kv!(137));
         } else {
             let bs = p.body_stiffness;
             let (mut legs, mut torso, mut arms) = (bs * delirium_data::kv!(24), bs * delirium_data::kv!(74), bs * delirium_data::kv!(28));
-            if !p.melee {
+            if c.ch.rdr2 {
+                // RDR2: from the relax ramps (with melee, shares of bodyStiffness)
+                let (u, w) = (self.fall[0], self.fall[1]);
+                (legs, torso, arms) = if p.melee { (0.3 * bs, 0.7 * bs, 0.9 * bs) } else { ((w + 1.0) * 4.125, (u + 1.0) * 5.0, (u + 1.0) * 6.5) };
+            } else if !p.melee {
                 let a = (self.fall[0] + 1.0) * 0.5;
                 arms *= a;
                 torso *= a;
@@ -1212,3 +1240,311 @@ impl Shot {
     }
 }
 
+
+// ---- RDR2's shot core (with the RDR2 core), from a study of RDR2's shot (rdr2_shot_core.md) ----
+
+/// RDR2's shot parameters beyond GTA IV's (its defaults). Spine pain and exaggeration are off unless asked for.
+#[derive(Clone, Copy, Debug)]
+pub struct ShotRdr2 {
+    pub exag_duration: f32,
+    pub exag_mag: f32,
+    pub exag_twist_mag: f32,
+    pub exag_undo_rate: f32,
+    pub cpain_start: f32,
+    pub cpain_rate: f32,
+    pub cpain_duration: f32,
+    pub cpain_mag: f32,
+    pub cpain_twist_mag: f32,
+    pub cpain_undo_rate: f32,
+    pub arm_stiffness: f32,
+    pub spine_damping: f32,
+    pub initial_neck_stiffness: f32,
+    pub initial_neck_damping: f32,
+    pub neck_stiffness: f32,
+    pub neck_damping: f32,
+    pub k_mult_on_loose: f32,
+    pub k_mult_4_legs: f32,
+    pub initial_weakness_ramp: f32,
+    pub initial_weakness_zero: f32,
+    pub initial_neck_ramp: f32,
+    pub initial_neck_duration: f32,
+    pub spine_blend_zero: f32,
+    pub min_arms_looseness: f32,
+    pub min_legs_looseness: f32,
+    /// 0 bodyRollUp, 1 catchFall, 2 rollDownStairs, 3 smartFall, 4 catchFall then bodyWrithe (None: GTA IV's
+    /// useCatchFallOnFall picks 1 or 0)
+    pub falling_reaction: Option<i32>,
+}
+
+impl Default for ShotRdr2 {
+    fn default() -> ShotRdr2 {
+        ShotRdr2 { exag_duration: 0.0, exag_mag: 1.0, exag_twist_mag: 0.5, exag_undo_rate: 2.5, cpain_start: 0.3, cpain_rate: 2.0,
+                   cpain_duration: 0.0, cpain_mag: 1.0, cpain_twist_mag: 0.5, cpain_undo_rate: 0.85, arm_stiffness: 10.0,
+                   spine_damping: 1.0, initial_neck_stiffness: 14.0, initial_neck_damping: 1.0, neck_stiffness: 14.0, neck_damping: 1.0,
+                   k_mult_on_loose: 0.0, k_mult_4_legs: 0.3, initial_weakness_ramp: 0.4, initial_weakness_zero: 0.0,
+                   initial_neck_ramp: 0.4, initial_neck_duration: 0.0, spine_blend_zero: 0.6, min_arms_looseness: 0.1,
+                   min_legs_looseness: 0.1, falling_reaction: None }
+    }
+}
+
+/// RDR2's shot core state: the weakness and neck ramps (restarted by every bullet), the lower relax timer, the
+/// bullet's lean and twist, the three spine ramps {target, current, rate, diff} and when they last wrote.
+#[derive(Clone, Copy, Debug, Default)]
+struct ShotRdr2State {
+    started: bool,
+    k: f32,
+    kn: f32,
+    tk: f32,
+    tn: f32,
+    t_low: f32,
+    lean: [f32; 3],
+    ramps: [[f32; 4]; 3],
+    wrote: f32,
+}
+
+/// RDR2's relax: shotRelax's lower-body period with its default (ours: our relax message gives only the upper one).
+const RDR2_RELAX_LOWER: f32 = 0.4;
+
+impl Shot {
+    /// RDR2's bullet intake for the core: the bullet's lean and twist over the body, the weakness and neck ramps
+    /// restarted (alwaysResetLooseness), the exaggeration set going.
+    fn intake_rdr2(&mut self, c: &mut Ctx, at: Vec3) {
+        let (p, up) = (self.p, c.up);
+        let r = p.rdr2;
+        let flat = |v: Vec3| horizontal(v, up).normalize_or_zero();
+        let d = flat(p.bullet_vel);
+        let part = if (*SP()).contains(&p.body_part) { p.body_part } else { (*SP())[4] };
+        let pm = c.b.part(part).m;
+        let leg = (c.b.joint_pos((*HIP())[0]) - c.b.joint_pos((*ANKLE())[0])).length().max(0.1);
+        let lever = pm.a.vd((at - pm.d).vx(p.bullet_vel.normalize_or_zero())) / leg;
+        let mut lean = [-flat(c.m.c).vd(d), -flat(c.m.a).vd(d), lever];
+        if p.body_part <= 8 {
+            (lean[0], lean[1]) = (-lean[0], -lean[1]);
+        }
+        let s = &mut self.rd;
+        (s.lean, s.started, s.k, s.kn, s.tk, s.tn, s.wrote) = (lean, true, 0.01, 0.01, 0.0, 0.0, 0.0);
+        if r.exag_duration > f32::EPSILON {
+            let cur = [lean[0] * r.exag_mag, lean[1] * r.exag_mag, lean[2] * r.exag_twist_mag * 10.0];
+            for (ch, x) in s.ramps.iter_mut().zip(cur) {
+                *ch = [0.0, x, r.exag_undo_rate, -x];
+            }
+        }
+    }
+
+    /// RDR2's exaggeration and spine pain: three rate-limited ramps written to the four spine joints (a quarter
+    /// each). Returns whether they wrote this tick.
+    fn spine_rdr2(&mut self, c: &mut Ctx, dt: f32) -> bool {
+        let (p, t) = (self.p, self.since_hit);
+        let r = p.rdr2;
+        let step = |ch: &mut [f32; 4]| {
+            ch[3] = ch[0] - ch[1];
+            ch[1] += ch[3].clamp(-ch[2] * dt, ch[2] * dt);
+        };
+        let mut stepped = false;
+        if t < r.cpain_start || r.cpain_duration <= f32::EPSILON {
+            if r.exag_duration > f32::EPSILON && t > r.exag_duration {
+                for ch in self.rd.ramps.iter_mut().filter(|ch| ch[3].abs() >= 0.01) {
+                    step(ch);
+                    stepped = true;
+                }
+            }
+        } else {
+            if t <= r.cpain_start + dt {
+                // from the spine as it is: four times the joints' mean, i.e. their sum
+                let now: Vec<[f32; 3]> = SPINE().iter().map(|&j| c.actual(j)).collect();
+                for k in 0..3 {
+                    self.rd.ramps[k][1] = now.iter().map(|a| a[k]).sum();
+                }
+                let mut mag = r.cpain_mag;
+                if self.behind > 0.0 {
+                    mag *= 0.75;
+                }
+                if [1, 2, 4, 6].contains(&p.body_part) {
+                    mag *= 1.25;
+                }
+                let tw = self.side * -10.0 * r.cpain_twist_mag;
+                for (ch, x) in self.rd.ramps.iter_mut().zip([mag, tw, tw]) {
+                    (ch[0], ch[2]) = (x, r.cpain_rate);
+                }
+            }
+            let end = r.cpain_start + r.cpain_duration;
+            if t >= end && t <= end + dt {
+                for ch in self.rd.ramps.iter_mut() {
+                    (ch[0], ch[2]) = (0.0, r.cpain_undo_rate);
+                }
+            }
+            for ch in self.rd.ramps.iter_mut() {
+                step(ch);
+            }
+            stepped = true;
+        }
+        if stepped && !p.melee {
+            let v = self.rd.ramps.map(|ch| (0.25 * ch[1]).clamp(-9.9, 9.9));
+            for &j in SPINE().iter() {
+                c.ch.eff[j].desired = v;
+            }
+            self.rd.wrote = t;
+        }
+        stepped
+    }
+
+    /// RDR2's strength: the bullet weakness k (0.01 back to 1 over initialWeaknessRampDuration after each bullet)
+    /// loosens the trunk, arms, neck and legs through looseness-blended stiffness, damping and muscle; the legs work
+    /// with the balancer's own leg stiffness; opposeGravity from the upper relax U.
+    fn strength_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let p = self.p;
+        let r = p.rdr2;
+        let (u, w) = (self.fall[0], self.fall[1]);
+        let s = &mut self.rd;
+        if r.initial_weakness_zero <= s.tk && r.initial_weakness_ramp <= 1e-6 {
+            s.k = 1.0;
+        }
+        if r.initial_neck_duration <= s.tn && r.initial_neck_ramp <= 1e-6 {
+            s.kn = 1.0;
+        }
+        let (k, kn) = (s.k, s.kn);
+        if !self.failed() {
+            let ns = r.initial_neck_stiffness + (r.neck_stiffness - r.initial_neck_stiffness) * kn;
+            let nd = r.initial_neck_damping + (r.neck_damping - r.initial_neck_damping) * kn;
+            let h = (u + 1.0) * 0.5;
+            let l = p.looseness_amount * k + (1.0 - p.looseness_amount);
+            let m = ((1.0 - l) * r.k_mult_on_loose + 1.0) * h;
+            let lc = l.clamp(0.05, 1.0);
+            for i in 0..2 {
+                for j in limb(i).e {
+                    c.og(j, h);
+                }
+            }
+            for &j in SPINE().iter() {
+                c.og(j, u + 1.0);
+            }
+            for &j in crate::nmrs::NECK().iter() {
+                c.og(j, 1.0);
+            }
+            c.ch.set_stiffness(m * p.body_stiffness, lc * r.spine_damping, "us", Some(lc));
+            let lg = r.min_legs_looseness.max(lc).min(2.0);
+            for i in 0..2 {
+                c.ch.eff[(*KNEE())[i]].muscle_stiffness = 1.5 * lg;
+                c.ch.eff[(*HIP())[i]].muscle_stiffness = 1.5 * lg;
+            }
+            if !self.no_balance && !c.dbm_failed {
+                // the balancer's leg stiffness, scaled up as the legs loosen (kMult4Legs)
+                let ml = ((1.0 - lg) * r.k_mult_4_legs + 1.0) * (w + 1.0) * 0.5;
+                for i in 0..2 {
+                    let knee = &mut c.ch.eff[(*KNEE())[i]];
+                    let base = knee.strength.sqrt();
+                    let sigma = (ml * base).powi(2);
+                    knee.strength = sigma;
+                    if w < 1.0 {
+                        let st = (base - 5.0) * w + 5.0;
+                        let damp = (w + 1.0) * 0.5;
+                        c.ch.eff[(*HIP())[i]].set_stiffness(st.min(sigma.sqrt()), damp, None);
+                        c.ch.eff[(*KNEE())[i]].set_stiffness(st.min(sigma.sqrt()), damp, None);
+                        c.ch.eff[(*ANKLE())[i]].set_stiffness((base - 3.0) * w + 3.0, 1.0, None);
+                    }
+                }
+            }
+            let la = r.min_arms_looseness.max(lc).min(2.0);
+            let (mut o, mut d) = ([0.0f32; 2], [0.0f32; 2]);
+            if c.ch.busy[0] {
+                (o, d) = ([0.5, -0.5], [-0.2, 0.2]);
+            }
+            if c.ch.busy[1] {
+                (o, d) = ([-0.5, 0.5], [0.2, -0.2]);
+            }
+            c.ch.set_stiffness((o[0] + r.arm_stiffness) * m, (d[0] + 1.0) * lc, "ul", Some(la));
+            c.ch.set_stiffness((o[1] + r.arm_stiffness) * m, (d[1] + 1.0) * lc, "ur", Some(la));
+            if p.stable_hands_and_neck {
+                c.ch.set_stiffness(ns, nd, "un", Some(1.5));
+            } else {
+                c.ch.set_stiffness((ns * m).min(1.0 / (6.0 * dt) + 10.0), nd * lc, "un", Some(1.5 * lc));
+            }
+            c.ch.set_stiffness(13.0, 1.0, "uw", Some(1.0));
+            if u < 0.3 {
+                for &j in KNEE().iter() {
+                    c.ch.eff[j].muscle_stiffness = 2.0 * u + 0.5;
+                }
+            }
+        }
+        let s = &mut self.rd;
+        if r.initial_weakness_zero <= s.tk {
+            s.k = if r.initial_weakness_ramp <= 1e-6 { 1.0 } else { (s.k + dt / r.initial_weakness_ramp).min(1.0) };
+        }
+        if r.initial_neck_duration <= s.tn {
+            s.kn = if r.initial_neck_ramp <= 1e-6 { 1.0 } else { (s.kn + dt / r.initial_neck_ramp).min(1.0) };
+        }
+        (s.tk, s.tn) = (s.tk + dt, s.tn + dt);
+    }
+
+    /// RDR2's spine blend to zero: once the spine ramps stop writing, the spine (and neck) blend to the zero pose,
+    /// fading in over half a second; the balancer's own lean2 on spine joint 0 passes through.
+    fn blend_rdr2(&mut self, c: &mut Ctx) {
+        let sbz = self.p.rdr2.spine_blend_zero;
+        if sbz <= 0.0 {
+            return;
+        }
+        let delta = self.since_hit - self.rd.wrote;
+        let (v, b) = if delta > 0.0 { let d = delta.min(0.5); ((1.0 - 2.0 * d).min(1.0), 2.0 * d * sbz) } else { (0.0, 0.0) };
+        let weight = (1.0 - b) * (1.0 - v) + b;
+        let keep = c.ch.eff[(*SPINE())[0]].desired[1];
+        for j in SPINE().iter().chain(crate::nmrs::NECK().iter()) {
+            c.ch.eff[*j].blend_to_zero(weight);
+        }
+        c.ch.eff[(*SPINE())[0]].desired[1] = keep;
+    }
+
+    /// RDR2's shot tick: relax U (upper) and W (lower), the falling decision, the spine ramps, the strength
+    /// sub-module from the first bullet, the fall (fallingReaction) and the arm shapes, then the spine blend.
+    fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let p = self.p;
+        self.t190 = (self.t190 + dt).min(self.t194);
+        self.fall[0] = 1.0 - self.t190 / (self.t194 + 1e-6);
+        let low = if self.t194 > 0.0 { RDR2_RELAX_LOWER } else { 0.0 };
+        self.rd.t_low = (self.rd.t_low + dt).min(low);
+        self.fall[1] = 1.0 - self.rd.t_low / (low + 1e-6);
+        self.time += dt;
+        self.since_hit += dt;
+        if self.t190 == self.t194 && self.t194 != 0.0 && !self.failed() {
+            c.out.send(delirium_data::kv!(55 int), "shot", 0.0);
+            self.flags |= 1;
+        }
+        if c.dbm_failed {
+            self.flags |= 1;
+        }
+        if self.failed() || self.no_balance {
+            c.out.dbm = Some(false);
+        }
+        self.run(c, HIT(), Some(|s, _| s.new_hit), Some(Shot::hit_enter), Some(Shot::hit_tick), Some(|s, _| !s.new_hit), None, dt);
+        self.wound = world(&c.b.part(p.body_part).m, self.hit_local);
+        c.module(HIT() as u32);
+        let stepped = self.spine_rdr2(c, dt);
+        c.module(100);
+        self.shock_spin(c, dt);
+        c.module(101);
+        if self.rd.started {
+            self.strength_rdr2(c, dt);
+        }
+        self.run(c, REACT(), Some(|_, c| c.ch.busy != [true; 2]), Some(Shot::react_enter), Some(Shot::react_tick),
+                 Some(|s, _| s.new_hit || s.failed()), None, dt);
+        c.module(REACT() as u32);
+        self.run(c, FALL, Some(|s, _| s.failed()), Some(Shot::fall_enter), Some(Shot::fall_tick), None, None, dt);
+        c.module(FALL as u32);
+        self.run(c, CHICKEN(), Some(|s, _| s.p.chicken_arms && s.new_hit), Some(Shot::chicken_enter), Some(Shot::chicken_tick),
+                 Some(|s, _| s.since_hit > s.t174 || s.new_hit), None, dt);
+        c.module(CHICKEN() as u32);
+        self.run(c, FLING(), Some(|s, _| s.p.fling && s.new_hit), Some(Shot::fling_enter), Some(Shot::fling_tick),
+                 Some(|s, _| s.t174 < s.since_hit || s.new_hit), Some(Shot::fling_exit), dt);
+        c.module(FLING() as u32);
+        self.run(c, LOOK(), Some(|s, _| s.p.use_head_look), Some(Shot::look_enter), None,
+                 Some(|s, _| !s.p.use_head_look), Some(|_, c| c.out.head_look_stop = true), dt);
+        c.module(LOOK() as u32);
+        self.run(c, MELEE(), Some(|s, _| s.p.melee && s.new_hit), Some(Shot::melee_enter), Some(Shot::melee_tick),
+                 Some(|s, _| s.failed() || s.new_hit), Some(|_, c| c.out.spine_twist_stop = true), dt);
+        c.module(MELEE() as u32);
+        if !stepped {
+            self.blend_rdr2(c);
+        }
+        c.module(102);
+        self.new_hit = false;
+    }
+}

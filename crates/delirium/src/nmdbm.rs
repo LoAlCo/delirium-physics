@@ -1536,6 +1536,16 @@ impl Dbm {
         }
         let soft = self.p.dt.fma(delirium_data::kv!(103), -1.0).fma(delirium_data::kv!(84), 1.0).clamp(1.0, delirium_data::kv!(64));
         let k = self.p.leg_stiffness * self.knee_scale;
+        // RDR2's leg stiffness setter (every step): hips, knees and ankles at k (damping ratio 1), hip muscle 1.5, knee
+        // muscle 2, and spine joint 0 at the stiffer leg's (the knees are then set again below)
+        if self.p.rdr2.is_some() {
+            for i in 0..2 {
+                ch.eff[(*HIP())[i]].set_stiffness(self.p.leg_stiffness, 1.0, Some(1.5));
+                ch.eff[(*KNEE())[i]].set_stiffness(self.p.leg_stiffness, 1.0, Some(2.0));
+                ch.eff[(*ANKLE())[i]].set_stiffness(self.p.leg_stiffness, 1.0, None);
+            }
+            ch.eff[(*SPINE())[0]].set_stiffness(self.p.leg_stiffness, 1.0, None);
+        }
         for i in 0..2 {
             let touching = s.flags & [delirium_data::kv!(251 int), delirium_data::kv!(7 int)][i] != 0;
             ch.eff[(*ANKLE())[i]].muscle_stiffness = if touching { delirium_data::kv!(31) } else { soft };

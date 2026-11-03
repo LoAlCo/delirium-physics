@@ -360,6 +360,32 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "damping", kind: Kind::Float, used: true, doc: "" },
     ] },
     Message { name: "shot", params: &[
+        Param { name: "exagDuration", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "exagMag", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "exagTwistMag", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "exagUndoRate", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "cpainStart", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "cpainRate", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "cpainDuration", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "cpainMag", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "cpainTwistMag", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "cpainUndoRate", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "armStiffness", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "spineDamping", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "initialNeckStiffness", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "initialNeckDamping", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "neckStiffness", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "neckDamping", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "kMultOnLoose", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "kMult4Legs", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "initialWeaknessRampDuration", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "initialWeaknessZeroDuration", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "initialNeckRampDuration", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "initialNeckDuration", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "spineBlendZero", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "minArmsLooseness", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "minLegsLooseness", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fallingReaction", kind: Kind::Int, used: true, doc: "RDR2 core only: 0 roll up, 1 catch fall, 4 catch fall then writhe (2, 3 roll up here)" },
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "" },
         Param { name: "grabHoldTime", kind: Kind::Float, used: true, doc: "" },
         Param { name: "bodyPart", kind: Kind::Int, used: true, doc: "" },
@@ -930,6 +956,32 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("setStiffness", "mask") => { let p = &mut st.set_stiffness; p.mask = v.s()?.to_string(); }
         ("setStiffness", "damping") => { let p = &mut st.set_stiffness; p.damping = v.f()?; }
         ("shot", "bodyStiffness") => { let p = &mut st.shot; p.body_stiffness = v.f()?; }
+        ("shot", "exagDuration") => { let p = &mut st.shot; p.rdr2.exag_duration = v.f()?; }
+        ("shot", "exagMag") => { let p = &mut st.shot; p.rdr2.exag_mag = v.f()?; }
+        ("shot", "exagTwistMag") => { let p = &mut st.shot; p.rdr2.exag_twist_mag = v.f()?; }
+        ("shot", "exagUndoRate") => { let p = &mut st.shot; p.rdr2.exag_undo_rate = v.f()?; }
+        ("shot", "cpainStart") => { let p = &mut st.shot; p.rdr2.cpain_start = v.f()?; }
+        ("shot", "cpainRate") => { let p = &mut st.shot; p.rdr2.cpain_rate = v.f()?; }
+        ("shot", "cpainDuration") => { let p = &mut st.shot; p.rdr2.cpain_duration = v.f()?; }
+        ("shot", "cpainMag") => { let p = &mut st.shot; p.rdr2.cpain_mag = v.f()?; }
+        ("shot", "cpainTwistMag") => { let p = &mut st.shot; p.rdr2.cpain_twist_mag = v.f()?; }
+        ("shot", "cpainUndoRate") => { let p = &mut st.shot; p.rdr2.cpain_undo_rate = v.f()?; }
+        ("shot", "armStiffness") => { let p = &mut st.shot; p.rdr2.arm_stiffness = v.f()?; }
+        ("shot", "spineDamping") => { let p = &mut st.shot; p.rdr2.spine_damping = v.f()?; }
+        ("shot", "initialNeckStiffness") => { let p = &mut st.shot; p.rdr2.initial_neck_stiffness = v.f()?; }
+        ("shot", "initialNeckDamping") => { let p = &mut st.shot; p.rdr2.initial_neck_damping = v.f()?; }
+        ("shot", "neckStiffness") => { let p = &mut st.shot; p.rdr2.neck_stiffness = v.f()?; }
+        ("shot", "neckDamping") => { let p = &mut st.shot; p.rdr2.neck_damping = v.f()?; }
+        ("shot", "kMultOnLoose") => { let p = &mut st.shot; p.rdr2.k_mult_on_loose = v.f()?; }
+        ("shot", "kMult4Legs") => { let p = &mut st.shot; p.rdr2.k_mult_4_legs = v.f()?; }
+        ("shot", "initialWeaknessRampDuration") => { let p = &mut st.shot; p.rdr2.initial_weakness_ramp = v.f()?; }
+        ("shot", "initialWeaknessZeroDuration") => { let p = &mut st.shot; p.rdr2.initial_weakness_zero = v.f()?; }
+        ("shot", "initialNeckRampDuration") => { let p = &mut st.shot; p.rdr2.initial_neck_ramp = v.f()?; }
+        ("shot", "initialNeckDuration") => { let p = &mut st.shot; p.rdr2.initial_neck_duration = v.f()?; }
+        ("shot", "spineBlendZero") => { let p = &mut st.shot; p.rdr2.spine_blend_zero = v.f()?; }
+        ("shot", "minArmsLooseness") => { let p = &mut st.shot; p.rdr2.min_arms_looseness = v.f()?; }
+        ("shot", "minLegsLooseness") => { let p = &mut st.shot; p.rdr2.min_legs_looseness = v.f()?; }
+        ("shot", "fallingReaction") => { let p = &mut st.shot; p.rdr2.falling_reaction = Some(v.i()?); }
         ("shot", "grabHoldTime") => { let p = &mut st.shot; p.grab_hold_time = v.f()?; }
         ("shot", "bodyPart") => { let p = &mut st.shot; p.body_part = v.i()?.max(0) as usize; }
         ("shot", "loosenessAmount") => { let p = &mut st.shot; p.looseness_amount = v.f()?; }
