@@ -9,6 +9,15 @@
 //! muscles are driven the requests are resolved RDR2's way. A behaviour that wrote a value already there isn't seen
 //! as writing it. Behaviours write at full weight, so the highest-priority writer of each channel wins.
 //!
+//! Fitted to Delirium's GTA IV behaviours:
+//! - the shot's modules each make their own request; its reaching for the wound ranks as RDR2's separate
+//!   reachForWound, and once catchFall runs the shot ranks below it;
+//! - the balancer's lean of the lowest spine joint (GTA IV's aid, which bodyBalance and the shot override by design;
+//!   in RDR2 that joint is the spine limb's, not the legs') and its ankles (set every step as defaults the shot and
+//!   the others change: with them first, he fell after a plain shot and on ramps) rank below every behaviour;
+//! - RDR2's per-joint scale layer (the shot's looseness law lowering strength, the lowest wins) is not here: the GTA
+//!   IV shot writes strengths, not looseness scales, and taking the lowest undid the balancer's leg stiffness.
+//!
 //! Priorities: RDR2's behaviours open their requests at a priority their constructor sets, numbered in the order of
 //! their behaviour slot (balancer 0x18 first, then bodyBalance 0x20, braceForImpact 0x28, shot 0x38 ... keyframe
 //! 0x120); the core's own requests come after all of them. That the queue runs in that order (lowest number first)
@@ -33,7 +42,7 @@ fn set(e: &mut Effector, k: usize, v: f32) {
     }
 }
 
-/// The shot's slot: its strength, damping and muscle-stiffness requests only ever lower (RDR2's scale layer).
+/// The shot's slot.
 pub const SHOT: u32 = 0x38;
 
 /// The core's own requests (setStiffness and the like, sent by the game) come after every behaviour.
@@ -74,16 +83,28 @@ impl Requests {
 
     /// What changed since the last mark is a request at this priority.
     pub fn mark(&mut self, eff: &[Effector], priority: u32) {
+        self.mark_some(eff, priority, None, None);
+    }
+
+    /// As `mark`, for these joints only (the rest stay for the next mark).
+    pub fn mark_joints(&mut self, eff: &[Effector], priority: u32, only: &[usize]) {
+        self.mark_some(eff, priority, Some(only), None);
+    }
+
+    fn mark_some(&mut self, eff: &[Effector], priority: u32, only: Option<&[usize]>, channel: Option<usize>) {
         for (j, e) in eff.iter().enumerate() {
+            if only.is_some_and(|o| !o.contains(&j)) {
+                continue;
+            }
             let now = channels(e);
             let Some(was) = self.last.get_mut(j) else { continue };
-            for k in 0..CHANNELS {
+            for k in (0..CHANNELS).filter(|k| channel.is_none_or(|c| c == *k)) {
                 if now[k].to_bits() != was[k].to_bits() {
                     self.list.push((priority, self.n, j, k, now[k]));
                     self.n += 1;
+                    was[k] = now[k];
                 }
             }
-            *was = now;
         }
     }
 
@@ -101,13 +122,6 @@ impl Requests {
         for &(_, _, j, k, v) in &self.list {
             if !done[j][k] {
                 done[j][k] = true;
-                set(&mut eff[j], k, v);
-            }
-        }
-        // RDR2's scale layer: the shot's looseness law lowers strength, damping and muscle stiffness through per-joint
-        // scales where the lowest request wins, not through the queue
-        for &(p, _, j, k, v) in &self.list {
-            if p == SHOT && k >= 4 && v < channels(&eff[j])[k] {
                 set(&mut eff[j], k, v);
             }
         }

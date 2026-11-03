@@ -270,13 +270,27 @@ pub struct Ctx<'a, 'b> {
     pub(crate) angvel: Vec3,
     pub(crate) up: Vec3,
     pub cf: Option<(&'a mut Option<crate::nmcf::CatchFall>, &'a mut crate::nmhl::HeadLook, &'a mut crate::nmst::SpineTwist)>,
+    /// RDR2 core's limb requests: the shot's modules each make their own (limbreq.rs)
+    pub reqs: Option<&'a mut crate::limbreq::Requests>,
+    /// the shot's priority for those requests (below catchFall's once it has taken over)
+    pub shot_slot: u32,
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {
     pub fn new(ch: &'a mut Character, b: &'a Body<'b>, out: &'a mut Out, dbm_failed: bool) -> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
-        Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None }
+        Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT }
+    }
+
+    /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.
+    /// Its reaching for the wound is RDR2's separate reachForWound behaviour, so ranks as that.
+    fn module(&mut self, tag: u32) {
+        let reach = tag == REACH_L() as u32 || tag == REACH_R() as u32;
+        let slot = if reach && self.shot_slot == crate::limbreq::SHOT { crate::limbreq::slot("reachForWound") } else { self.shot_slot };
+        if let Some(r) = self.reqs.as_deref_mut() {
+            r.mark(&self.ch.eff, slot);
+        }
     }
 
     fn rand(&mut self, a: f32, b: f32) -> f32 {
@@ -467,12 +481,15 @@ impl Shot {
                 }
             }
         }
+        c.module(100);
         if self.failed() || self.no_balance {
             c.out.dbm = Some(false);
         }
         self.run(c, HIT(), Some(|s, _| s.new_hit), Some(Shot::hit_enter), Some(Shot::hit_tick), Some(|s, _| !s.new_hit), None, dt);
         self.wound = world(&c.b.part(p.body_part).m, self.hit_local);
+        c.module(HIT() as u32);
         self.shock_spin(c, dt);
+        c.module(101);
         if self.head_t < 0.0 && p.use_head_look {
             self.head_t += dt;
             c.out.head_look_target = Some(p.head_look);
@@ -488,35 +505,49 @@ impl Shot {
             }
         }
         self.run(c, CROUCH(), Some(Shot::crouch_check), None, Some(Shot::crouch_tick), Some(|s, _| s.failed()), None, dt);
+        c.module(CROUCH() as u32);
         self.run(c, STIFF(), Some(|s, _| s.new_hit && !s.failed()), Some(Shot::stiff_enter), Some(Shot::stiff_tick),
                  Some(|s, _| s.new_hit || s.failed()), Some(Shot::stiff_exit), dt);
+        c.module(STIFF() as u32);
         self.run(c, REACT(), Some(|_, c| c.ch.busy != [true; 2]), Some(Shot::react_enter), Some(Shot::react_tick),
                  Some(|s, _| s.new_hit || s.failed()), None, dt);
+        c.module(REACT() as u32);
         self.cur_arm = 0;
         self.run(c, LOOSE_L, Some(|s, _| s.time > 1.0 && s.flags & delirium_data::kv!(54 int) != 0 && !s.p.melee), None, Some(Shot::loose_tick),
                  Some(|s, _| s.failed()), None, dt);
+        c.module(LOOSE_L as u32);
         self.cur_arm = 1;
         self.run(c, LOOSE_R, Some(|s, _| s.time > 1.0 && s.flags & delirium_data::kv!(23 int) != 0 && !s.p.melee), None, Some(Shot::loose_tick),
                  Some(|s, _| s.failed()), None, dt);
+        c.module(LOOSE_R as u32);
         self.run(c, FALL, Some(|s, _| s.failed()), Some(Shot::fall_enter), Some(Shot::fall_tick), None, None, dt);
+        c.module(FALL as u32);
         self.run(c, CHICKEN(), Some(|s, _| s.p.chicken_arms && s.new_hit), Some(Shot::chicken_enter), Some(Shot::chicken_tick),
                  Some(|s, _| s.since_hit > s.t174 || s.new_hit), None, dt);
+        c.module(CHICKEN() as u32);
         self.run(c, FLING(), Some(|s, _| s.p.fling && s.new_hit), Some(Shot::fling_enter), Some(Shot::fling_tick),
                  Some(|s, _| s.t174 < s.since_hit || s.new_hit), Some(Shot::fling_exit), dt);
+        c.module(FLING() as u32);
         self.cur_reach = 0;
         self.run(c, REACH_L(), Some(|s, c| s.reach_check(c, 0)), Some(|s, _| s.reach_enter(0)), Some(Shot::reach_tick),
                  Some(|s, c| s.reach_done(c, 0)), Some(Shot::reach_exit), dt);
+        c.module(REACH_L() as u32);
         self.cur_reach = 1;
         self.run(c, REACH_R(), Some(|s, c| s.reach_check(c, 1)), Some(|s, _| s.reach_enter(1)), Some(Shot::reach_tick),
                  Some(|s, c| s.reach_done(c, 1)), Some(Shot::reach_exit), dt);
+        c.module(REACH_R() as u32);
         self.run(c, COLLAPSE_L, Some(|s, _| s.flags & delirium_data::kv!(1 int) != 0 && !s.p.melee && s.since_hit > s.p.time_before_collapse_wound_leg),
                  None, Some(|_, c, _| Shot::collapse(c, "ll")), None, None, dt);
+        c.module(COLLAPSE_L as u32);
         self.run(c, COLLAPSE_R(), Some(|s, _| s.flags & 2 != 0 && !s.p.melee && s.since_hit > s.p.time_before_collapse_wound_leg),
                  None, Some(|_, c, _| Shot::collapse(c, "lr")), None, None, dt);
+        c.module(COLLAPSE_R() as u32);
         self.run(c, LOOK(), Some(Shot::look_check), Some(Shot::look_enter), None,
                  Some(Shot::look_done), Some(|_, c| c.out.head_look_stop = true), dt);
+        c.module(LOOK() as u32);
         self.run(c, MELEE(), Some(|s, _| s.p.melee && s.new_hit), Some(Shot::melee_enter), Some(Shot::melee_tick),
                  Some(|s, _| s.failed() || s.new_hit), Some(|_, c| c.out.spine_twist_stop = true), dt);
+        c.module(MELEE() as u32);
         self.new_hit = false;
     }
 

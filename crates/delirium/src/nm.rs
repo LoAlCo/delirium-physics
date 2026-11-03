@@ -1143,6 +1143,10 @@ impl Agent {
             if let Some(r) = self.nm_relax.take() {
                 s.t194 = r;
             }
+            c.reqs = self.limb_reqs.as_mut();
+            if cf_was {
+                c.shot_slot = crate::limbreq::CORE;
+            }
             s.tick(&mut c, dt);
             if s.failed() {
                 self.fallen = true;
@@ -1443,6 +1447,9 @@ impl Agent {
                     Some(s) => {
                         dbm.apply(&s, ch);
                         if let Some(r) = self.limb_reqs.as_mut() {
+                            // its lean of the lowest spine joint and its ankles are defaults the others override (limbreq.rs)
+                            r.mark_joints(&ch.eff, crate::limbreq::CORE, &[(*crate::nmrs::SPINE())[0]]);
+                            r.mark_joints(&ch.eff, crate::limbreq::CORE, &*crate::nmrs::ANKLE());
                             r.mark(&ch.eff, 0x18);
                         }
                         if was == 0 && dbm.f.stepping != 0 {
