@@ -531,6 +531,8 @@ pub struct Character {
     pub joints: Vec<JointDef>,
     pub eff: Vec<Effector>,
     pub rng: (u32, u32),
+    /// RDR2 core's joint drive (mod rdr2); false: GTA IV's
+    pub rdr2: bool,
     pub busy: [bool; 2],
     pub stabilise: Option<(f32, f32)>,
     pub foot_yaw: [f32; 2],
@@ -545,6 +547,26 @@ pub struct Character {
     pub support: [i32; 2],
     pub stance_yaw: (f32, f32),
     pub up: Vec3,
+}
+
+/// RDR2 core's joint drive (experimental): what Red Dead Redemption 2's muscle drive changes, from a study of how it
+/// behaves. Same muscle law; 3-DOF targets are clamped per axis to the limit centre +- 3 half-ranges instead of the
+/// elliptical swing clamp; softness stops at 0.9999; the raised torque stops at 27000 (hinge) / 35000 (3-DOF); an
+/// injury weakens as RDR2's looseness, strength (1-x)^2 (at least 0.1) and damping (1-x).
+pub mod rdr2 {
+    pub const AXIS_CLAMP: f32 = 3.0;
+    pub const SOFTNESS_MAX: f32 = 0.9999;
+    pub const HINGE_CAP: f32 = 27000.0;
+    pub const THREE_CAP: f32 = 35000.0;
+    pub const LOOSE_MIN: f32 = 0.1;
+}
+
+fn targets_rdr2(j: &JointDef, e: &Effector) -> [f32; 3] {
+    std::array::from_fn(|k| {
+        let (mid, half) = ((j.limits[k].0 + j.limits[k].1) * 0.5, (j.limits[k].1 - j.limits[k].0) * 0.5);
+        let d = if j.flip[k] { -e.aim(k) } else { e.aim(k) };
+        d.clamp(mid - rdr2::AXIS_CLAMP * half, mid + rdr2::AXIS_CLAMP * half) - mid
+    })
 }
 
 fn targets(j: &JointDef, e: &Effector) -> [f32; 3] {
@@ -565,7 +587,7 @@ fn targets(j: &JointDef, e: &Effector) -> [f32; 3] {
 
 impl Character {
     pub fn new(joints: Vec<JointDef>, frames: &[Transform]) -> Character {
-        let mut c = Character { eff: vec![], joints, rng: (0, 0), busy: [false; 2], stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()) };
+        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()) };
         c.seed(0);
         c.eff = (0..c.joints.len()).map(|i| Effector::new(&c.joints[i], c.angle(i, frames))).collect();
         static ONCE: std::sync::Once = std::sync::Once::new();
@@ -739,17 +761,27 @@ impl Character {
         let mut out = vec![Rigid::default(); self.joints.len() + 1];
         for (i, (j, e)) in self.joints.iter().zip(&self.eff).enumerate() {
             let well = 1.0 - e.injury;
-            let (strength, damping) = (e.strength * well * k, (e.damping * well * k).max(MIN_DAMPING()));
+            let (strength, damping) = if self.rdr2 {
+                ((e.strength * k * well * well).max(if e.injury > 0.0 { rdr2::LOOSE_MIN } else { 0.0 }), (e.damping * k * well).max(MIN_DAMPING()))
+            } else {
+                (e.strength * well * k, (e.damping * well * k).max(MIN_DAMPING()))
+            };
             let x = damping.fma(delirium_data::kv!(65), strength) * e.muscle_stiffness * dt * 0.5;
             let blend = (delirium_data::kv!(35) * dt).max(x / (x + 1.0)).clamp(0.0, 1.0);
-            let target = if j.three { targets(j, e) } else { [e.aim(0), 0.0, 0.0] };
+            let blend = if self.rdr2 { blend.min(rdr2::SOFTNESS_MAX) } else { blend };
+            let target = match (j.three, self.rdr2) {
+                (true, true) => targets_rdr2(j, e),
+                (true, false) => targets(j, e),
+                _ => [e.aim(0), 0.0, 0.0],
+            };
             let soft = std::array::from_fn(|k| {
                 let (l, f) = (e.soft[k], j.three && j.flip[k]);
                 let mid = if j.three { (j.limits[k].0 + j.limits[k].1) * 0.5 } else { 0.0 };
                 SoftLimit { angle: if f { -l.angle } else { l.angle } - mid, dir: if f { -l.dir } else { l.dir }, ..l }
             });
             out[i + 1] = Rigid { frame: j.rage_parent, child: j.rage_child, limits: loose(i, j.limits), max: j.max_torque.map(|m| m * k * most), blend, hinge: !j.three, desired: e.aim(0), jc: j.rigid,
-                                target, gain: [strength, damping], soft };
+                                target, gain: [strength, damping], soft,
+                                cap: self.rdr2.then_some(if j.three { rdr2::THREE_CAP } else { rdr2::HINGE_CAP }) };
         }
         out
     }

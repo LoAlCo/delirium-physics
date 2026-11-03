@@ -1363,6 +1363,9 @@ impl Agent {
             self.doll.rigid = crate::nmdbm::own_rage(&self.doll);
         }
         let nm_tick = awake;
+        if let Some(ch) = self.ch.as_mut() {
+            ch.rdr2 = self.rdr2_core.is_some();
+        }
         let mut started = if let Some(o) = self.nm_shot_started.take() { o } else if awake && self.nm_hit.is_some() { self.nm_shot_step(build, &frames, false, dt, false) } else { Default::default() };
         let mut brace_out = crate::nmshot::Out::default();
         let mut brace_started = crate::nmbr::BraceOut::default();

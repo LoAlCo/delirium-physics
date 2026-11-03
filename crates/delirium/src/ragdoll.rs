@@ -386,6 +386,8 @@ pub struct Rigid {
     pub target: [f32; 3],
     pub gain: [f32; 2],
     pub soft: [crate::nmrs::SoftLimit; 3],
+    /// RDR2 core: a hard ceiling on the muscle's torque after the softness raise (None: GTA IV's, no ceiling)
+    pub cap: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2192,7 +2194,10 @@ impl Ragdoll {
                 let Some(j) = joints[i] else { continue };
                 let (pl, cl) = (b[j.parent].link(), b[i].link());
                 let [s, d] = r.gain;
-                let most = |m: f32| m / (1.0 - r.blend).max(delirium_data::kv!(134));
+                let most = |m: f32| match r.cap {
+                    Some(c) => (m / (1.0 - r.blend).max(delirium_data::kv!(134))).min(c),
+                    None => m / (1.0 - r.blend).max(delirium_data::kv!(134)),
+                };
                 let speed = |a: Vec3, o: &[u8; 3]| sdot(cl.w, a, o) - sdot(pl.w, a, o);
                 let held = |acc: f32, v: f32, at: f32, to: f32| if acc.abs() > delirium_data::kv!(50) && !((acc.fma(h, v).fma(h, at) - to) * (at - to) >= 0.0) { 0.0 } else { acc };
                 if !r.hinge {
