@@ -9777,6 +9777,14 @@ impl Sim {
 
 fn headless(mut sim: Sim, n: usize) {
     sim.button("balance");
+    // RDR2_SLOPE=<degrees>: a ramp under him, rising along +x, through his feet (to try the RDR2 core on a slope)
+    if let Some(deg) = std::env::var("RDR2_SLOPE").ok().and_then(|d| d.parse::<f32>().ok()) {
+        let feet = sim.agent.doll.frames().map(|f| f.translation).fold(Vec3::splat(f32::MAX), |a, b| if b.z < a.z { b } else { a });
+        let at = sim.agent.doll.frames().next().map_or(Vec3::ZERO, |f| f.translation);
+        let (x0, y0, z0, k) = (at.x, at.y, feet.z - 0.05, deg.to_radians().tan());
+        let p: Vec<[f32; 3]> = [(-4.0, -4.0), (4.0, -4.0), (4.0, 4.0), (-4.0, 4.0)].iter().map(|&(dx, dy)| [x0 + dx, y0 + dy, z0 + dx * k]).collect();
+        sim.world.add_chunk(0x5107e, &p, &[[0, 1, 2], [0, 2, 3]], &[0, 0]);
+    }
     // HORSE_TEST=<horse.xml>: Red Dead Redemption 2's horse beside him, its barrel's height and how far its joints are
     // from their pose printed every half second; at 2 s, HORSE_DIE kills it, HORSE_SHOOT=k,k,... hits those parts (40
     // damage and a 40 N s push each; two on a leg lame it); HORSE_SET=name=value,... sets its quadrupedbase settings

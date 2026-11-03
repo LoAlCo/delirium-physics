@@ -6,9 +6,16 @@
 //! - pelvis height from leg length and how far apart the feet are;
 //! - a step up onto something higher lifts the swing foot more for that step;
 //! - ankle balance: the planted ankles' balancing pitch fades out once the foot has tilted off flat;
-//! - the swing ankle doesn't oppose gravity, and its pitch clamp.
-//! Not here yet: slopes, running, crouch start, the injured-leg limp, obstacle avoidance, lean channels, the turn
-//! step, hip pitch on failing, the sideways cheat force.
+//! - the swing ankle doesn't oppose gravity, and its pitch clamp;
+//! - slopes: on ground steeper than slopeMinDot he re-steps less (legsApartRestep at least 0.7), doesn't taper his
+//!   knees, keeps his planted feet slopeMoveFoot down the slope (the direction is our reading) and lowers his pelvis
+//!   by the feet's height difference beyond a step up's only if slopeDrop1/2 are set (RDR2 has 0.7 / 1.8 for two
+//!   unnamed values there, but how it uses them isn't known and our reading made him fall, so off by default);
+//! - step rules as parameters: legsApartRestep, legsTogetherRestep, stepDecisionThreshold, stepWait,
+//!   changeStepTime, alwaysStepWithFarthest (RDR2's defaults leave all but legsApartRestep off).
+//! Not here yet: stepIfInSupport (its speed threshold isn't known), more foot friction on slopes, running, crouch
+//! start, the injured-leg limp, obstacle avoidance, lean channels, the turn step, hip pitch on failing, the sideways
+//! cheat force.
 
 /// configureBalance's RDR2 parameters this port uses (RDR2's names and defaults).
 #[derive(Clone, Copy, Debug)]
@@ -25,12 +32,28 @@ pub struct Params {
     pub ankle_balance: bool,
     pub start_flat: f32,
     pub end_flat: f32,
+    pub slope_min_dot: f32,
+    pub no_slope_time: f32,
+    pub slope_move_foot: f32,
+    /// pelvis drop per metre of the feet's height difference on a slope, both feet down / one. RDR2 has 0.7 / 1.8 there,
+    /// but neither their names nor how it uses them are known, and our reading made him fall on 20-26 degree ramps, so
+    /// it is off unless set (slopeDrop2 / slopeDrop1)
+    pub slope_drop: [f32; 2],
+    pub legs_apart_restep: f32,
+    pub legs_together_restep: f32,
+    pub step_decision_threshold: f32,
+    pub step_wait: f32,
+    pub change_step_time: f32,
+    pub always_step_with_farthest: bool,
 }
 
 impl Default for Params {
     fn default() -> Params {
         Params { max_steps: 100, max_balance_time: 50.0, max_still_time: 50.0, balance_indefinitely: false, giveup_height: 0.5,
-                 fall_type: 0, fall_mult: 1.0, step_height_inc4_step: 0.1, ankle_balance: true, start_flat: 0.1, end_flat: 0.3 }
+                 fall_type: 0, fall_mult: 1.0, step_height_inc4_step: 0.1, ankle_balance: true, start_flat: 0.1, end_flat: 0.3,
+                 slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.0, 0.0], legs_apart_restep: 0.2,
+                 legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
+                 always_step_with_farthest: false }
     }
 }
 
@@ -49,6 +72,17 @@ impl Params {
             "ankleBalance" => self.ankle_balance = v != 0.0,
             "startFlat" => self.start_flat = v,
             "endFlat" => self.end_flat = v,
+            "slopeMinDot" => self.slope_min_dot = v,
+            "noSlopeTime" => self.no_slope_time = v,
+            "slopeMoveFoot" => self.slope_move_foot = v,
+            "slopeDrop2" => self.slope_drop[0] = v,
+            "slopeDrop1" => self.slope_drop[1] = v,
+            "legsApartRestep" => self.legs_apart_restep = v,
+            "legsTogetherRestep" => self.legs_together_restep = v,
+            "stepDecisionThreshold" => self.step_decision_threshold = v,
+            "stepWait" => self.step_wait = v,
+            "changeStepTime" => self.change_step_time = v,
+            "alwaysStepWithFarthest" => self.always_step_with_farthest = v != 0.0,
             _ => return false,
         }
         true
@@ -65,6 +99,12 @@ const STILL: f32 = 0.25;
 /// Step up: the swing foot's ground is this much over the planted one's.
 const STEP_UP: f32 = 0.1;
 const SWING_ANKLE_CLAMP: f32 = 9.7;
+/// On a slope he re-steps for feet at least this far apart.
+const SLOPE_RESTEP: f32 = 0.7;
+/// stepWait applies below this speed (m/s), and is 0.1 s shorter above it.
+const STEP_WAIT_SPEED: f32 = 0.7;
+/// The pelvis never sinks below this over the feet on a slope.
+const SLOPE_FLOOR: f32 = 0.2;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Rdr2 {
@@ -76,16 +116,23 @@ pub struct Rdr2 {
     pub failing: Option<f32>,
     /// in [-0.15, 0.15]: which hip folds first
     pub asym: f32,
+    pub on_slope: bool,
+    /// s since the last step ended (large before the first), and the current step's age
+    pub since_step: f32,
+    pub step_age: f32,
+    pub speed: f32,
 }
 
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
-        Rdr2 { p, time: 0.0, still: 0.0, steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15 }
+        Rdr2 { p, time: 0.0, still: 0.0, steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
+               since_step: 100000.0, step_age: 0.0, speed: 0.0 }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.
-    pub fn update(&mut self, dt: f32, angvel2: f32, stepped: bool) {
+    pub fn update(&mut self, dt: f32, angvel2: f32, stepped: bool, stepping: bool) {
         self.time += dt;
+        (self.since_step, self.step_age) = if stepping { (0.0, self.step_age + dt) } else { (self.since_step + dt, 0.0) };
         self.still = if angvel2 < STILL { self.still + dt } else { 0.0 };
         self.steps += stepped as u32;
         if self.failing.is_none() && !self.p.balance_indefinitely
@@ -133,5 +180,35 @@ impl Rdr2 {
 
     pub fn swing_ankle_clamp() -> f32 {
         SWING_ANKLE_CLAMP
+    }
+
+    /// The slope flag from the ground's normal under the deciding foot (the planted one, or the higher one).
+    pub fn slope(&mut self, normal_up: f32) {
+        self.on_slope = normal_up < 1.0 - self.p.slope_min_dot && self.time >= self.p.no_slope_time;
+    }
+
+    /// Feet at least this far apart (beyond their minimum spread) make him step though the COM is supported.
+    pub fn legs_apart(&self) -> f32 {
+        if self.on_slope { self.p.legs_apart_restep.max(SLOPE_RESTEP) } else { self.p.legs_apart_restep }
+    }
+
+    /// May a new step start now? stepWait holds the next one back when he's slow.
+    pub fn may_step(&self) -> bool {
+        let wait = if self.speed < STEP_WAIT_SPEED { self.p.step_wait } else { self.p.step_wait - 0.1 };
+        wait <= 0.0 || self.since_step > wait
+    }
+
+    /// changeStepTime: a step this old may be re-decided (the other foot may take over).
+    pub fn redecide(&self) -> bool {
+        self.p.change_step_time > 0.0 && self.step_age > self.p.change_step_time
+    }
+
+    /// Pelvis height on a slope: lowered by the feet's height difference beyond a step up's.
+    pub fn slope_height(&self, h: f32, feet_dz: f32, both: bool) -> f32 {
+        if !self.on_slope {
+            return h;
+        }
+        // only a difference beyond a step up's (our reading: RDR2's own use of these two isn't known)
+        (h - (feet_dz.abs() - STEP_UP).max(0.0) * self.p.slope_drop[if both { 0 } else { 1 }]).max(SLOPE_FLOOR.min(h))
     }
 }

@@ -370,16 +370,27 @@ fn hip_room(hip: &Eff3, l1: f32, l2: f32, l3: f32, l4: f32) -> f32 {
     (k * g2).fma(e2 - a2, k * g1 * (e1 - a1))
 }
 
-fn decide(s: &Snap, f: &mut Feet) {
+fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
     let free = f.flags & delirium_data::kv!(1 int) == 0;
     let a = f.dist[0] > f.dist[1] && free;
     let b = f.dist[1] > f.dist[0] && free;
+    if let Some(r) = r {
+        if f.stepping != 0 && r.redecide() {
+            f.stepping = 0;
+        }
+        if f.stepping == 0 && !r.may_step() {
+            return;
+        }
+    }
     if f.stepping != 0 {
         return;
     }
     let (lc, rc) = (s.flags & delirium_data::kv!(251 int) != 0, s.flags & delirium_data::kv!(7 int) != 0);
     let mut left = if rc { a || !lc } else { !lc && b };
     let mut right = if lc { b || !rc } else { !rc && a };
+    if r.is_some_and(|r| r.p.always_step_with_farthest) {
+        (left, right) = (a, b);
+    }
     if left || right {
         if f.countdown >= 0 {
             f.countdown -= 1;
@@ -413,11 +424,22 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     f.centre = (f.pos[0] + f.pos[1]) * 0.5;
     f.dist = [0.0; 2];
     let pc = sat(s.hvel.mul_add(Vec3::splat(p.lead), s.com), up, sdot(f.centre, up, b"zyx"), b"yxz");
-    let inside = support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172;
+    let inside = match p.rdr2 {
+        Some(r) => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172 - r.p.step_decision_threshold,
+        None => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172,
+    };
     f.flags = (f.flags & !delirium_data::kv!(1 int)) | (inside as u8) << 2;
     let (lpos, rpos) = (s.legs[0].foot.m.d, s.legs[1].foot.m.d);
-    if f.flags & delirium_data::kv!(1 int) != 0 && slen(shz(rpos - lpos, up, b"yzx"), b"zyx") > p.foot_width + delirium_data::kv!(60) {
-        f.flags &= !delirium_data::kv!(1 int);
+    match p.rdr2 {
+        Some(r) => {
+            let apart = slen(shz(rpos - lpos, up, b"yzx"), b"zyx");
+            if f.flags & delirium_data::kv!(1 int) != 0 && (apart > p.foot_width + r.legs_apart() || apart < p.foot_width - r.p.legs_together_restep) {
+                f.flags &= !delirium_data::kv!(1 int);
+            }
+        }
+        None => if f.flags & delirium_data::kv!(1 int) != 0 && slen(shz(rpos - lpos, up, b"yzx"), b"zyx") > p.foot_width + delirium_data::kv!(60) {
+            f.flags &= !delirium_data::kv!(1 int);
+        },
     }
     let (a, c, so) = (s.m.a, s.m.c, p.step_offset);
     let dir_b = vnorm(shz(pc - rpos, up, b"yxz"));
@@ -425,7 +447,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     let dir_a = vnorm(shz(pc - lpos, up, b"yxz"));
     let target_b = a.mul_add(Vec3::splat(so), (c * sdot(c, dir_a, b"zyx") * sdot(a, dir_a, b"zyx")).mul_add(Vec3::splat(so), pc));
     f.dist = [slen(shz(target_a - lpos, up, b"yxz"), b"zyx"), slen(shz(target_b - rpos, up, b"yzx"), b"zyx")];
-    decide(s, f);
+    decide(s, f, p.rdr2.as_ref());
     if f.stepping == 0 {
         f.flags = (f.flags & delirium_data::kv!(252 int)) | (s.flags & delirium_data::kv!(251 int)) | (s.flags & delirium_data::kv!(7 int)) << 1;
         return;
@@ -487,7 +509,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     if landed || (contact && !other) {
         f.flags |= if two { delirium_data::kv!(253 int) } else { delirium_data::kv!(251 int) };
         f.stepping = 0;
-        decide(s, f);
+        decide(s, f, p.rdr2.as_ref());
     }
 }
 
@@ -726,6 +748,15 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     };
     let low = (sdot(f.pos[0], up, b"yxz") - drop(f.pos[0])).min(sdot(f.pos[1], up, b"zxy") - drop(f.pos[1]));
     let mut t = f.pos;
+    if let Some(r) = p.rdr2.filter(|r| r.on_slope) {
+        for (i, planted) in [lp, rp].into_iter().enumerate() {
+            let n = p.normal[i];
+            let down = n * n.z - Vec3::Z;
+            if planted && down.length_squared() > 1e-6 {
+                t[i] += down.normalize() * r.p.slope_move_foot;
+            }
+        }
+    }
     if lp {
         t[0] = up.mul_add(Vec3::splat(pv.out[0] * p.hip_dist), t[0]);
     }
@@ -736,7 +767,8 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     s.spine.desired[1] = lean;
     s.height = match p.rdr2 {
         // RDR2: the reach shortened by the feet's spread, from the lower foot
-        Some(_) => crate::nmdbm_rdr2::Rdr2::pelvis_height(r * p.leg_length, (f.pos[1] - f.pos[0]).length())
+        Some(rd) => rd.slope_height(crate::nmdbm_rdr2::Rdr2::pelvis_height(r * p.leg_length, (f.pos[1] - f.pos[0]).length()),
+                                    up.vd(f.pos[1] - f.pos[0]), lp && rp)
             - (sdot(f.centre, up, b"yzx") - up.vd(f.pos[0]).min(up.vd(f.pos[1]))),
         None => r * p.leg_length - (sdot(f.centre, up, b"yzx") - low) + if lp && rp { 0.0 } else { delirium_data::kv!(131) },
     };
@@ -1288,13 +1320,20 @@ impl Dbm {
             writeln!(f, "{:?}|{:?}|{:?}|{:?}", self.p, s, self.f, self.pv).unwrap();
         }
         let was = self.f.stepping;
+        if let Some(r) = self.p.rdr2.as_mut() {
+            let up = self.p.up;
+            let i = match was { 1 => 1, 2 => 0, _ => (up.vd(self.p.target[1]) > up.vd(self.p.target[0])) as usize };
+            r.slope(self.p.normal[i].z);
+            r.speed = s.hvel.length();
+            self.p.taper = c.taper && !r.on_slope;
+        }
         if let (Some(r), i @ 1..=2) = (self.p.rdr2, was) {
             let (i, up) = (i as usize - 1, self.p.up);
             self.p.step_height += r.step_up(up.vd(self.p.target[i]), up.vd(self.p.target[1 - i]));
         }
         foot_placement(&self.p, &s, &mut self.f);
         if let Some(r) = self.p.rdr2.as_mut() {
-            r.update(dt, s.angvel.length_squared(), was == 0 && self.f.stepping != 0);
+            r.update(dt, s.angvel.length_squared(), was == 0 && self.f.stepping != 0, self.f.stepping != 0);
         }
         pelvis_control(&self.p, &s, &mut self.pv);
         balance_solve(&self.p, &self.f, &self.pv, &mut s);
