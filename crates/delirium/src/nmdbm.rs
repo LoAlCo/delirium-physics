@@ -781,15 +781,6 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     };
     let low = (sdot(f.pos[0], up, b"yxz") - drop(f.pos[0])).min(sdot(f.pos[1], up, b"zxy") - drop(f.pos[1]));
     let mut t = f.pos;
-    if let Some(r) = p.rdr2.filter(|r| r.on_slope) {
-        for (i, planted) in [lp, rp].into_iter().enumerate() {
-            let n = p.normal[i];
-            let down = n * n.z - Vec3::Z;
-            if planted && down.length_squared() > 1e-6 {
-                t[i] += down.normalize() * r.p.slope_move_foot;
-            }
-        }
-    }
     if let Some(rd) = p.rdr2 {
         let apart = (f.pos[1] - f.pos[0]).length();
         for (i, planted) in [lp, rp].into_iter().enumerate() {
@@ -804,13 +795,27 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     if rp {
         t[1] = up.mul_add(Vec3::splat(-(pv.out[0] * p.hip_dist)), t[1]);
     }
+    // RDR2: the pelvis's height over the support centre, or on a slope over a point between the feet
+    let mut base = f.centre;
+    let rdr2_height = p.rdr2.map(|rd| {
+        let l = r * p.leg_length;
+        let h = crate::nmdbm_rdr2::Rdr2::pelvis_height(l, (t[1] - t[0]).length());
+        if !rd.on_slope {
+            return h;
+        }
+        let (hi, lo) = if Vec3::Z.dot(t[0]) > Vec3::Z.dot(t[1]) { (0, 1) } else { (1, 0) };
+        if f.stepping == 0 {
+            t[hi] += rd.slope_foot(up, p.normal[hi], t[hi] - t[lo]);
+        }
+        let (b, h) = rd.slope_pelvis(up, l, h, t[hi], t[lo], f.stepping != 0, s.vel);
+        base = b.unwrap_or(base);
+        h
+    });
     let lean = pv.out[0].clamp(-delirium_data::kv!(60), delirium_data::kv!(60));
     s.spine.desired[1] = lean;
     s.height = match p.rdr2 {
-        // RDR2: the reach shortened by the feet's spread, from the lower foot
-        Some(rd) => rd.slope_height(crate::nmdbm_rdr2::Rdr2::pelvis_height(r * p.leg_length, (f.pos[1] - f.pos[0]).length()),
-                                    up.vd(f.pos[1] - f.pos[0]), lp && rp)
-            - (sdot(f.centre, up, b"yzx") - up.vd(f.pos[0]).min(up.vd(f.pos[1]))),
+        // RDR2: the reach shortened by the feet's spread
+        Some(_) => rdr2_height.unwrap_or_default(),
         None => r * p.leg_length - (sdot(f.centre, up, b"yzx") - low) + if lp && rp { 0.0 } else { delirium_data::kv!(131) },
     };
     let mut target = t;
@@ -829,7 +834,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             let a = fwd.mul_add(Vec3::splat(e.z), side.mul_add(Vec3::splat(e.y), hup * e.x));
             qm[2].mul_add(Vec3::splat(a.z), qm[1].mul_add(Vec3::splat(a.y), qm[0] * a.x))
         });
-        let pdd = up.mul_add(Vec3::splat(pv.p68), f.centre) + pv.off;
+        let pdd = up.mul_add(Vec3::splat(pv.p68), base) + pv.off;
         let pdm = M34 { a: pd[0], b: pd[1], c: pd[2], d: pdd };
         let pel = s.pelvis.m;
         let row = |k: usize| pel.c.mul_add(Vec3::splat(pd[2][k]), pel.b.mul_add(Vec3::splat(pd[1][k]), pel.a * pd[0][k]));
@@ -870,6 +875,8 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         (crate::nmdbm_rdr2::Rdr2::ankle_shares(d), crate::nmdbm_rdr2::Rdr2::ankle_aim(Vec3::Z, up, s.com, horizontal(s.vel, up), f.centre))
     });
     let mut bal = [0.0f32; 2];
+    // RDR2's ankle balance twist: the twist laying the foot on the ground / on the tilted normal
+    let mut twist_flat = [None; 2];
     for (i, planted) in [lp, rp].into_iter().enumerate() {
         let side = if i == 0 { 1.0 } else { -1.0 };
         let leg = &mut s.legs[i];
@@ -886,6 +893,9 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             if let Some((_, tilt)) = aim {
                 let n = bevy_math::Quat::from_rotation_arc(Vec3::Z, tilt) * normal[i];
                 bal[i] = asin(sdot(leg.knee.m.c, vnorm(k - target[i]).vx(n), b"xyz"));
+                let d = vnorm(k - target[i]);
+                let tw = |n: Vec3| asin(vnorm(n.vx(leg.knee.m.c)).vd(d.vx(n)));
+                twist_flat[i] = Some((tw(normal[i]), tw(n)));
             }
             asin(sdot(leg.knee.m.c, vnorm(k - target[i]).vx(normal[i]), b"xyz"))
         };
@@ -898,15 +908,28 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     };
     let (ol, or) = (over(&s.legs[0].hip), over(&s.legs[1].hip));
     // RDR2's ankle balance: the balancing pitch fades as the foot tilts off flat
-    let w = [0, 1].map(|i| p.rdr2.map(|r| r.ankle_weight(s.legs[i].ankle.actual[0] - s.legs[i].ankle.desired[0])));
+    let w = [0, 1].map(|i| p.rdr2.map(|r| {
+        let off = if r.p.ankle_balance { r.p.ankle_offset } else { 0.0 };
+        r.ankle_weight(off + s.legs[i].ankle.actual[0] - s.legs[i].ankle.desired[0])
+    }));
+    // RDR2 balances with the ankles only below 1 m/s; faster, the planted ankles lie flat
+    let slow = s.vel.length() < 1.0;
     let rd = p.rdr2.filter(|r| r.p.ankle_balance && !r.p.ankle_keep_pelvis);
+    if let Some(r) = rd {
+        for (i, sgn) in [(0, 1.0), (1, -1.0)] {
+            if let (true, Some((flat, tilted))) = (slow, twist_flat[i]) {
+                let w = r.ankle_twist_weight(s.legs[i].ankle.actual[2] - flat);
+                s.legs[i].ankle.desired[2] = sgn * (flat + r.p.ankle_twist_mult * aim.map_or(0.0, |a| a.0[i]) * w * (tilted - flat));
+            }
+        }
+    }
     let ankle = |i: usize, flat: f32, w: f32| match (rd, aim) {
         (Some(r), Some((share, _))) => flat + r.p.ankle_mult * share[i] * w * (bal[i] - flat) + r.p.ankle_offset,
         _ => flat,
     };
     if lp {
         s.legs[0].ankle.desired[0] = match w[0] {
-            Some(w) if rd.is_some() => ankle(0, s.legs[0].ankle.desired[0], w),
+            Some(w) if rd.is_some() => if slow { ankle(0, s.legs[0].ankle.desired[0], w) } else { s.legs[0].ankle.desired[0] },
             Some(w) => (pv.out[1] + lean).mul_add(w, s.legs[0].ankle.desired[0]),
             None => pv.out[1] + s.legs[0].ankle.desired[0] + lean,
         };
@@ -918,7 +941,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     s.legs[0].ankle.desired[1] = twist(0, lp);
     if rp {
         s.legs[1].ankle.desired[0] = match w[1] {
-            Some(w) if rd.is_some() => ankle(1, s.legs[1].ankle.desired[0], w),
+            Some(w) if rd.is_some() => if slow { ankle(1, s.legs[1].ankle.desired[0], w) } else { s.legs[1].ankle.desired[0] },
             Some(w) => s.legs[1].ankle.desired[0] + (pv.out[1] - lean) * w,
             None => s.legs[1].ankle.desired[0] + (pv.out[1] - lean),
         };
@@ -1421,7 +1444,8 @@ impl Dbm {
             let i = match was { 1 => 1, 2 => 0, _ => (up.vd(self.p.target[1]) > up.vd(self.p.target[0])) as usize };
             r.slope(self.p.normal[i].z);
             r.speed = s.hvel.length();
-            r.turning = self.pv.fixed_vel;
+            let facing = horizontal(-s.pelvis.m.c, up).normalize_or_zero().dot(horizontal(self.pv.vel, up).normalize_or_zero());
+            r.turn(self.p.dt, self.pv.fixed_vel, facing);
             r.running = r.speed >= r.p.run_vel;
             if r.running {
                 (self.p.leg_stiffness, self.p.step_height) = (r.p.leg_stiffness_run, r.p.step_height_run);
@@ -1434,6 +1458,10 @@ impl Dbm {
         }
         foot_placement(&self.p, &s, &mut self.f);
         if let Some(r) = self.p.rdr2.as_mut() {
+            // a step landing ends the turn step for the rest of the tick
+            if was != 0 && self.f.stepping == 0 {
+                (r.landed, r.turning) = (true, false);
+            }
             if let i @ 1..=2 = self.f.stepping {
                 r.last_foot = i as usize - 1;
             }

@@ -3,15 +3,17 @@
 //! code). GTA IV's balancer (nmdbm.rs) still does the work; this changes, when on:
 //! - failing: more fail tests (feet giving out at 0.5 m, the ankles' support at 2.4), and step, time and stillness
 //!   limits that no longer drop him at once but drain his legs' strength so he gives way, one leg first;
-//! - pelvis height from leg length and how far apart the feet are;
+//! - pelvis height from leg length and how far apart the feet are, over the support centre;
 //! - a step up onto something higher lifts the swing foot more for that step;
 //! - ankle balance: the planted ankles' balancing pitch fades out once the foot has tilted off flat;
 //! - the swing ankle doesn't oppose gravity, and its pitch clamp;
-//! - slopes: on ground steeper than slopeMinDot he re-steps less (legsApartRestep at least 0.7), doesn't taper his
-//!   knees, keeps his planted feet slopeMoveFoot down the slope (the direction is our reading) and lowers his pelvis
-//!   by the feet's height difference beyond a step up's only if slopeDrop1/2 are set (RDR2 has 0.7 / 1.8 for two
-//!   unnamed values there, but how it uses them isn't known and our reading made him fall, so off by default);
-//! - step rules as parameters: legsApartRestep, legsTogetherRestep, stepDecisionThreshold, stepWait,
+//! - slopes: on ground steeper than slopeMinDot he re-steps less (legsApartRestep at least 0.7) and doesn't taper
+//!   his knees. Between steps the higher foot's target moves up the slope by slopeMoveFoot times how much the slope
+//!   tilts along the feet. His pelvis sits between the feet at 0.5 - tan^3 of their rise over their spread from the
+//!   higher one, and sinks by 0.7 (between steps) or 1.8 (stepping downhill) of how far it is above what a leg
+//!   reaches to both feet, never below 0.2 m (slopeDrop2 / slopeDrop1);
+//! - step rules as parameters: legsApartRestep, legsTogetherRestep, stepDecisionThreshold, stepWait (only below
+//!   0.7 m/s),
 //!   changeStepTime, alwaysStepWithFarthest (RDR2's defaults leave all but legsApartRestep off).
 //! - running: at runVel or faster (RDR2's default 100 m/s leaves it off; the game sets it for running peds) the legs
 //!   use legStiffnessRun, the swing foot stepHeightRun, the knees taperKneeStrengthRun, and the swing leg goes half as
@@ -32,10 +34,14 @@
 //!   0.4 s ahead (speed capped at 0.3), by ankleMult x its share (1/distance^5 of the feet from the COM 0.2 s ahead)
 //!   x the fade, plus ankleOffset, in place of the pelvis control's ankle term; the pelvis control loses its roll
 //!   integrator and lowers its pitch target by clamp(0.26 v, 0, 0.2) on one foot and clamp(0.4 v, -0.03, 0.2) + 0.03
-//!   on both once he has stepped (v his backward speed) (0.2 v / 0.7 v capped at 0.5 without ankle balance);
+//!   on both once he has stepped (v his backward speed) (0.2 v / 0.7 v capped at 0.5 without ankle balance).
+//!   Its twist the same way: the twist laying the foot on the ground, plus ankleTwistMult x share x a fade
+//!   (startFlatTwist / endFlatTwist) of the difference to the tilted normal's, mirrored on the right foot. Only
+//!   below 1 m/s; faster, the planted ankles lie flat;
 //! - the turn step (when a behaviour asks the balancer to face a way): hip twist up to 1.9 rad, split with the ankle
 //!   (0.3 of it on a planted leg, 0.8 swinging), each leg's twist within minLegTwist/maxLegTwist (drawn +-0.3/0.2
-//!   per step), and a 0.17 +- 0.07 lift on every step;
+//!   per step), and a 0.17 +- 0.07 lift on every step. Every third step landing, and when he turns off a heading he
+//!   was facing (within acos 0.9), he pauses -0.2 to 0.8 s first; a step landing ends it for that tick;
 //! - minKneeAngle (a swing knee limit; never acts at RDR2's -0.5) and fallReduceGravityComp (oppose gravity drains
 //!   with the hips: hips r, knees and ankles 2r);
 //! - off unless set (as RDR2's defaults leave them): the predictionTime, stepClampScale and liftFeet variances drawn
@@ -49,9 +55,9 @@
 //!   crouchBendMax), he keeps the knees bent (at most 0.5) and the hips as they were, letting them go at
 //!   crouchStandRate and crouchHipRate, for crouchTime. The crouch depth is (0.99 - COM height over the lower foot /
 //!   (leg length - 0.0375)) x 0.79235, the leg length taken as his standing pelvis height (ours).
-//! Not here: extra foot friction on slopes, the slope pelvis drop (off), obstacle and other-leg avoidance, lean
-//! priorities, hipError, ankle balance's twist part, the turn step's random pauses and flat-foot test, fallType 3
-//! (slump: it hands over to balancerCollisionsReaction).
+//! Not here: extra foot friction on slopes (where RDR2 reads it isn't known, and Delirium's friction is fixed per
+//! part), obstacle and other-leg avoidance, lean priorities, hipError (nothing at its default 0), the turn step's
+//! flat-foot test, and fallType 3 (slump: it only sets balancerCollisionsReaction's state, so here it is fallType 0).
 
 /// configureBalance's RDR2 parameters this port uses (RDR2's names and defaults).
 #[derive(Clone, Copy, Debug)]
@@ -71,9 +77,8 @@ pub struct Params {
     pub slope_min_dot: f32,
     pub no_slope_time: f32,
     pub slope_move_foot: f32,
-    /// pelvis drop per metre of the feet's height difference on a slope, both feet down / one. RDR2 has 0.7 / 1.8 there,
-    /// but neither their names nor how it uses them are known, and our reading made him fall on 20-26 degree ramps, so
-    /// it is off unless set (slopeDrop2 / slopeDrop1)
+    /// on a slope, the share of the pelvis's height over what a leg reaches to both feet it gives up, between steps /
+    /// stepping downhill (slopeDrop2 / slopeDrop1: RDR2's two unnamed values)
     pub slope_drop: [f32; 2],
     pub legs_apart_restep: f32,
     pub legs_together_restep: f32,
@@ -128,13 +133,17 @@ pub struct Params {
     pub crouch_time: f32,
     pub crouch_stand_rate: f32,
     pub crouch_hip_rate: f32,
+    /// ankle balance's twist: the window off flat and the gain, as the pitch's
+    pub start_flat_twist: f32,
+    pub end_flat_twist: f32,
+    pub ankle_twist_mult: f32,
 }
 
 impl Default for Params {
     fn default() -> Params {
         Params { max_steps: 100, max_balance_time: 50.0, max_still_time: 50.0, balance_indefinitely: false, giveup_height: 0.5,
                  fall_type: 0, fall_mult: 1.0, step_height_inc4_step: 0.1, ankle_balance: true, start_flat: 0.1, end_flat: 0.3,
-                 slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.0, 0.0], legs_apart_restep: 0.2,
+                 slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.7, 1.8], legs_apart_restep: 0.2,
                  legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
                  always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
                  taper_knee_strength_run: false, limp_scale: 0.25, limb_requests: true, limb_order_reversed: false,
@@ -145,7 +154,7 @@ impl Default for Params {
                  step_if_in_support: true, ankle_offset: -0.12, ankle_mult: 25.0, min_knee_angle: -0.5,
                  fall_reduce_gravity_comp: false, min_leg_twist: -1.9, max_leg_twist: 0.2, ankle_keep_pelvis: false,
                  crouch: false, crouch_bend_thresh: 0.3, crouch_bend_max: 0.55, crouch_time: 0.5, crouch_stand_rate: 0.4,
-                 crouch_hip_rate: 0.25 }
+                 crouch_hip_rate: 0.25, start_flat_twist: 0.05, end_flat_twist: 0.15, ankle_twist_mult: 20.0 }
     }
 }
 
@@ -212,6 +221,9 @@ impl Params {
             "crouchTime" => self.crouch_time = v,
             "crouchStandRate" => self.crouch_stand_rate = v,
             "crouchHipRate" => self.crouch_hip_rate = v,
+            "startFlatTwist" => self.start_flat_twist = v,
+            "endFlatTwist" => self.end_flat_twist = v,
+            "ankleTwistMult" => self.ankle_twist_mult = v,
             _ => return false,
         }
         true
@@ -230,8 +242,14 @@ const STEP_UP: f32 = 0.1;
 const SWING_ANKLE_CLAMP: f32 = 9.7;
 /// On a slope he re-steps for feet at least this far apart.
 const SLOPE_RESTEP: f32 = 0.7;
-/// stepWait applies below this speed (m/s), and is 0.1 s shorter above it.
+/// stepWait applies below this speed (m/s); above it the wait is FAST_STEP_WAIT, which never holds a step back.
 const STEP_WAIT_SPEED: f32 = 0.7;
+const FAST_STEP_WAIT: f32 = -0.1;
+/// The turn step: facing the heading this closely (cosine) he doesn't turn; the pause's range (s).
+const TURN_FACING: f32 = 0.9;
+const TURN_PAUSE: (f32, f32) = (-0.2, 0.8);
+/// On a slope: how far the pelvis point leans from the feet's midpoint toward RDR2's (+0x27c, unnamed; 1 = all the way).
+const SLOPE_PELVIS_BLEND: f32 = 1.0;
 /// The pelvis never sinks below this over the feet on a slope.
 const SLOPE_FLOOR: f32 = 0.2;
 /// Running: the swing leg's stiffness share.
@@ -318,6 +336,11 @@ pub struct Rdr2 {
     pub turning: bool,
     pub leg_twist: (f32, f32),
     pub turn_lift: f32,
+    /// the turn step's pause (s; it turns only once this runs out), whether he faced the heading last time, and
+    /// whether a step landed last tick
+    pause: f32,
+    aligned: bool,
+    pub landed: bool,
     /// crouch start: knee bend and hip pitch it holds (letting them go), and until when
     pub crouching: Option<(f32, f32, f32)>,
     started: bool,
@@ -329,7 +352,7 @@ impl Rdr2 {
                since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0), owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false,
-               leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0, crouching: None,
+               leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0, pause: 0.0, aligned: false, landed: false, crouching: None,
                started: false }
     }
 
@@ -357,7 +380,8 @@ impl Rdr2 {
     /// Leg (knees, ankles) and per-side hip stiffness while failing, from the balancer's leg stiffness.
     pub fn drain(&self, k: f32) -> Option<(f32, [f32; 2])> {
         let t = self.time - self.failing?;
-        // fallType 2: keep balancing at full strength (1, keep stepping, and 3, slump, drain as 0 for now)
+        // fallType 2: keep balancing at full strength (1, keep stepping, and 3, slump, drain as 0: slump is a state of
+        // balancerCollisionsReaction, which RDR2 sets and nothing here reads)
         if self.p.fall_type == 2 {
             return None;
         }
@@ -376,6 +400,33 @@ impl Rdr2 {
     }
 
     /// RDR2 draws these for each new step (all fixed with its defaults).
+    /// The turn step: `want` a heading asked of him, `facing` how far he faces it (cosine). Every third step
+    /// landing, and when he turns off a heading he was facing, he waits a random pause (-0.2 to 0.8 s) first.
+    pub fn turn(&mut self, dt: f32, want: bool, facing: f32) {
+        self.pause -= dt;
+        if std::mem::take(&mut self.landed) && self.pause <= 0.0 && self.steps > 1 && self.steps % 3 == 0 {
+            self.pause = self.turn_pause();
+        }
+        self.turning = false;
+        if !want {
+            return;
+        }
+        if facing >= TURN_FACING {
+            self.aligned = true;
+            return;
+        }
+        if self.aligned && self.pause <= 0.0 {
+            self.pause = self.turn_pause();
+        }
+        if self.pause <= 0.0 {
+            (self.turning, self.aligned) = (true, false);
+        }
+    }
+
+    fn turn_pause(&mut self) -> f32 {
+        TURN_PAUSE.0 + (TURN_PAUSE.1 - TURN_PAUSE.0) * (self.rand() + 1.0) * 0.5
+    }
+
     fn draw(&mut self) {
         let p = self.p;
         self.prediction = p.prediction_time + p.prediction_time_variance * self.rand();
@@ -513,7 +564,7 @@ impl Rdr2 {
 
     /// May a new step start now? stepWait holds the next one back when he's slow.
     pub fn may_step(&self) -> bool {
-        let wait = if self.speed < STEP_WAIT_SPEED { self.p.step_wait } else { self.p.step_wait - 0.1 };
+        let wait = if self.speed < STEP_WAIT_SPEED { self.p.step_wait } else { FAST_STEP_WAIT };
         wait <= 0.0 || self.since_step > wait
     }
 
@@ -530,12 +581,42 @@ impl Rdr2 {
         (1.0 - 2.5 * (feet_apart.clamp(0.6, 1.0) - 0.6)) * self.limp.1 * self.p.limp_scale
     }
 
-    /// Pelvis height on a slope: lowered by the feet's height difference beyond a step up's.
-    pub fn slope_height(&self, h: f32, feet_dz: f32, both: bool) -> f32 {
-        if !self.on_slope {
-            return h;
+    /// On a slope, between steps: how far the higher foot's target moves, `n` its ground's normal, `apart` from the
+    /// lower foot to it. Up the slope, by slopeMoveFoot times how much the slope tilts along the feet.
+    pub fn slope_foot(&self, up: bevy_math::Vec3, n: bevy_math::Vec3, apart: bevy_math::Vec3) -> bevy_math::Vec3 {
+        let u = apart.normalize_or_zero();
+        let (u, up) = (u - n * u.dot(n), up - n * up.dot(n));
+        u * (self.p.slope_move_foot * up.dot(u))
+    }
+
+    /// On a slope: the point the pelvis stands over (None: the support centre) and its height `h` over it, `l` the
+    /// leg's reach, `hi` / `lo` the higher and lower foot.
+    pub fn slope_pelvis(&self, up: bevy_math::Vec3, l: f32, h: f32, hi: bevy_math::Vec3, lo: bevy_math::Vec3, stepping: bool, vel: bevy_math::Vec3) -> (Option<bevy_math::Vec3>, f32) {
+        let rise = up.dot(hi - lo);
+        // the lower foot raised to the higher's height
+        let level = lo + up * (bevy_math::Vec3::Z.dot(hi) - up.dot(lo));
+        let across = level - hi;
+        let d = across.length();
+        let along = across.dot(lo - hi);
+        let base = (d > 1e-6 && along > 1e-6).then(|| {
+            // 0.5 - (rise / spread)^3 of the way from the higher foot, or halfway outside [0, 0.5]
+            let x = (level + hi) * 0.5 + up * (rise * rise / d);
+            let t = (x - hi).dot(lo - hi) / along;
+            let t = if (0.0..=0.5).contains(&t) { t } else { 0.5 };
+            hi + (lo - hi) * (0.5 - SLOPE_PELVIS_BLEND * (0.5 - t))
+        });
+        // stepping, he only sinks moving toward the lower foot
+        if stepping && vel.dot(lo - hi) <= 0.0 {
+            return (base, h);
         }
-        // only a difference beyond a step up's (our reading: RDR2's own use of these two isn't known)
-        (h - (feet_dz.abs() - STEP_UP).max(0.0) * self.p.slope_drop[if both { 0 } else { 1 }]).max(SLOPE_FLOOR.min(h))
+        let reach = (l * l - 0.25 * (1.5 * l).min(d).powi(2)).sqrt() - 0.5 * rise;
+        let over = if h >= reach { h.min(h - reach) } else { 0.0 };
+        (base, (h - over * self.p.slope_drop[stepping as usize]).max(SLOPE_FLOOR))
+    }
+
+    /// Share of the ankle balance's twist to keep, from how far the foot is twisted off flat (rad).
+    pub fn ankle_twist_weight(&self, off_flat: f32) -> f32 {
+        let (a, b) = (self.p.start_flat_twist, self.p.end_flat_twist);
+        (1.0 - (off_flat.abs() - a) / (b - a)).clamp(0.0, 1.0)
     }
 }
