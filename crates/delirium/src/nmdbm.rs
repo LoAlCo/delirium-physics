@@ -146,6 +146,8 @@ pub struct Params {
     pub taper: bool,
     pub low_abort: bool,
     pub contact: [bool; 2],
+    /// RDR2 core's balancer additions (nmdbm_rdr2.rs); None: GTA IV's
+    pub rdr2: Option<crate::nmdbm_rdr2::Rdr2>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -732,7 +734,12 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     }
     let lean = pv.out[0].clamp(-delirium_data::kv!(60), delirium_data::kv!(60));
     s.spine.desired[1] = lean;
-    s.height = r * p.leg_length - (sdot(f.centre, up, b"yzx") - low) + if lp && rp { 0.0 } else { delirium_data::kv!(131) };
+    s.height = match p.rdr2 {
+        // RDR2: the reach shortened by the feet's spread, from the lower foot
+        Some(_) => crate::nmdbm_rdr2::Rdr2::pelvis_height(r * p.leg_length, (f.pos[1] - f.pos[0]).length())
+            - (sdot(f.centre, up, b"yzx") - up.vd(f.pos[0]).min(up.vd(f.pos[1]))),
+        None => r * p.leg_length - (sdot(f.centre, up, b"yzx") - low) + if lp && rp { 0.0 } else { delirium_data::kv!(131) },
+    };
     let mut target = t;
     let mut normal = p.normal;
     if lp || rp {
@@ -800,12 +807,20 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         (e - 1.0).max(0.0) / (e + delirium_data::kv!(50)) * (h.desired[1] - h.mid_lean2)
     };
     let (ol, or) = (over(&s.legs[0].hip), over(&s.legs[1].hip));
+    // RDR2's ankle balance: the balancing pitch fades as the foot tilts off flat
+    let w = [0, 1].map(|i| p.rdr2.map(|r| r.ankle_weight(s.legs[i].ankle.actual[0] - s.legs[i].ankle.desired[0])));
     if lp {
-        s.legs[0].ankle.desired[0] = pv.out[1] + s.legs[0].ankle.desired[0] + lean;
+        s.legs[0].ankle.desired[0] = match w[0] {
+            Some(w) => (pv.out[1] + lean).mul_add(w, s.legs[0].ankle.desired[0]),
+            None => pv.out[1] + s.legs[0].ankle.desired[0] + lean,
+        };
     }
     s.legs[0].ankle.desired[1] = pv.yaw[0] * 0.5;
     if rp {
-        s.legs[1].ankle.desired[0] += pv.out[1] - lean;
+        s.legs[1].ankle.desired[0] += match w[1] {
+            Some(w) => (pv.out[1] - lean) * w,
+            None => pv.out[1] - lean,
+        };
     }
     s.legs[1].ankle.desired[1] = pv.yaw[1] * 0.5;
     let (a, b) = (ol.max(-or), or.max(-ol));
@@ -1149,8 +1164,14 @@ impl Dbm {
         let pv = Pelvis { centre: f.centre, p52: p.lean_bias, p68: delirium_data::kv!(26), yaw: [turn - splay, -turn - splay], ..default() };
         let mut d = Dbm { p, f, pv, acc: 0.0, leg_offset: 0.0, knee_scale: 1.0, lean: Lean::default(), lean_vec: Vec3::ZERO, as_force: false, push: Vec3::ZERO, ratio: 0.0, event: None, success: false, held: false, last: (Vec3::Z, Vec3::ZERO),
             down: (0..2).any(|i| b.doll.touch[b.ch.joints[(*ANKLE())[i]].child] & delirium_data::kv!(7 int) != 0) };
-        d.held = d.holding(&b.snap(up), l, r);
+        d.held = d.holding(&b.snap(up), l, r, None);
         d
+    }
+
+    /// Switches this balancer to the RDR2 core's (nmdbm_rdr2.rs). Its own step limit replaces GTA IV's countdown.
+    pub fn rdr2(&mut self, r: crate::nmdbm_rdr2::Rdr2) {
+        self.p.rdr2 = Some(r);
+        self.f.countdown = i32::MAX;
     }
 
     pub fn restart_over(&mut self, old: &Dbm) {
@@ -1198,7 +1219,7 @@ impl Dbm {
         }
     }
 
-    fn holding(&mut self, s: &Snap, l: Vec3, r: Vec3) -> bool {
+    fn holding(&mut self, s: &Snap, l: Vec3, r: Vec3, ankles: Option<(Vec3, Vec3)>) -> bool {
         let up = self.p.up;
         let h = up.vd(s.com) - up.vd(l).min(up.vd(r));
         let off = horizontal(s.com - l, up).length().min(horizontal(s.com - r, up).length())
@@ -1206,6 +1227,15 @@ impl Dbm {
         (self.event, self.success) = (None, false);
         if off > self.p.abort * h || (h < 0.5 && self.p.low_abort) || self.f.countdown == -1 {
             return false;
+        }
+        if let (Some(r), Some((al, ar))) = (self.p.rdr2, ankles) {
+            // RDR2: the feet give out at giveupHeight whatever the knees do, and the ankles' own support test
+            let ha = up.vd(s.com) - up.vd(al).min(up.vd(ar));
+            let offa = horizontal(s.com - al, up).length().min(horizontal(s.com - ar, up).length())
+                .min(horizontal(s.com - (al + ar) * 0.5, up).length());
+            if h < r.giveup_height() || crate::nmdbm_rdr2::ANKLE_ABORT * ha < offa {
+                return false;
+            }
         }
         self.success = slen(s.vel, b"yxz") < delirium_data::kv!(17) && slen(s.angvel, b"yxz") < delirium_data::kv!(17);
         let x = off / (h * delirium_data::kv!(142));
@@ -1240,7 +1270,8 @@ impl Dbm {
         self.tilt(b);
         let mut s = b.snap(self.p.up);
         self.last = (s.m.b, s.angvel);
-        if !self.holding(&s, b.foot(0), b.foot(1)) {
+        let ankles = self.p.rdr2.map(|_| (b.joint_pos((*ANKLE())[0]), b.joint_pos((*ANKLE())[1])));
+        if !self.holding(&s, b.foot(0), b.foot(1), ankles) {
             return None;
         }
         self.pv.centre = self.f.centre;
@@ -1256,7 +1287,15 @@ impl Dbm {
             let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
             writeln!(f, "{:?}|{:?}|{:?}|{:?}", self.p, s, self.f, self.pv).unwrap();
         }
+        let was = self.f.stepping;
+        if let (Some(r), i @ 1..=2) = (self.p.rdr2, was) {
+            let (i, up) = (i as usize - 1, self.p.up);
+            self.p.step_height += r.step_up(up.vd(self.p.target[i]), up.vd(self.p.target[1 - i]));
+        }
         foot_placement(&self.p, &s, &mut self.f);
+        if let Some(r) = self.p.rdr2.as_mut() {
+            r.update(dt, s.angvel.length_squared(), was == 0 && self.f.stepping != 0);
+        }
         pelvis_control(&self.p, &s, &mut self.pv);
         balance_solve(&self.p, &self.f, &self.pv, &mut s);
         self.phase3(&mut s);
@@ -1265,9 +1304,10 @@ impl Dbm {
 
     pub(crate) fn phase3(&mut self, s: &mut Snap) {
         self.pv.p68 = s.height;
+        let c = if self.p.rdr2.is_some() { crate::nmdbm_rdr2::Rdr2::swing_ankle_clamp() } else { delirium_data::kv!(274) };
         for leg in &mut s.legs {
             let x = leg.ankle.desired[0];
-            leg.ankle.desired[0] = if x >= -delirium_data::kv!(274) { x.min(delirium_data::kv!(274)) } else { -delirium_data::kv!(274) };
+            leg.ankle.desired[0] = if x >= -c { x.min(c) } else { -c };
         }
     }
 
@@ -1321,6 +1361,22 @@ impl Dbm {
                 (knee.strength, knee.muscle_stiffness) = (k * k, 2.0);
             }
             ch.eff[(*ANKLE())[i]].oppose_gravity = sdot(self.p.normal[i], s.legs[i].foot.m.b, b"yzx").powi(2) * 2.0;
+            if self.p.rdr2.is_some() && !touching {
+                ch.eff[(*ANKLE())[i]].oppose_gravity = 1.0;
+            }
+        }
+    }
+
+    /// RDR2's timed fail: the legs drain, one hip first, until a fail test drops him. Runs after every behaviour has
+    /// set its stiffness, just before the muscles are driven.
+    pub fn drain(&self, ch: &mut Character) {
+        if let Some((leg, hip)) = self.p.rdr2.and_then(|r| r.drain(self.p.leg_stiffness)) {
+            for i in 0..2 {
+                for j in [(*KNEE())[i], (*ANKLE())[i]] {
+                    ch.eff[j].strength = leg * leg;
+                }
+                ch.eff[(*HIP())[i]].strength = hip[i] * hip[i];
+            }
         }
     }
 }
