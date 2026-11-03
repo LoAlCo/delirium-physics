@@ -1218,6 +1218,19 @@ impl Agent {
                 for &(o, k, h) in &out.dbm_owned {
                     r.owned.ask(o, k, h, f32::INFINITY);
                 }
+                for &q in &out.dbm_crouch {
+                    use crate::nmdbm_rdr2::Crouch::*;
+                    match q {
+                        Knee(o, x, rate) => r.owned.knee.ask(o, x, rate),
+                        Hip(o, x, rate) => r.owned.hip.ask(o, x, rate),
+                        ReleaseKnee(rate) => r.owned.knee.release(rate),
+                        ReleaseHip(rate) => r.owned.hip.release(rate),
+                    }
+                }
+                r.force_balance = out.dbm_force_balance;
+                if out.dbm_turn_facing.is_some() {
+                    r.turn_facing = out.dbm_turn_facing;
+                }
             }
         }
         if out.head_look_stop {
@@ -1877,6 +1890,19 @@ impl Agent {
                 if let Some(r) = d.p.rdr2.as_mut() {
                     for &(o, k, h) in &out.dbm_owned {
                         r.owned.ask(o, k, h, f32::INFINITY);
+                    }
+                    for &q in &out.dbm_crouch {
+                        use crate::nmdbm_rdr2::Crouch::*;
+                        match q {
+                            Knee(o, x, rate) => r.owned.knee.ask(o, x, rate),
+                            Hip(o, x, rate) => r.owned.hip.ask(o, x, rate),
+                            ReleaseKnee(rate) => r.owned.knee.release(rate),
+                            ReleaseHip(rate) => r.owned.hip.release(rate),
+                        }
+                    }
+                    r.force_balance = out.dbm_force_balance;
+                    if out.dbm_turn_facing.is_some() {
+                        r.turn_facing = out.dbm_turn_facing;
                     }
                 }
             }

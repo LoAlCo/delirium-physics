@@ -10,9 +10,10 @@
 //! as parameters. They are extra messages: nothing here runs unless one is sent with start=true, so every existing
 //! behaviour is unchanged.
 use crate::extras::{Extra, P};
-use crate::msg::{Error, Kind, Message, Param};
+use crate::msg::{Error, Kind, Message, Param, Value};
+use crate::nmdbm_rdr2::Crouch;
 use crate::nmdbm::LeanMode;
-use crate::nmrs::{HIP, KNEE, NECK, SPINE};
+use crate::nmrs::{ANKLE, ELBOW, HIP, KNEE, NECK, SPINE};
 use crate::ragdoll::GRAVITY;
 use crate::nmshot::Ctx;
 use bevy_math::Vec3;
@@ -485,6 +486,8 @@ pub struct Snap {
     mag: f32, delay: f32, duration: f32, interval: f32, ratio: f32, random: f32, mult: [f32; 3], moving: f32,
     use_dir: bool, dir: Vec3, part: i32, hip: i32, limbs: [bool; 6], phased: bool,
     t: f32, axis: Option<Vec3>, kicked: f32, countered: f32,
+    /// the hit part RDR2 kicks round (snapHitPart is off by default there)
+    rdr2_part: i32,
 }
 
 impl Snap {
@@ -496,13 +499,15 @@ impl Snap {
         let mult = [p.f("snapMovingMult", 1.0)?, p.f("snapBalancingMult", 1.0)?, p.f("snapAirborneMult", 1.0)?];
         let moving = p.f("snapMovingThresh", 1.0)?;
         let (use_dir, dir) = (p.b("snapUseBulletDir", true)?, p.v("bulletDir", Vec3::ZERO)?);
-        let hit = p.b("snapHitPart", true)?;
+        let given = p.get("snapHitPart").map(Value::b).transpose()?;
+        let hit = given.unwrap_or(true);
         let part = p.i("bodyPart", -1)?;
+        let rdr2_part = if given.unwrap_or(false) { part } else { -1 };
         let hip = p.i("snapHipType", 0)?;
         let limbs = [p.b("snapLeftLeg", false)?, p.b("snapRightLeg", false)?, p.b("snapLeftArm", false)?,
                      p.b("snapRightArm", false)?, p.b("snapSpine", true)?, p.b("snapNeck", true)?];
         Ok(Snap { mag, delay, duration, interval, ratio, random, mult, moving, use_dir, dir, part: if hit { part } else { -1 },
-                  hip, limbs, phased: p.b("snapPhasedLegs", true)?, t: 0.0, axis: None, kicked: 0.0, countered: 0.0 })
+                  hip, limbs, phased: p.b("snapPhasedLegs", true)?, t: 0.0, axis: None, kicked: 0.0, countered: 0.0, rdr2_part })
     }
 
     /// The share of a kick (spread over the duration) that falls in this step; all of it when the duration is 0.
@@ -589,14 +594,22 @@ impl Extra for Snap {
         let k = self.share(since, dt, self.kicked);
         if k > 0.0 {
             self.kicked += k;
-            self.apply(c, self.mag * k, dt);
+            if c.ch.rdr2 {
+                self.apply_rdr2(c, self.mag * k);
+            } else {
+                self.apply(c, self.mag * k, dt);
+            }
         }
         let back = since - self.duration - self.interval;
         if self.ratio != 0.0 && back + dt > 0.0 {
             let k = self.share(back, dt, self.countered);
             if k > 0.0 {
                 self.countered += k;
-                self.apply(c, -self.ratio * self.mag * k, dt);
+                if c.ch.rdr2 {
+                    self.apply_rdr2(c, -self.ratio * self.mag * k);
+                } else {
+                    self.apply(c, -self.ratio * self.mag * k, dt);
+                }
             }
         }
     }
@@ -615,7 +628,12 @@ pub struct Spin {
     spin: Option<f32>, hit: Vec3, dir: Vec3, min: f32, time: f32, settle: f32, mult: f32, max_twist: f32,
     max_vel: f32, torque: f32, torque_max: f32, step_type: i32, step_wait: f32, step_time: f32, attacker: Vec3,
     t: f32, heading: Option<(Vec3, f32)>, turned: f32,
+    /// RDR2's values (its defaults: twist mult 20, gates 9 rad / 20 rad/s / 100, torque 10 up to 20 outside 0.2 rad)
+    rdr2: SpinRdr2, lever: Option<f32>, spin_on: bool,
 }
+
+#[derive(Clone, Copy)]
+struct SpinRdr2 { twist_mult: f32, twist: f32, twist_vel: f32, twist_mom: f32, torque: f32, torque_max: f32, tol: f32, align: f32, step_offset: f32 }
 
 impl Spin {
     fn new(p: &mut P) -> Result<Spin, Error> {
@@ -627,6 +645,12 @@ impl Spin {
             torque: p.f("shotSpinTorque", 150.0)?, torque_max: p.f("shotSpinTorqueMax", 300.0)?.abs(),
             step_type: p.i("stepTurnType", 0)?, step_wait: p.f("stepTurnWait", 0.3)?.max(0.0), step_time: p.f("stepTurnTime", 2.0)?.max(0.0),
             attacker: p.v("attackerPos", Vec3::ZERO)?, t: 0.0, heading: None, turned: 0.0,
+            rdr2: SpinRdr2 {
+                twist_mult: p.f("shotSpinTwistMult", 20.0)?, twist: p.f("shotSpinTwist", 9.0)?, twist_vel: p.f("shotSpinTwistVel", 20.0)?,
+                twist_mom: p.f("shotSpinTwistMom", 100.0)?, torque: p.f("shotSpinTorque", 10.0)?, torque_max: p.f("shotSpinTorqueMax", 20.0)?,
+                tol: p.f("shotSpinTorqueTol", 0.2)?, align: 0.9, step_offset: p.f("stepTurnOffset", 0.0)?,
+            },
+            lever: None, spin_on: p.b("shotSpin", true)?,
         })
     }
 
@@ -639,6 +663,9 @@ impl Spin {
 
 impl Extra for Spin {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c, dt);
+        }
         self.t += dt;
         let up = c.ch.up.normalize_or(Vec3::Z);
         let yaw_rate = c.angvel.dot(up);
@@ -822,7 +849,7 @@ impl Snap {
     fn at(mag: f32, part: i32, dir: Vec3) -> Snap {
         Snap { mag, delay: 0.0, duration: 0.0, interval: 0.05, ratio: 0.5, random: 0.25, mult: [1.0; 3], moving: 1.0,
                use_dir: true, dir, part, hip: 0, limbs: [false, false, false, false, true, true], phased: true,
-               t: 0.0, axis: None, kicked: 0.0, countered: 0.0 }
+               t: 0.0, axis: None, kicked: 0.0, countered: 0.0, rdr2_part: part }
     }
 }
 
@@ -970,8 +997,12 @@ fn swell(t: f32, onset: f32, period: f32) -> f32 {
 /// sfbPeriod; sfbNoiseGain adds a tremble.
 pub struct FromBehind {
     period: f32, arms_onset: f32, knees_onset: f32, noise: f32, stiffness: f32, amounts: [f32; 4],
-    t: f32, trunk: Option<Bends>, knees: Option<Bends>,
+    t: f32, trunk: Option<Bends>, knees: Option<Bends>, rdr2: SfbRdr2,
 }
+
+/// RDR2's from-behind parameters (its defaults: spine 4, neck 1, hips 1, knees 0.05, force balance 0.3 s).
+#[derive(Clone, Copy)]
+struct SfbRdr2 { period: f32, amounts: [f32; 4], arms_onset: f32, knees_onset: f32, noise: f32, force_balance: f32 }
 
 impl FromBehind {
     fn new(p: &mut P) -> Result<FromBehind, Error> {
@@ -980,12 +1011,20 @@ impl FromBehind {
             period: p.f("sfbPeriod", 0.7)?.max(0.05), arms_onset: p.f("sfbArmsOnset", 0.0)?.max(0.0),
             knees_onset: p.f("sfbKneesOnset", 0.0)?.max(0.0), noise: p.f("sfbNoiseGain", 0.0)?.max(0.0),
             stiffness: p.f("stiffness", 10.0)?, t: 0.0, trunk: None, knees: None,
+            rdr2: SfbRdr2 {
+                period: p.f("sfbPeriod", 0.7)?, arms_onset: p.f("sfbArmsOnset", 0.0)?, knees_onset: p.f("sfbKneesOnset", 0.0)?,
+                noise: p.f("sfbNoiseGain", 0.0)?, force_balance: p.f("sfbForceBalancePeriod", 0.3)?,
+                amounts: [p.f("sfbSpineAmount", 4.0)?, p.f("sfbNeckAmount", 1.0)?, p.f("sfbHipAmount", 1.0)?, p.f("sfbKneeAmount", 0.05)?],
+            },
         })
     }
 }
 
 impl Extra for FromBehind {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c, dt);
+        }
         self.t += dt;
         let [spine, neck, hip, knee] = self.amounts;
         let trunk = self.trunk.get_or_insert_with(|| {
@@ -1015,14 +1054,25 @@ impl Extra for FromBehind {
     fn done(&self) -> bool {
         self.t > self.period + self.knees_onset.max(self.arms_onset)
     }
+
+    fn stop(&mut self, c: &mut Ctx) {
+        // RDR2 lets the hips and knees go at 1 rad/s
+        if c.ch.rdr2 {
+            c.out.dbm_crouch.extend([Crouch::ReleaseHip(1.0), Crouch::ReleaseKnee(1.0)]);
+        }
+    }
 }
 
 /// RDR2's shot in the guts: he folds over the wound. The spine hunches forward by sigSpineAmount and the neck by
 /// sigNeckAmount and the knees bend a little (sigKneeAmount). It comes in over a fifth of a second, holds for
 /// sigPeriod and eases off over sigBlend. (The hands are reachForWound's, with reachWithOneHand false.)
 pub struct InGuts {
-    spine: f32, neck: f32, knee: f32, period: f32, blend: f32, stiffness: f32, t: f32, bends: Option<Bends>,
+    spine: f32, neck: f32, knee: f32, period: f32, blend: f32, stiffness: f32, t: f32, bends: Option<Bends>, rdr2: SigRdr2,
 }
+
+/// RDR2's in-the-guts parameters (its defaults: spine 2, neck 1, hips 1, knees 0.05 over 2 s, no force balance).
+#[derive(Clone, Copy)]
+struct SigRdr2 { spine: f32, neck: f32, hip: f32, knee: f32, period: f32, knees_onset: f32, force_balance: f32 }
 
 impl InGuts {
     fn new(p: &mut P) -> Result<InGuts, Error> {
@@ -1030,6 +1080,11 @@ impl InGuts {
             spine: p.f("sigSpineAmount", 0.6)?, neck: p.f("sigNeckAmount", 0.25)?, knee: p.f("sigKneeAmount", 0.15)?,
             period: p.f("sigPeriod", 1.5)?.max(0.0), blend: p.f("sigBlend", 0.5)?.max(0.05), stiffness: p.f("stiffness", 10.0)?,
             t: 0.0, bends: None,
+            rdr2: SigRdr2 {
+                spine: p.f("sigSpineAmount", 2.0)?, neck: p.f("sigNeckAmount", 1.0)?, hip: p.f("sigHipAmount", 1.0)?,
+                knee: p.f("sigKneeAmount", 0.05)?, period: p.f("sigPeriod", 2.0)?, knees_onset: p.f("sigKneesOnset", 0.0)?,
+                force_balance: p.f("sigForceBalancePeriod", 0.0)?,
+            },
         })
     }
 
@@ -1040,6 +1095,9 @@ impl InGuts {
 
 impl Extra for InGuts {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c, dt);
+        }
         self.t += dt;
         let w = self.weight();
         let (spine, neck, knee) = (self.spine, self.neck, self.knee);
@@ -1061,6 +1119,13 @@ impl Extra for InGuts {
 
     fn done(&self) -> bool {
         self.t > 0.2 + self.period + self.blend
+    }
+
+    fn stop(&mut self, c: &mut Ctx) {
+        // RDR2 lets the hips and knees go at once
+        if c.ch.rdr2 {
+            c.out.dbm_crouch.extend([Crouch::ReleaseHip(f32::INFINITY), Crouch::ReleaseKnee(f32::INFINITY)]);
+        }
     }
 }
 
@@ -2669,5 +2734,244 @@ impl Extra for Bolas {
 
     fn done(&self) -> bool {
         self.time > 0.0 && self.t > self.fall + self.time
+    }
+}
+
+// ---- RDR2's own shot hit modules (with the RDR2 core), from a study of RDR2's shot (rdr2_shot_hits.md) ----
+
+/// RDR2's spine writer for a lean: lean1 on spine joints 0..3 in shares 1/3, 1/3, 1/6, 1/6 (lean2 likewise).
+fn spine_split(c: &mut Ctx, lean1: f32, lean2: f32) {
+    let (v, w) = (lean1 / 6.0, lean2 * 0.25);
+    for (i, &j) in SPINE().iter().enumerate() {
+        let k = if i < 2 { 2.0 } else { 1.0 };
+        c.ch.eff[j].desired[0] = k * v;
+        c.ch.eff[j].desired[1] = k * w;
+    }
+}
+
+/// RDR2's shot module stiffness for the spine and for the neck and head (13, damping 0.5).
+const RDR2_SHOT_SPINE: f32 = 13.0;
+
+/// RDR2's from-behind arm pose, (clavicle, shoulder, elbow, wrist) per arm, as (lean1, lean2, twist).
+const SFB_ARMS: [([f32; 3], [f32; 3], f32, [f32; 3]); 2] = [
+    ([-0.4, -0.15, 0.0], [0.0, 0.0, -0.35], 1.2, [-0.4, -0.65, 0.4]),
+    ([-0.5, -0.15, 0.0], [0.05, 0.0, -0.4], 1.2, [-0.25, -0.75, 0.4]),
+];
+
+impl FromBehind {
+    /// RDR2: at full strength on the hit, falling linearly to nothing over sfbPeriod. The spine arches back, the neck
+    /// and head go back, the balancer pitches the hips (owner 9) and, from sfbKneesOnset, gives at the knees (owner 6);
+    /// the arms are thrown back into a fixed pose from sfbArmsOnset; no new steps for sfbForceBalancePeriod.
+    fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        self.t += dt;
+        let r = self.rdr2;
+        let t = self.t.min(r.period);
+        let f = if r.period < 1e-5 { 0.0 } else { 1.0 - t / r.period };
+        c.ch.set_stiffness(RDR2_SHOT_SPINE, 0.5, "us", None);
+        spine_split(c, -f * r.amounts[0], 0.0);
+        if r.amounts[2].abs() > 0.0 {
+            // the hip pitch, flexing as ours (RDR2's sign the other way)
+            c.out.dbm_crouch.push(Crouch::Hip(9, -(r.amounts[2] * f).clamp(-2.0, 2.0), f32::INFINITY));
+        }
+        c.ch.set_stiffness(RDR2_SHOT_SPINE, 0.5, "un", None);
+        for &j in NECK().iter() {
+            c.ch.eff[j].desired[0] = -f * r.amounts[1];
+        }
+        if t >= r.arms_onset {
+            for (i, (clav, shoulder, elbow, wrist)) in SFB_ARMS.into_iter().enumerate() {
+                let l = crate::nmshot::limb(i);
+                let noise = if r.noise != 0.0 { (c.ch.random() - 0.5) * r.noise } else { 0.0 };
+                c.ch.eff[l.e[0]].desired = clav;
+                c.ch.eff[l.e[1]].desired = shoulder;
+                c.ch.eff[l.e[2]].desired[0] = elbow + noise;
+                c.ch.eff[l.e[3]].desired = wrist;
+            }
+        }
+        let span = r.period - r.knees_onset;
+        if t >= r.knees_onset && span > 1e-5 && r.amounts[3].abs() > 0.0 {
+            let k = -r.amounts[3] * (1.0 - (t - r.knees_onset).clamp(0.0, span) / span);
+            c.out.dbm_crouch.push(Crouch::Knee(6, k, f32::INFINITY));
+        }
+        c.out.dbm_force_balance |= t < r.force_balance;
+    }
+}
+
+impl InGuts {
+    /// RDR2: at full strength on the hit, falling linearly to nothing over sigPeriod: the spine and the neck and head
+    /// fold forward, the balancer pitches the hips (owner 10) and, from sigKneesOnset, gives at the knees (owner 7);
+    /// no new steps for sigForceBalancePeriod.
+    fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        self.t += dt;
+        let r = self.rdr2;
+        let t = self.t.min(r.period);
+        let f = if r.period < 1e-5 { 0.0 } else { 1.0 - t / r.period };
+        spine_split(c, f * r.spine, 0.0);
+        if r.hip.abs() > 0.0 {
+            c.out.dbm_crouch.push(Crouch::Hip(10, (r.hip * f).clamp(-2.0, 2.0), f32::INFINITY));
+        }
+        c.ch.set_stiffness(RDR2_SHOT_SPINE, 0.5, "un", None);
+        for &j in NECK().iter() {
+            c.ch.eff[j].desired[0] = f * r.neck;
+        }
+        let span = r.period - r.knees_onset;
+        if t >= r.knees_onset && span > 1e-5 && r.knee.abs() > 0.0 {
+            let k = -r.knee * (1.0 - (t - r.knees_onset).clamp(0.0, span) / span);
+            c.out.dbm_crouch.push(Crouch::Knee(7, k, f32::INFINITY));
+        }
+        c.out.dbm_force_balance |= t < r.force_balance;
+    }
+}
+
+impl Snap {
+    /// RDR2's snap body: each joint kicked about its own randomised axis (the snap axis plus U[-r, r] on each
+    /// component), sized by the joint group, as a torque on its child part and the opposite on its parent.
+    fn apply_rdr2(&mut self, c: &mut Ctx, m: f32) {
+        let (a, b) = (c.m.a, c.m.b);
+        let n = if self.use_dir && self.dir != Vec3::ZERO { self.dir.normalize() } else { -c.m.c };
+        let snap = if self.use_dir && self.dir != Vec3::ZERO { n.cross(b).normalize_or(a) } else { a };
+        let random = self.random;
+        let mut axis = |c: &mut Ctx, s: Vec3| {
+            let r = Vec3::new(c.ch.random(), c.ch.random(), c.ch.random()) * (2.0 * random) - Vec3::splat(random);
+            (s + r).normalize_or(s)
+        };
+        let torque = |c: &mut Ctx, j: usize, t: Vec3| {
+            c.out.torque(j + 1, t);
+            c.out.torque(PARENT[j + 1], -t);
+        };
+        // his state: nothing touching (airborne), only the legs (moving or standing), more than the legs (as it is)
+        let legs = c.b.doll.collided(&[1, 2, 3, 4, 5, 6]);
+        let other = c.b.doll.collided(&[0, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+        let m = if !legs && !other {
+            m * self.mult[2]
+        } else if !other {
+            m * self.mult[if c.vel.length() <= self.moving { 1 } else { 0 }]
+        } else {
+            m
+        };
+        let hinge = |j: usize| (*KNEE()).contains(&j) || (*ELBOW()).contains(&j);
+        if (0..21).contains(&self.part) {
+            let k = self.part as usize;
+            if k == 0 {
+                for (j, g) in [((*HIP())[0], 0.5), ((*HIP())[1], 0.5), ((*SPINE())[0], 1.0)] {
+                    let s = axis(c, snap);
+                    torque(c, j, s * (m * 15.0 * g));
+                }
+            } else {
+                for j in [k.checked_sub(1), (k < 20).then_some(k)].into_iter().flatten() {
+                    if hinge(j) {
+                        let h = c.b.eff1(j).m.c;
+                        torque(c, j, h * (-m * 2.0));
+                    } else {
+                        let s = axis(c, snap);
+                        torque(c, j, s * (m * 15.0));
+                    }
+                }
+            }
+        }
+        let mix = (n + (b - n) * 0.5).normalize_or(b);
+        for (on, sign, i) in [(self.limbs[2], 1.0, 0usize), (self.limbs[3], -1.0, 1)] {
+            if on {
+                let l = crate::nmshot::limb(i);
+                let h = c.b.eff1(l.e[2]).m.c;
+                torque(c, l.e[2], h * (2.0 * m));
+                let s = axis(c, mix);
+                torque(c, l.e[1], s * (4.0 * m * sign));
+                let s = axis(c, b);
+                torque(c, l.e[0], s * (4.0 * m * sign));
+            }
+        }
+        if self.limbs[5] {
+            for &j in NECK().iter().rev() {
+                let s = axis(c, snap);
+                torque(c, j, s * m);
+            }
+        }
+        if self.limbs[4] {
+            for (i, &j) in SPINE().iter().enumerate().rev() {
+                let s = axis(c, snap);
+                torque(c, j, s * (m * if i == 3 { 8.0 } else { 15.0 }));
+            }
+        }
+        if self.hip >= 1 {
+            let leg = if self.hip >= 2 { n } else { snap };
+            let planted = [c.b.doll.collided(&[3]), c.b.doll.collided(&[6])];
+            for (on, i) in [(self.limbs[0], 0usize), (self.limbs[1], 1)] {
+                if !on {
+                    continue;
+                }
+                let mut g = -45.0 * m;
+                if planted[1 - i] && !planted[i] {
+                    g *= -1.5;
+                }
+                if i == 1 && self.phased {
+                    g = -g;
+                }
+                let s = axis(c, leg);
+                torque(c, (*HIP())[i], s * g);
+            }
+        }
+    }
+}
+
+impl Spin {
+    /// RDR2's shot spin: no twisting of the body while he balances. While the spin runs (shotSpinTime, then
+    /// shotSpinSettle) the balancer is turned to his facing swung by clamp(lever x shotSpinTwistMult, +-2.6) and turns
+    /// by stepping (only in the spin phase; the settle counts any heading as faced). Only falling does a constant yaw
+    /// torque (+-shotSpinTorque, none within shotSpinTorqueTol) push him round. All of it only while the yaw turned
+    /// since the hit, the turn rate and the spin stay under shotSpinTwist, shotSpinTwistVel and shotSpinTwistMom.
+    /// Then the step turn (stepTurnType 1 back along the bullet, other values to attackerPos) after stepTurnWait.
+    fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let r = self.rdr2;
+        self.t += dt;
+        let (up, b) = (c.up, c.m.b);
+        let yaw_rate = c.angvel.dot(b);
+        self.turned += yaw_rate * dt;
+        let lever = *self.lever.get_or_insert_with(|| {
+            // the hit's lever across the bullet about up, over the leg's length
+            let l = (c.b.joint_pos((*HIP())[0]) - c.b.joint_pos((*ANKLE())[0])).length().max(0.1);
+            ((self.hit - c.com).cross(self.dir.normalize_or_zero())).dot(up) / l
+        });
+        let lever = self.spin.unwrap_or(lever);
+        let facing = {
+            let f = -c.m.c;
+            (f - up * f.dot(up)).normalize_or(Vec3::Y)
+        };
+        let gate = self.turned.abs() <= r.twist && yaw_rate.abs() <= r.twist_vel
+            && (c.angvel * c.b.doll.mass()).dot(b).abs() <= r.twist_mom;
+        if !gate {
+            c.out.dbm_turn = Some(Vec3::ZERO);
+            return;
+        }
+        let spinning = self.t < self.time + self.settle;
+        if spinning && lever.abs() > self.min {
+            let angle = (lever * r.twist_mult).clamp(-2.6, 2.6);
+            let heading = bevy_math::Quat::from_axis_angle(up, angle) * facing;
+            if self.t < self.time && c.dbm_failed {
+                let off = facing.cross(heading).dot(up).atan2(facing.dot(heading));
+                if off.abs() >= r.tol {
+                    let feet = [c.b.doll.collided(&[3]), c.b.doll.collided(&[6])];
+                    let any = c.b.doll.collided(&(0..21).collect::<Vec<_>>());
+                    let k = if !any { 0.2 } else if feet[0] != feet[1] { 0.5 } else { 1.0 };
+                    let tq = (r.torque * off.signum()).clamp(-r.torque_max, r.torque_max) * k;
+                    for p in [0, 7, 8] {
+                        c.out.torque(p, b * tq / 3.0);
+                    }
+                }
+            }
+            c.out.dbm_turn = Some(heading * 0.5);
+            c.out.dbm_turn_facing = Some(if self.t < self.time { r.align } else { -0.1 });
+            return;
+        }
+        let from = if self.spin_on { self.time + self.settle } else { 0.0 } + self.step_wait;
+        if !c.dbm_failed && self.step_type > 0 && self.t > from && self.t <= from + self.step_time {
+            let to = if self.step_type == 1 { -self.dir } else { self.attacker - c.com };
+            let to = bevy_math::Quat::from_axis_angle(up, r.step_offset) * (to - up * to.dot(up)).normalize_or_zero();
+            if to != Vec3::ZERO {
+                c.out.dbm_turn = Some(to * 0.5);
+                c.out.dbm_turn_facing = Some(0.9);
+                return;
+            }
+        }
+        c.out.dbm_turn = Some(Vec3::ZERO);
     }
 }

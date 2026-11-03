@@ -110,6 +110,11 @@ pub struct Out {
     /// RDR2 core: the balancer's crouch request this step, (owner id, knee bend as leg straightness, hip pitch in
     /// rad), as RDR2's behaviours ask it rather than bend the legs themselves
     pub dbm_owned: Vec<(u32, f32, f32)>,
+    /// RDR2 core: requests on one channel of the crouch (RDR2's separate hip pitch and knee bend owners)
+    pub dbm_crouch: Vec<crate::nmdbm_rdr2::Crouch>,
+    /// RDR2 core: no new steps this step (force balance), and the turn request's facing threshold (cosine)
+    pub dbm_force_balance: bool,
+    pub dbm_turn_facing: Option<f32>,
     /// RDR2 core: a hip lean asked of the balancer (hipsLean*)
     pub hip_lean: Option<Vec3>,
     /// A lean asked for by an extra (RDR2's lean family, onFire's stagger): the balancer leans that way from the next

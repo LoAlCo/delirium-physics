@@ -393,7 +393,7 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
         if f.stepping != 0 && r.redecide() {
             f.stepping = 0;
         }
-        if f.stepping == 0 && (!r.may_step() || (r.failing.is_some() && r.p.fall_type == 1)) {
+        if f.stepping == 0 && (!r.may_step() || r.force_balance || (r.failing.is_some() && r.p.fall_type == 1)) {
             return;
         }
     }
@@ -1407,7 +1407,7 @@ impl Dbm {
             // RDR2: the crouch request's knee bend instead of the extras' offset; standUp straightens him while moving
             Some(r) => {
                 let up = if r.p.stand_up { (2.0 * slen(s.hvel, b"zyx")).min(1.0) * (1.0 - c.legs.0) } else { 0.0 };
-                c.legs.0 + r.owned.knee + up
+                c.legs.0 + r.owned.knee.value + up
             }
             None => c.legs.0 + self.leg_offset,
         };
@@ -1544,8 +1544,8 @@ impl Dbm {
                 ch.eff[(*ANKLE())[i]].oppose_gravity = 1.0;
             }
             // RDR2 core: a hip pitch a behaviour asked the balancer for
-            if let Some(r) = self.p.rdr2.filter(|r| r.owned.hip != 0.0) {
-                ch.eff[(*HIP())[i]].desired[0] += r.owned.hip;
+            if let Some(r) = self.p.rdr2.filter(|r| r.owned.hip.value != 0.0) {
+                ch.eff[(*HIP())[i]].desired[0] += r.owned.hip.value;
             }
             // RDR2's minKneeAngle: a swing knee too straight is held back
             if let (Some(r), false) = (self.p.rdr2, planted) {

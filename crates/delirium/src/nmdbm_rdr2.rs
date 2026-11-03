@@ -274,31 +274,74 @@ const ANKLE_SPEED: f32 = 0.3;
 pub const ANKLE_TILT: f32 = 0.2;
 const SIDEWAYS_SPEED2: f32 = 0.25;
 
-/// RDR2's crouch request the balancer owns: a knee bend (added to leg straightness) and a hip pitch (rad, flexing
-/// the hips), each followed at `rate` (rad or straightness per second; infinite when the asker ramps it itself).
+/// One channel of RDR2's owned crouch request: a target the balancer follows at a rate (infinite: at once). The
+/// highest id asking this step owns it; the owner resets every step but the target stays until someone asks again
+/// or its asker lets go (back to 0 at a rate).
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Owned {
+pub struct Chan {
     pub owner: u32,
-    pub knee: f32,
-    pub hip: f32,
-    target: (f32, f32, f32),
-    asked: Option<(u32, f32, f32, f32)>,
+    pub value: f32,
+    target: f32,
+    rate: f32,
+    asked: Option<(u32, f32, f32)>,
 }
 
-impl Owned {
-    /// One owner's ask this step; the highest owner id wins.
-    pub fn ask(&mut self, owner: u32, knee: f32, hip: f32, rate: f32) {
-        if self.asked.is_none_or(|a| owner >= a.0) && (knee != 0.0 || hip != 0.0) {
-            self.asked = Some((owner, knee, hip, rate));
+impl Chan {
+    pub fn ask(&mut self, owner: u32, target: f32, rate: f32) {
+        if self.asked.is_none_or(|a| owner >= a.0) {
+            self.asked = Some((owner, target, rate));
+        }
+    }
+
+    /// Letting go: back to 0 at this rate (unless someone asks this step).
+    pub fn release(&mut self, rate: f32) {
+        if self.asked.is_none() {
+            self.asked = Some((0, 0.0, rate));
         }
     }
 
     fn step(&mut self, dt: f32) {
-        let (owner, k, h, rate) = self.asked.take().unwrap_or((0, 0.0, 0.0, f32::INFINITY));
-        (self.owner, self.target) = (owner, (k, h, rate));
-        let follow = |x: f32, to: f32| if rate.is_finite() { x + (to - x).clamp(-rate * dt, rate * dt) } else { to };
-        (self.knee, self.hip) = (follow(self.knee, k), follow(self.hip, h));
+        self.owner = 0;
+        if let Some((owner, to, rate)) = self.asked.take() {
+            (self.owner, self.target, self.rate) = (owner, to, rate);
+        }
+        let (to, rate) = (self.target, self.rate);
+        self.value = if rate.is_finite() { self.value + (to - self.value).clamp(-rate * dt, rate * dt) } else { to };
     }
+}
+
+/// RDR2's crouch request the balancer owns: a knee bend (added to leg straightness) and a hip pitch (rad, flexing the
+/// hips), each with its own owner (RDR2's owner ids double as priorities).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Owned {
+    pub knee: Chan,
+    pub hip: Chan,
+}
+
+impl Owned {
+    /// One owner's ask this step on both channels (a channel asked 0 is left alone).
+    pub fn ask(&mut self, owner: u32, knee: f32, hip: f32, rate: f32) {
+        if knee != 0.0 {
+            self.knee.ask(owner, knee, rate);
+        }
+        if hip != 0.0 {
+            self.hip.ask(owner, hip, rate);
+        }
+    }
+
+    fn step(&mut self, dt: f32) {
+        self.knee.step(dt);
+        self.hip.step(dt);
+    }
+}
+
+/// A behaviour's request of the balancer's crouch: (owner, target, rate) on the knee bend or hip pitch, or letting go.
+#[derive(Clone, Copy, Debug)]
+pub enum Crouch {
+    Knee(u32, f32, f32),
+    Hip(u32, f32, f32),
+    ReleaseKnee(f32),
+    ReleaseHip(f32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -334,6 +377,10 @@ pub struct Rdr2 {
     pub last_foot: usize,
     /// a behaviour asked the balancer to face a way (RDR2's turn step), and this step's leg-twist limits and lift
     pub turning: bool,
+    /// this step's turn request: how closely he must face the heading to count as facing it (RDR2's 0.9 unless the
+    /// requester says otherwise), and whether a behaviour forbids new steps (RDR2's force balance)
+    pub turn_facing: Option<f32>,
+    pub force_balance: bool,
     pub leg_twist: (f32, f32),
     pub turn_lift: f32,
     /// the turn step's pause (s; it turns only once this runs out), whether he faced the heading last time, and
@@ -352,7 +399,7 @@ impl Rdr2 {
                since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0), owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false,
-               leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0, pause: 0.0, aligned: false, landed: false, crouching: None,
+               leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, pause: 0.0, aligned: false, landed: false, crouching: None,
                started: false }
     }
 
@@ -411,7 +458,7 @@ impl Rdr2 {
         if !want {
             return;
         }
-        if facing >= TURN_FACING {
+        if facing >= self.turn_facing.take().unwrap_or(TURN_FACING) {
             self.aligned = true;
             return;
         }

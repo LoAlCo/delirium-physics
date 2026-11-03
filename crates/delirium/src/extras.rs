@@ -283,7 +283,7 @@ pub struct P<'a, 'b> {
 }
 
 impl<'b> P<'_, 'b> {
-    fn get(&mut self, name: &str) -> Option<&Value> {
+    pub(crate) fn get(&mut self, name: &str) -> Option<&Value> {
         let (n, v) = self.params.iter().find(|(n, _)| *n == name)?;
         self.used.push(n);
         Some(v)
