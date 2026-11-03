@@ -1869,6 +1869,8 @@ impl Agent {
                 if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
                     r.limp = x;
                 }
+                // RDR2 core: the hip lean (none asked: none)
+                d.hip_lean = out.hip_lean.unwrap_or(Vec3::ZERO);
                 // RDR2 core: the crouch requests (owner, knee bend, hip pitch)
                 if let Some(r) = d.p.rdr2.as_mut() {
                     for &(o, k, h) in &out.dbm_owned {

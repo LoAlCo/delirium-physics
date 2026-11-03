@@ -42,9 +42,16 @@
 //!   for each step, leanAgainstVelocity, standUp, extraFeetApart, the feetApart randomisation (feetApartMin/Max
 //!   above feetApartVel) with stopWaddling, the sideways cheat force (sidewaysCheatForce over sidewaysThresh) and
 //!   the 0.06 m alternation bias while moving sideways.
-//! Not here: extra foot friction on slopes, the slope pelvis drop (off), crouch start, obstacle and other-leg
-//! avoidance, the three lean channels, hipError, ankle balance's twist part, the turn step's random pauses and
-//! flat-foot test, fallType 3 (slump: it hands over to balancerCollisionsReaction).
+//! - the lean channels: the COM lean tilts his up as before, a hip lean (hipsLean*) tilts that up again for the
+//!   pelvis frame the legs reach for (instead of our paired push on the hips and chest), applied with a foot down;
+//!   the force lean pushes as before. A channel's latest lean wins (our messages carry no priority);
+//! - crouch start (crouch, off by default): starting crouched, deeper than crouchBendThresh (up to
+//!   crouchBendMax), he keeps the knees bent (at most 0.5) and the hips as they were, letting them go at
+//!   crouchStandRate and crouchHipRate, for crouchTime. The crouch depth is (0.99 - COM height over the lower foot /
+//!   (leg length - 0.0375)) x 0.79235, the leg length taken as his standing pelvis height (ours).
+//! Not here: extra foot friction on slopes, the slope pelvis drop (off), obstacle and other-leg avoidance, lean
+//! priorities, hipError, ankle balance's twist part, the turn step's random pauses and flat-foot test, fallType 3
+//! (slump: it hands over to balancerCollisionsReaction).
 
 /// configureBalance's RDR2 parameters this port uses (RDR2's names and defaults).
 #[derive(Clone, Copy, Debug)]
@@ -115,6 +122,12 @@ pub struct Params {
     pub max_leg_twist: f32,
     /// ankle balance: also keep the pelvis control's ankle term (ours, for comparison: RDR2's ankle formula replaces it)
     pub ankle_keep_pelvis: bool,
+    pub crouch: bool,
+    pub crouch_bend_thresh: f32,
+    pub crouch_bend_max: f32,
+    pub crouch_time: f32,
+    pub crouch_stand_rate: f32,
+    pub crouch_hip_rate: f32,
 }
 
 impl Default for Params {
@@ -130,7 +143,9 @@ impl Default for Params {
                  stand_up: false, extra_feet_apart: 0.0, feet_apart_min: 1.0, feet_apart_max: 1.0, feet_apart_vel: 100.0,
                  stop_waddling: 0, sideways_cheat_force: 0.0, sideways_thresh: 0.8,
                  step_if_in_support: true, ankle_offset: -0.12, ankle_mult: 25.0, min_knee_angle: -0.5,
-                 fall_reduce_gravity_comp: false, min_leg_twist: -1.9, max_leg_twist: 0.2, ankle_keep_pelvis: false }
+                 fall_reduce_gravity_comp: false, min_leg_twist: -1.9, max_leg_twist: 0.2, ankle_keep_pelvis: false,
+                 crouch: false, crouch_bend_thresh: 0.3, crouch_bend_max: 0.55, crouch_time: 0.5, crouch_stand_rate: 0.4,
+                 crouch_hip_rate: 0.25 }
     }
 }
 
@@ -191,6 +206,12 @@ impl Params {
             "minLegTwist" => self.min_leg_twist = v,
             "maxLegTwist" => self.max_leg_twist = v,
             "ankleKeepPelvis" => self.ankle_keep_pelvis = v != 0.0,
+            "crouch" => self.crouch = v != 0.0,
+            "crouchBendThresh" => self.crouch_bend_thresh = v,
+            "crouchBendMax" => self.crouch_bend_max = v,
+            "crouchTime" => self.crouch_time = v,
+            "crouchStandRate" => self.crouch_stand_rate = v,
+            "crouchHipRate" => self.crouch_hip_rate = v,
             _ => return false,
         }
         true
@@ -297,6 +318,9 @@ pub struct Rdr2 {
     pub turning: bool,
     pub leg_twist: (f32, f32),
     pub turn_lift: f32,
+    /// crouch start: knee bend and hip pitch it holds (letting them go), and until when
+    pub crouching: Option<(f32, f32, f32)>,
+    started: bool,
 }
 
 impl Rdr2 {
@@ -305,7 +329,8 @@ impl Rdr2 {
                since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0), owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false,
-               leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0 }
+               leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0, crouching: None,
+               started: false }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.
@@ -317,6 +342,7 @@ impl Rdr2 {
         if stepped {
             self.draw();
         }
+        self.crouch_step(dt);
         if self.failing.is_some() && self.p.ramp_hip_pitch_on_fail {
             self.owned.ask(FAIL_OWNER, 0.0, FAIL_HIP_PITCH, FAIL_HIP_RATE);
         }
@@ -421,6 +447,27 @@ impl Rdr2 {
     pub fn gravity_share(&self) -> Option<f32> {
         let t = self.time - self.failing?;
         self.p.fall_reduce_gravity_comp.then(|| 1.0 / ((0.4 + self.asym) * self.p.fall_mult * t + 1.1))
+    }
+
+    /// Crouch start, at his first step: `h` the COM's height over the lower foot, `leg` the leg length, `hip` the hips'
+    /// pitch now.
+    pub fn crouch_start(&mut self, h: f32, leg: f32, hip: f32) {
+        if std::mem::replace(&mut self.started, true) || !self.p.crouch {
+            return;
+        }
+        let c = (0.99 - h / (leg - 0.5 * 0.075)) * 0.79235;
+        if c > self.p.crouch_bend_thresh && c < self.p.crouch_bend_max {
+            self.crouching = Some((-c.min(0.5), hip.clamp(-1.5, 1.5), self.p.crouch_time));
+        }
+    }
+
+    /// Crouch start each step: the held bends let go at their rates; asks the crouch request (owner 1).
+    pub fn crouch_step(&mut self, dt: f32) {
+        let Some((k, h, left)) = self.crouching else { return };
+        let (sr, hr) = (self.p.crouch_stand_rate * dt, self.p.crouch_hip_rate * dt);
+        let (k, h, left) = ((k + sr).min(0.0), if h > 0.0 { (h - hr).max(0.0) } else { (h + hr).min(0.0) }, left - dt);
+        self.crouching = (left > 0.0).then_some((k, h, left));
+        self.owned.ask(1, k, h, f32::INFINITY);
     }
 
     pub fn alternate() -> f32 {

@@ -148,6 +148,8 @@ pub struct Params {
     pub contact: [bool; 2],
     /// RDR2 core's balancer additions (nmdbm_rdr2.rs); None: GTA IV's
     pub rdr2: Option<crate::nmdbm_rdr2::Rdr2>,
+    /// RDR2 core: the up the legs' pelvis frame uses, tilted by the hip lean (zero: the balancer's up)
+    pub hip_up: Vec3,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -184,6 +186,11 @@ pub struct Pelvis {
     pub out: [f32; 2],
     pub planted: [bool; 2],
     pub fixed_vel: bool,
+}
+
+/// The lower foot's height along up.
+fn up_low(up: Vec3, l: Vec3, r: Vec3) -> f32 {
+    up.vd(l).min(up.vd(r))
 }
 
 fn horizontal(v: Vec3, up: Vec3) -> Vec3 {
@@ -809,15 +816,17 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     let mut target = t;
     let mut normal = p.normal;
     if lp || rp {
-        let side = vnorm(s.pelvis.m.c.vx(up));
-        let fwd = up.vx(side);
+        // RDR2: the hip lean tilts the pelvis frame the legs reach for
+        let hup = if p.hip_up != Vec3::ZERO { p.hip_up } else { up };
+        let side = vnorm(s.pelvis.m.c.vx(hup));
+        let fwd = hup.vx(side);
         let cs = |a: f32| ((a as f64).cos() as f32, (a as f64).sin() as f32);
         let ((cy, sy), (cz, sz)) = (cs(-pv.acc), cs(-pv.out[0]));
         let e = [Vec3::new(cz * cy, sz * cy, -sy), Vec3::new(-sz, cz, 0.0), Vec3::new(cz * sy, sz * sy, cy)];
         let q = rotvec_quat(s.pelvis.w * -delirium_data::kv!(78));
         let qm = quat_rows(q);
         let pd: [Vec3; 3] = e.map(|e| {
-            let a = fwd.mul_add(Vec3::splat(e.z), side.mul_add(Vec3::splat(e.y), up * e.x));
+            let a = fwd.mul_add(Vec3::splat(e.z), side.mul_add(Vec3::splat(e.y), hup * e.x));
             qm[2].mul_add(Vec3::splat(a.z), qm[1].mul_add(Vec3::splat(a.y), qm[0] * a.x))
         });
         let pdd = up.mul_add(Vec3::splat(pv.p68), f.centre) + pv.off;
@@ -1153,6 +1162,8 @@ pub struct Dbm {
     pub held: bool,
     pub last: (Vec3, Vec3),
     pub down: bool,
+    /// RDR2 core: the hip lean asked this step (hipsLean*)
+    pub hip_lean: Vec3,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1254,7 +1265,7 @@ impl Dbm {
             eprintln!("YAWINIT splay {splay:.4} turn {turn:.4}");
         }
         let pv = Pelvis { centre: f.centre, p52: p.lean_bias, p68: delirium_data::kv!(26), yaw: [turn - splay, -turn - splay], ..default() };
-        let mut d = Dbm { p, f, pv, acc: 0.0, leg_offset: 0.0, knee_scale: 1.0, lean: Lean::default(), lean_vec: Vec3::ZERO, as_force: false, push: Vec3::ZERO, ratio: 0.0, event: None, success: false, held: false, last: (Vec3::Z, Vec3::ZERO),
+        let mut d = Dbm { p, f, pv, acc: 0.0, leg_offset: 0.0, knee_scale: 1.0, lean: Lean::default(), lean_vec: Vec3::ZERO, as_force: false, push: Vec3::ZERO, ratio: 0.0, event: None, success: false, held: false, last: (Vec3::Z, Vec3::ZERO), hip_lean: Vec3::ZERO,
             down: (0..2).any(|i| b.doll.touch[b.ch.joints[(*ANKLE())[i]].child] & delirium_data::kv!(7 int) != 0) };
         d.held = d.holding(&b.snap(up), l, r, None);
         d
@@ -1379,6 +1390,16 @@ impl Dbm {
         };
         self.pv.acc = self.acc;
         self.lean_vec = self.lean_vector(s.com);
+        self.p.hip_up = Vec3::ZERO;
+        if self.p.rdr2.is_some() && self.down && self.hip_lean != Vec3::ZERO {
+            let (u, l) = (self.p.up, self.hip_lean);
+            self.p.hip_up = vnorm(u + l - u * l.dot(u));
+        }
+        if let Some(r) = self.p.rdr2.as_mut() {
+            let low = up_low(self.p.up, b.foot(0), b.foot(1));
+            let hip = (s.legs[0].hip.actual[0] + s.legs[1].hip.actual[0]) * 0.5;
+            r.crouch_start(self.p.up.vd(s.com) - low, self.p.pelvis_height, hip);
+        }
         if let Some(r) = self.p.rdr2 {
             let (lean, more) = r.lean_against(horizontal(s.hvel, self.p.up));
             self.lean_vec += lean;

@@ -2098,6 +2098,8 @@ impl Extra for Lean {
                 };
                 c.out.lean = Some((mode, amount, false));
             }
+            // the RDR2 core's balancer takes the hip lean itself, tilting the pelvis frame the legs reach for
+            LeanBy::Hips if c.ch.rdr2 => c.out.hip_lean = Some(dir * amount),
             LeanBy::Hips => {
                 // the hips one way and the chest the other: the hips swing out over his feet without pushing him off
                 let f = dir * amount * c.b.doll.mass() * HIPS_LEAN;

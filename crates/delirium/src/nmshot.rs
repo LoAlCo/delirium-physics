@@ -110,6 +110,8 @@ pub struct Out {
     /// RDR2 core: the balancer's crouch request this step, (owner id, knee bend as leg straightness, hip pitch in
     /// rad), as RDR2's behaviours ask it rather than bend the legs themselves
     pub dbm_owned: Vec<(u32, f32, f32)>,
+    /// RDR2 core: a hip lean asked of the balancer (hipsLean*)
+    pub hip_lean: Option<Vec3>,
     /// A lean asked for by an extra (RDR2's lean family, onFire's stagger): the balancer leans that way from the next
     /// step; None unless one does.
     pub lean: Option<(crate::nmdbm::LeanMode, f32, bool)>,
