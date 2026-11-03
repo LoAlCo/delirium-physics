@@ -95,7 +95,8 @@ pub struct Params {
     pub limp_scale: f32,
     /// behaviours' joint writes resolved as RDR2's prioritised limb requests (limbreq.rs); off: the last write wins
     pub limb_requests: bool,
-    /// limb requests resolved highest slot first (the other reading of RDR2's queue order)
+    /// limb requests resolved highest slot first: RDR2's queue order (read: a stable insertion sort, highest priority, then
+    /// highest sub-priority, first; the first entries dominate). Off: lowest slot first, for comparison
     pub limb_order_reversed: bool,
     /// the swing leg solver's reach: the target at most 2 maxFootSpeed / k from the foot, k the hip stiffness (GTA IV's
     /// fixed 5, a parameter in RDR2)
@@ -146,7 +147,7 @@ impl Default for Params {
                  slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.7, 1.8], legs_apart_restep: 0.2,
                  legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
                  always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
-                 taper_knee_strength_run: false, limp_scale: 1.0, limb_requests: true, limb_order_reversed: false,
+                 taper_knee_strength_run: false, limp_scale: 1.0, limb_requests: true, limb_order_reversed: true,
                  max_foot_speed: 5.0, ramp_hip_pitch_on_fail: true, prediction_time: 0.2, prediction_time_variance: 0.0,
                  step_clamp_scale_variance: 0.0, lift_feet: 0.07, lift_feet_variance: 0.0, lean_against_velocity: 0.0,
                  stand_up: false, extra_feet_apart: 0.0, feet_apart_min: 1.0, feet_apart_max: 1.0, feet_apart_vel: 100.0,
