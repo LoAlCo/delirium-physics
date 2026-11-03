@@ -287,13 +287,15 @@ pub struct Ctx<'a, 'b> {
     pub reqs: Option<&'a mut crate::limbreq::Requests>,
     /// the shot's priority for those requests (below catchFall's once it has taken over)
     pub shot_slot: u32,
+    /// the balancer is running and balancing him (RDR2's bal+0x48 = 0); only the RDR2 core's extras read it
+    pub upright: bool,
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {
     pub fn new(ch: &'a mut Character, b: &'a Body<'b>, out: &'a mut Out, dbm_failed: bool) -> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
-        Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT }
+        Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed }
     }
 
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.

@@ -289,6 +289,16 @@ pub(crate) struct Balance {
     idle: bool,
 }
 
+/// Puts the excluded arms' joints back as `kept` had them (RDR2 core's exclusion masks).
+fn leave_arms(ch: &mut crate::nmrs::Character, kept: &Option<Vec<crate::nmrs::Effector>>, excluded: [bool; 2]) {
+    let Some(kept) = kept else { return };
+    for (_, mask) in ["ul", "ur"].into_iter().enumerate().filter(|&(i, _)| excluded[i]) {
+        for j in crate::nmrs::Character::mask(mask) {
+            ch.eff[j] = kept[j];
+        }
+    }
+}
+
 impl Balance {
     fn on(&self) -> bool {
         self.dbm.is_some() || self.bb.is_none()
@@ -1656,6 +1666,7 @@ impl Agent {
             }
             let mut out = crate::nmshot::Out::default();
             let mut c = crate::nmshot::Ctx::new(&mut *ch, &body, &mut out, dbm_lost);
+            c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             if let Some(p) = self.nm_cf_msg.take() {
                 let b = walk_actives!(self);
                 start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);
@@ -1811,11 +1822,16 @@ impl Agent {
                 self.nm_twist.tick(c.ch, &body);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, shot_slot); }
+            // RDR2 core: the arms reachForWound holds (its exclusion masks) are left as they were by catchFall and
+            // bodyRollUp, for this tick only
+            let excluded = c.ch.exclude_arms;
+            let kept = excluded.contains(&true).then(|| c.ch.eff.clone());
             if !waits(walk_actives!(self), W_CF()) {
                 if let Some(f) = self.nm_cf.as_mut() {
                     f.tick(&mut c, world, obstacles, &mut self.nm_head, &mut self.nm_twist, dt);
                 }
             }
+            leave_arms(c.ch, &kept, excluded);
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x70); }
             if !waits(walk_actives!(self), W_RU()) {
                 self.nm_ru.tick(&mut c, self.nm_br.active, dt);
@@ -1824,6 +1840,8 @@ impl Agent {
                     self.nm_head.keep_head_away = true;
                 }
             }
+            leave_arms(c.ch, &kept, excluded);
+            c.ch.exclude_arms = [false; 2];
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x80); }
             {
                 let dbm = self.balance.as_mut().and_then(|b| b.dbm.as_mut()).filter(|_| !self.fallen);

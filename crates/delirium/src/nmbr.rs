@@ -100,7 +100,14 @@ pub struct Brace {
     grabbed: bool,
     arm: [bool; 2],
     head_at: bool,
+    /// RDR2 core: the live crouch (it eases off when not bracing) and the side of the car he is on (0 its -X side
+    /// or none, 1 beyond its +X face, 2 / 3 beyond its +Y / -Y end; 2 with no car)
+    crouch_now: f32,
+    class: u8,
 }
+
+/// RDR2's stiffness scale (ctx+0x2c64): 1 here.
+const S: f32 = 1.0;
 
 fn touching(c: &Ctx, k: usize) -> bool {
     c.b.doll.touch[k] & delirium_data::kv!(95 int) == delirium_data::kv!(7 int)
@@ -133,6 +140,36 @@ fn world(obstacles: &[Obstacle], pos: Vec3, inst: i32) -> Vec3 {
     Obstacle::find(obstacles, inst).map_or(pos, |o| o.to_world(pos))
 }
 
+/// RDR2: the brace's owned hip (owner 3) and knee (owner 2) requests let go at once.
+fn release(d: &mut Dbm) {
+    if let Some(r) = d.p.rdr2.as_mut() {
+        if r.owned.hip.owner <= 3 {
+            r.owned.hip.release(f32::INFINITY);
+        }
+        if r.owned.knee.owner <= 2 {
+            r.owned.knee.release(f32::INFINITY);
+        }
+    }
+}
+
+/// RDR2's side class of the car `o` for a COM at `com` (car frame: X across, Y along it): 2 / 3 beyond its +Y / -Y
+/// end (past its corner's direction), 1 beyond its +X face, else 0.
+fn side_class(o: &Obstacle, com: Vec3) -> u8 {
+    let (ux, uy) = (o.rot * Vec3::X, o.rot * Vec3::Y);
+    let dn = (com - o.at).normalize_or_zero();
+    let corner = (o.centre - o.at + ux * o.half.x + uy * o.half.y).normalize_or_zero();
+    let (x, y) = (ux.dot(dn), uy.dot(dn));
+    if y > corner.dot(uy) {
+        2
+    } else if y < -corner.dot(uy) {
+        3
+    } else if x >= 0.0 && x > corner.dot(ux) {
+        1
+    } else {
+        0
+    }
+}
+
 fn flat(v: Vec3, up: Vec3) -> Vec3 {
     up * -crate::nmdbm::sdot(up, v, b"zyx") + v
 }
@@ -148,7 +185,7 @@ impl Brace {
         if self.active {
             return out;
         }
-        *self = Brace { p, active: true, ..Default::default() };
+        *self = Brace { p, active: true, class: 2, ..Default::default() };
         let ch = &mut *c.ch;
         for j in 0..ch.eff.len() {
             ch.eff[j].reset(&ch.joints[j]);
@@ -185,6 +222,7 @@ impl Brace {
         if let Some(d) = k.dbm.as_deref_mut() {
             (d.pv.fixed_vel, d.pv.vel, d.leg_offset) = (false, Vec3::ZERO, 0.0);
             out.stop_dbm = true;
+            release(d);
         }
         k.head.deactivate();
         k.twist.deactivate();
@@ -213,7 +251,7 @@ impl Brace {
             let pd = &mut *k.pedal;
             (pd.random_seed, pd.pedal_offset, pd.speed_asymmetry, pd.radius, pd.drag_multiplier) = (delirium_data::kv!(197 int), delirium_data::kv!(118), delirium_data::kv!(84), delirium_data::kv!(24), delirium_data::kv!(24));
             (pd.left, pd.right, pd.back_pedal, pd.adaptive) = (true, true, false, true);
-            pd.leg_stiffness = (p.body_stiffness - 1.0).clamp(1.0, delirium_data::kv!(25));
+            pd.leg_stiffness = if c.ch.rdr2 { (p.body_stiffness - S).clamp(S, 20.0 * S) } else { (p.body_stiffness - 1.0).clamp(1.0, delirium_data::kv!(25)) };
             pd.activate(c);
         } else {
             k.pedal.deactivate();
@@ -225,6 +263,7 @@ impl Brace {
             self.fell = true;
             if let Some(d) = k.dbm.as_deref_mut() {
                 (d.pv.fixed_vel, d.pv.vel, d.leg_offset) = (false, Vec3::ZERO, 0.0);
+                release(d);
             }
             out.stop_dbm = true;
             k.twist.deactivate();
@@ -240,13 +279,26 @@ impl Brace {
                     roll = false;
                 }
             }
-            if roll {
+            if roll && c.ch.rdr2 {
+                // RDR2's hand-over to rollDownStairs
+                let r = &mut *k.rds;
+                (r.stiffness, r.forcemag, r.use_arm_to_slow_down, r.arm_reach_amount) = ((p.body_stiffness - 3.0 * S).clamp(S, 15.0 * S), 0.4, -0.9, 1.4);
+                (r.asymmetry, r.spin_when_in_air, r.leg_push, r.arm_reach_length) = (0.0, true, 0.2, 0.6);
+                r.asymmetrical_legs = 0.2 + 0.6 * c.ch.random();
+                r.activate(c, k.ru);
+            } else if roll {
                 let r = &mut *k.rds;
                 (r.asymmetrical_legs, r.forcemag, r.spin_when_in_air, r.use_arm_to_slow_down) = (delirium_data::kv!(116), delirium_data::kv!(116), true, -delirium_data::kv!(28));
                 (r.asymmetry, r.arm_reach_amount, r.leg_push, r.arm_reach_length) = (0.0, delirium_data::kv!(179), delirium_data::kv!(60), delirium_data::kv!(119));
                 r.stiffness = (p.body_stiffness - delirium_data::kv!(5)).clamp(1.0, delirium_data::kv!(30));
                 r.asymmetrical_legs = delirium_data::kv!(60) + delirium_data::kv!(119) * c.ch.random();
                 r.activate(c, k.ru);
+            } else if c.ch.rdr2 {
+                // RDR2's hand-over to catchFall: legs, torso and arms at 0.6875, 0.8333 and 0.4583 of bodyStiffness
+                let s = p.body_stiffness;
+                out.catch_fall = Some(crate::nmcf::Params { legs_stiffness: s * 0.6875, torso_stiffness: s * 0.833333, arms_stiffness: s * 0.458333,
+                                                            forward_max_arm_offset: delirium_data::kv!(140), backwards_min_arm_offset: -delirium_data::kv!(17),
+                                                            z_axis_spin_reduction: 0.0, use_head_look: true });
             } else {
                 let s = p.body_stiffness;
                 out.catch_fall = Some(crate::nmcf::Params { legs_stiffness: s * 0.5, torso_stiffness: s * delirium_data::kv!(18), arms_stiffness: s * delirium_data::kv!(231),
@@ -291,6 +343,9 @@ impl Brace {
         let p = self.p;
         let up = c.up;
         let now = world(obstacles, p.pos, p.instance_index);
+        if let (true, Some(o)) = (c.ch.rdr2, Obstacle::find(obstacles, p.instance_index)) {
+            self.class = side_class(o, c.com);
+        }
         use crate::nmdbm::{sdot, slen};
         self.tvel = (now - self.target) * (1.0 / dt);
         let len = slen(self.tvel, b"yxz");
@@ -351,7 +406,9 @@ impl Brace {
         }
         self.spine(c, k.dbm.as_deref_mut(), dt);
         if self.braced {
-            if let Some(d) = k.dbm.as_deref_mut() {
+            if c.ch.rdr2 {
+                self.crouch_now = self.crouch;
+            } else if let Some(d) = k.dbm.as_deref_mut() {
                 d.leg_offset = -self.crouch;
             }
             self.pick = false;
@@ -365,7 +422,7 @@ impl Brace {
         } else {
             (self.delay, self.pick) = (0.0, true);
             self.draw_sides(c.ch);
-            if let Some(d) = k.dbm.as_deref_mut() {
+            if let (false, Some(d)) = (c.ch.rdr2, k.dbm.as_deref_mut()) {
                 d.leg_offset = 0.0;
             }
             k.twist.deactivate();
@@ -389,7 +446,8 @@ impl Brace {
     fn guard(&self, c: &mut Ctx, i: usize, lv: Vec3, lean: f32) {
         use crate::nmdbm::sdot;
         let l = limb(i);
-        c.ch.set_stiffness(lean.fma(delirium_data::kv!(5), delirium_data::kv!(32)), 1.0, if i == 0 { "ul" } else { "ur" }, None);
+        let k = if c.ch.rdr2 { (3.0 * lean + 7.0) * S } else { lean.fma(delirium_data::kv!(5), delirium_data::kv!(32)) };
+        c.ch.set_stiffness(k, 1.0, if i == 0 { "ul" } else { "ur" }, None);
         let m = c.b.eff3(l.e[1]).m;
         let a = sdot(m.a, lv, b"zyx") * delirium_data::kv!(84);
         let side = if i == 0 { m.c - m.b } else { m.c + m.b } * delirium_data::kv!(223);
@@ -419,6 +477,9 @@ impl Brace {
     }
 
     fn spine(&mut self, c: &mut Ctx, dbm: Option<&mut Dbm>, dt: f32) {
+        if c.ch.rdr2 {
+            return self.spine_rdr2(c, dbm, dt);
+        }
         let (l1, l2) = (self.lean * delirium_data::kv!(12), self.lean2);
         let ch = &mut *c.ch;
         let sp = (*crate::nmrs::SPINE());
@@ -438,6 +499,25 @@ impl Brace {
         self.lean /= dt.fma(delirium_data::kv!(237), 1.0);
     }
 
+    /// RDR2's spine, crouch and turn: the lean split over the spine ((split + 1.5) / 4 low, (1.5 - split) / 4 high),
+    /// and the balancer's owned requests, hip pitch (owner 3) at 2/3 of the lean and knee bend (owner 2) by the
+    /// crouch, both at once; lean and crouch then ease off. (The turn request toward the target is the balancer's
+    /// fixed heading, set in `stand`. RDR2's 0x2aa7b04 spine request and its slower easing while only the minimum
+    /// brace time holds are not here.)
+    fn spine_rdr2(&mut self, c: &mut Ctx, dbm: Option<&mut Dbm>, dt: f32) {
+        let sp = *crate::nmrs::SPINE();
+        for (n, j) in sp.into_iter().enumerate() {
+            let k = if n < 2 { self.split + 1.5 } else { 1.5 - self.split };
+            c.ch.eff[j].desired[0] = k * 0.25 * self.lean;
+        }
+        if let Some(r) = dbm.and_then(|d| d.p.rdr2.as_mut()) {
+            r.owned.hip.ask(3, (0.6667 * self.lean).clamp(-2.0, 2.0), f32::INFINITY);
+            r.owned.knee.ask(2, -self.crouch_now, f32::INFINITY);
+        }
+        self.lean /= 60.0 * dt * 0.3 + 1.0;
+        self.crouch_now /= 60.0 * dt * 0.053 + 1.0;
+    }
+
     fn braced_tick(&mut self, c: &mut Ctx, k: &mut Kids, dt: f32) {
         let up = c.up;
         k.twist.pos = self.target;
@@ -446,7 +526,12 @@ impl Brace {
         let d = c.com - self.target;
         let away = crate::rigid::nrm(up * -sdot(up, d, b"zyx") + d);
         let h = sdot(up, c.b.at(SPINE3()), b"yzx") - sdot(up, self.target, b"zyx");
-        self.lean = (h * self.scale).fma(sdot(c.m.c, away, b"zyx"), delirium_data::kv!(60));
+        if !c.ch.rdr2 {
+            self.lean = (h * self.scale).fma(sdot(c.m.c, away, b"zyx"), delirium_data::kv!(60));
+        } else if self.class >= 2 {
+            // RDR2: only off the car's end (or with no car); the height clamped
+            self.lean = h.clamp(-0.5, 1.1) * self.scale * away.dot(c.m.c) + 0.2;
+        }
         if self.arm[0] && self.arm[1] {
             k.twist.stiffness = self.p.body_stiffness;
             k.twist.arms = false;
@@ -482,8 +567,12 @@ impl Brace {
             let l = limb(i);
             let s = self.p.body_stiffness;
             c.ch.set_stiffness(s, 1.0, if i == 0 { "ul" } else { "ur" }, None);
-            c.ch.eff[l.e[2]].set_stiffness(s, delirium_data::kv!(18), None);
-            c.ch.eff[l.e[delirium_data::kv!(0 int)]].set_stiffness(s - 1.0, delirium_data::kv!(13), None);
+            if c.ch.rdr2 {
+                c.ch.eff[l.e[delirium_data::kv!(0 int)]].set_stiffness(s - S, 1.75, None);
+            } else {
+                c.ch.eff[l.e[2]].set_stiffness(s, delirium_data::kv!(18), None);
+                c.ch.eff[l.e[delirium_data::kv!(0 int)]].set_stiffness(s - 1.0, delirium_data::kv!(13), None);
+            }
             let off = if i == 0 { self.side[0] * -sense * 0.5 } else { self.side[1] * sense };
             let at = c.b.joint_pos(l.e[1]);
             let d = base + side * off - at;

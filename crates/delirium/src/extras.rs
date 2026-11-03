@@ -76,6 +76,11 @@ pub trait Extra: Send + Sync {
     fn update(&mut self, _p: &mut P) -> Result<(), Error> {
         Ok(())
     }
+    /// The message started again while this runs: Some if it takes it in itself (the RDR2 core's reachForWound takes
+    /// a new bullet into its running arms), None to be restarted as usual.
+    fn hit(&mut self, _p: &mut P) -> Option<Result<(), Error>> {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -123,6 +128,13 @@ impl Extras {
             }
             self.release.extend(was.iter().flat_map(HardConstraint::parts));
             return Some(HardConstraint::new(&mut p).and_then(|h| p.done().map(|()| self.hard = Some(h))).map(|()| 0));
+        }
+        if start {
+            for (_, e) in self.on.iter_mut().filter(|(n, _)| *n == name) {
+                if let Some(r) = e.hit(&mut p) {
+                    return Some(r.and_then(|()| p.done()).map(|()| 0));
+                }
+            }
         }
         self.take_off(|n, _| n == name);
         if !start {
