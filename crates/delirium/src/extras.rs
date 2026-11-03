@@ -72,6 +72,8 @@ pub trait Extra: Send + Sync {
     fn let_go(&mut self, _hand: usize) {}
     fn objects(&mut self, _obs: &[crate::ragdoll::Obstacle]) {}
     fn stop(&mut self, _c: &mut Ctx) {}
+    /// Before the tick, with the world to probe (smartFall's ground probes).
+    fn probe(&mut self, _c: &Ctx, _world: &crate::collision::Collision, _obs: &[crate::ragdoll::Obstacle]) {}
     /// The message sent again without start: new values for whatever it follows (rdr2Sit's seat).
     fn update(&mut self, _p: &mut P) -> Result<(), Error> {
         Ok(())
@@ -154,11 +156,12 @@ impl Extras {
     }
 
     pub fn tick(&mut self, c: &mut Ctx, obs: &[crate::ragdoll::Obstacle], dt: f32) {
-        self.tick_marked(c, obs, dt, None);
+        self.tick_marked(c, None, obs, dt, None);
     }
 
     /// As `tick`; with the RDR2 core's limb requests, each extra's writes are a request at its RDR2 behaviour's slot.
-    pub fn tick_marked(&mut self, c: &mut Ctx, obs: &[crate::ragdoll::Obstacle], dt: f32, mut reqs: Option<&mut crate::limbreq::Requests>) {
+    pub fn tick_marked(&mut self, c: &mut Ctx, world: Option<&crate::collision::Collision>, obs: &[crate::ragdoll::Obstacle], dt: f32,
+                       mut reqs: Option<&mut crate::limbreq::Requests>) {
         for e in c.ch.eff.iter_mut() {
             e.offset = [0.0; 3];
         }
@@ -174,6 +177,9 @@ impl Extras {
         self.want.clear();
         for (n, e) in &mut self.on {
             e.objects(obs);
+            if let Some(w) = world {
+                e.probe(c, w, obs);
+            }
             e.tick(c, dt);
             if let Some(r) = reqs.as_deref_mut() {
                 r.mark(&c.ch.eff, crate::limbreq::slot(n));

@@ -9927,9 +9927,15 @@ fn headless(mut sim: Sim, n: usize) {
     if press.split(',').any(|b| b == "walk") {
         sim.walk_dir = Vec3::X;
     }
+    // test hook: RDR2_SEND="70:shot fallingReaction=2;90:..." sends those message lines at those frames
+    let sends: Vec<(usize, String)> = std::env::var("RDR2_SEND").unwrap_or_default().split(';')
+        .filter_map(|x| x.split_once(':')).filter_map(|(f, l)| Some((f.trim().parse().ok()?, l.trim().to_string()))).collect();
     for i in 0..n {
         if i == 60 {
             sim.button("shot");
+        }
+        for (_, l) in sends.iter().filter(|(f, _)| *f == i) {
+            sim.send(l);
         }
         sim.tick();
         sim.rise(1.0 / 60.0);
