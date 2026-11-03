@@ -150,7 +150,7 @@ pub struct UpperBodyFlinch {
     pub turn_towards: i32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct BodyWrithe {
     pub arm_stiffness: f32,
     pub back_stiffness: f32,
@@ -168,13 +168,15 @@ pub struct BodyWrithe {
     pub leg_damping: f32,
     pub roll_over: bool,
     pub mask: &'static str,
+    /// RDR2's further parameters (read with the RDR2 core)
+    pub rdr2: crate::nmbw::Rdr2Params,
 }
 
 impl Default for BodyWrithe {
     fn default() -> BodyWrithe {
         BodyWrithe { arm_stiffness: delirium_data::kv!(195), back_stiffness: delirium_data::kv!(195), leg_stiffness: delirium_data::kv!(195), arm_damping: 0.5, back_damping: 0.5, leg_damping: 0.5,
                      arm_period: 1.0, back_period: 1.0, leg_period: 1.0, arm_amplitude: 1.0, back_amplitude: 1.0, leg_amplitude: 1.0,
-                     elbow_amplitude: 1.0, knee_amplitude: 1.0, roll_over: false, mask: "fb" }
+                     elbow_amplitude: 1.0, knee_amplitude: 1.0, roll_over: false, mask: "fb", rdr2: Default::default() }
     }
 }
 
@@ -966,6 +968,16 @@ impl Agent {
         self.nm_bw_msg = Some(w);
     }
 
+    /// RDR2 core: bodyWrithe start=false stops it (GTA IV's message has no stop).
+    pub fn stop_writhe(&mut self) {
+        self.writhe = None;
+    }
+
+    /// RDR2 core: armsWindmillAdaptive start=false stops it.
+    pub fn stop_windmill(&mut self) {
+        self.windmill = None;
+    }
+
     pub fn arms_windmill(&mut self, w: ArmsWindmill) {
         self.windmill = Some(w);
         self.nm_aw_msg = Some(w);
@@ -1257,6 +1269,28 @@ impl Agent {
         }
         if out.fall_stop {
             (self.catch_fall, self.roll_up) = (None, None);
+        }
+        if out.fall_stop_rdr2 {
+            (self.rds_on, self.writhe) = (false, None);
+            self.extras.send("smartFall", &[("start", crate::msg::Value::Bool(false))]);
+        }
+        if let Some((r, stiffness)) = out.rds.take() {
+            if !self.rds_on {
+                self.roll_down_stairs(r);
+            }
+            if let Some(s) = stiffness {
+                self.nm_rds.stiffness = s;
+                if let Some(m) = self.nm_rds_msg.as_mut() {
+                    m.stiffness = s;
+                }
+            }
+        }
+        if out.smart_fall && !self.extras.on.iter().any(|(n, _)| *n == "smartFall") {
+            use crate::msg::Value;
+            self.extras.send("smartFall", &[("start", Value::Bool(true)), ("initialState", Value::Int(6))]);
+        }
+        if let Some(w) = out.writhe.take().filter(|_| self.writhe.is_none()) {
+            self.body_writhe(w);
         }
         if let Some([legs, torso, arms]) = out.catch_fall {
             let c = CatchFall { torso_stiffness: torso, legs_stiffness: legs, arms_stiffness: arms, z_axis_spin_reduction: 0.0 };
@@ -1694,7 +1728,7 @@ impl Agent {
                 (w.roll_over, w.mask) = (m.roll_over, m.mask);
                 (w.arm_period, w.back_period, w.leg_period) = (m.arm_period, m.back_period, m.leg_period);
                 (w.arm_amplitude, w.back_amplitude, w.leg_amplitude) = (m.arm_amplitude, m.back_amplitude, m.leg_amplitude);
-                (w.elbow_amplitude, w.knee_amplitude) = (m.elbow_amplitude, m.knee_amplitude);
+                (w.elbow_amplitude, w.knee_amplitude, w.rdr2) = (m.elbow_amplitude, m.knee_amplitude, m.rdr2);
                 w.activate(c.ch);
             }
             if self.writhe.is_none() {
@@ -1750,7 +1784,10 @@ impl Agent {
                 (r.stiffness, r.damping, r.forcemag, r.asymmetry, r.asymmetrical_legs) = (m.stiffness, m.damping, m.forcemag, m.asymmetry, m.asymmetrical_legs);
                 (r.use_arm_to_slow_down, r.arm_reach_amount, r.use_zero_pose, r.spin_when_in_air) = (m.use_arm_to_slow_down, m.arm_reach_amount, m.use_zero_pose, m.spin_when_in_air);
                 (r.leg_push, r.arm_reach_length, r.stiffness_decay_time, r.stiffness_decay_target) = (m.leg_push, m.arm_reach_length, m.stiffness_decay_time, m.stiffness_decay_target);
-                (r.use_custom_roll_dir, r.z_axis_spin_reduction, r.custom_roll_dir) = (m.use_custom_roll_dir, m.z_axis_spin_reduction, m.custom_roll_dir);
+                (r.use_custom_roll_dir, r.z_axis_spin_reduction, r.custom_roll_dir, r.rdr2) = (m.use_custom_roll_dir, m.z_axis_spin_reduction, m.custom_roll_dir, m.rdr2);
+                if c.ch.rdr2 {
+                    r.helper_only = m.helper_only;
+                }
                 self.nm_rds.activate(&mut c, &mut self.nm_ru);
             }
             if !self.rds_on && !self.nm_br.active && !self.nm_hf.active() {
@@ -1844,14 +1881,14 @@ impl Agent {
             stop_dbm |= hf.stop_balance;
             hf_balance = hf.balance.map(|p| (p, hf.dbm_set));
             if !waits(walk_actives!(self), W_RDS()) {
-                self.nm_rds.tick(&mut c, dt);
+                self.nm_rds.tick(&mut c, &mut self.nm_ru, self.nm_br.active, dt);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xb8); }
             if let Some(w) = self.nm_bw.as_mut() {
                 w.tick(&mut c, dt);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xe8); }
-            self.extras.tick_marked(&mut c, obstacles, dt, self.limb_reqs.as_mut());
+            self.extras.tick_marked(&mut c, Some(world), obstacles, dt, self.limb_reqs.as_mut());
             if !waits(walk_actives!(self), W_PD()) {
                 self.nm_pd.tick(&mut c, dt);
             }

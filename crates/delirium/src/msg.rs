@@ -177,6 +177,18 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "mask", kind: Kind::Str, used: true, doc: "" },
         Param { name: "armAmplitude", kind: Kind::Float, used: true, doc: "" },
         Param { name: "armPeriod", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "blendArms", kind: Kind::Float, used: true, doc: "RDR2 core only: the arms' targets' weight over what else drives them (1)" },
+        Param { name: "blendBack", kind: Kind::Float, used: true, doc: "RDR2 core only: the spine's and neck's (1)" },
+        Param { name: "blendLegs", kind: Kind::Float, used: true, doc: "RDR2 core only: the legs' (1)" },
+        Param { name: "applyStiffness", kind: Kind::Bool, used: true, doc: "RDR2 core only: set the three stiffnesses (true)" },
+        Param { name: "onFire", kind: Kind::Bool, used: true, doc: "RDR2 core only: rolls from where his back first lands, fading with time and distance (false)" },
+        Param { name: "shoulderLean1", kind: Kind::Float, used: true, doc: "RDR2 core only: on fire, the shoulders' lean1 blended toward this (0.7)" },
+        Param { name: "shoulderLean2", kind: Kind::Float, used: true, doc: "RDR2 core only (0.4)" },
+        Param { name: "lean1BlendFactor", kind: Kind::Float, used: true, doc: "RDR2 core only (0)" },
+        Param { name: "lean2BlendFactor", kind: Kind::Float, used: true, doc: "RDR2 core only (0)" },
+        Param { name: "rollTorqueScale", kind: Kind::Float, used: true, doc: "RDR2 core only: the roll over's torque (150)" },
+        Param { name: "maxRollOverTime", kind: Kind::Float, used: true, doc: "RDR2 core only: on fire, s (8)" },
+        Param { name: "rollOverRadius", kind: Kind::Float, used: true, doc: "RDR2 core only: on fire, m (2)" },
     ] },
     Message { name: "braceForImpact", params: &[
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "+20 bodyStiffness, +24 pos, +36 instanceIndex, +40 braceDistance, +44 targetPredictionTime, +48 reachAbsorbtionTime, +52 look, +64 grabStrength, +68 grabDistance, +72 grabReachAngle, +76 grabHoldTimer, +80 the car's top speed to grab (hash unnamed), +84 how long it braces at a target behind it (hash unnamed), +88 grabDontLetGo, +92 legStiffness." },
@@ -353,6 +365,23 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "zAxisSpinReduction", kind: Kind::Float, used: true, doc: "" },
         Param { name: "asymmetricalLegs", kind: Kind::Float, used: true, doc: "" },
         Param { name: "asymmetry", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "muscleStiffness", kind: Kind::Float, used: true, doc: "RDR2 core only (1)" },
+        Param { name: "onlyApplyHelperForces", kind: Kind::Bool, used: true, doc: "RDR2 core only: the helper torques without bodyRollUp (false)" },
+        Param { name: "useRelativeVelocity", kind: Kind::Bool, used: true, doc: "RDR2 core only: with braceForImpact running, the speed is customRollDir's length (false)" },
+        Param { name: "maxAngVelAroundFrontwardAxis", kind: Kind::Float, used: true, doc: "RDR2 core only: spinning faster about the front-back axis turns the cheating and align torques off, rad/s (2)" },
+        Param { name: "applyNewRollingCheatingTorques", kind: Kind::Bool, used: true, doc: "RDR2 core only: a fixed roll torque once the legs are high, instead of the roll helper (false)" },
+        Param { name: "magOfTorqueToRoll", kind: Kind::Float, used: true, doc: "RDR2 core only (50)" },
+        Param { name: "maxAngVel", kind: Kind::Float, used: true, doc: "RDR2 core only: the cheating torque only below this roll speed, rad/s (5)" },
+        Param { name: "minAngVel", kind: Kind::Float, used: true, doc: "RDR2 core only: and above this (0.5)" },
+        Param { name: "applyHelPerTorqueToAlign", kind: Kind::Bool, used: true, doc: "RDR2 core only: turn the spine along the roll axis (false)" },
+        Param { name: "delayToAlignBody", kind: Kind::Float, used: true, doc: "RDR2 core only, s (0.2)" },
+        Param { name: "magOfTorqueToAlign", kind: Kind::Float, used: true, doc: "RDR2 core only (50)" },
+        Param { name: "airborneReduction", kind: Kind::Float, used: true, doc: "RDR2 core only: the roll torque in the air times 1 minus this, with spinWhenInAir (0.85)" },
+        Param { name: "applyFoetalToLegs", kind: Kind::Bool, used: true, doc: "RDR2 core only: fold the legs in once they are high (false)" },
+        Param { name: "movementLegsInFoetalPosition", kind: Kind::Float, used: true, doc: "RDR2 core only (1.3)" },
+        Param { name: "limitSpinReduction", kind: Kind::Bool, used: true, doc: "RDR2 core only: zAxisSpinReduction only while spinning about the body's up axis (false)" },
+        Param { name: "targetLinearVelocity", kind: Kind::Float, used: true, doc: "RDR2 core only: the roll torque acts as if at least this fast, m/s (1)" },
+        Param { name: "targetLinearVelocityDecayTime", kind: Kind::Float, used: true, doc: "RDR2 core only: that floor fades to 0 over this, s (0.5)" },
     ] },
     Message { name: "setStiffness", params: &[
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "" },
@@ -681,11 +710,11 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
             a.update_params(build, world, st, msg, params.iter().any(|(n, _)| *n == "bodyPart"));
             st.upper_body_flinch.new_hit = None;
         }
-        "armsWindmillAdaptive" => if on { a.arms_windmill(st.arms_windmill_adaptive.clone()) },
+        "armsWindmillAdaptive" => if on { a.arms_windmill(st.arms_windmill_adaptive.clone()) } else if a.rdr2_core.is_some() { a.stop_windmill() },
         "bodyBalance" => if on { a.body_balance_full(build, world, st.body_balance) } else { a.body_balance_stop() },
         "bodyFoetal" => a.body_foetal(on.then(|| st.body_foetal.clone())),
         "bodyRollUp" => if on { a.body_roll_up(st.body_roll_up.clone()) } else { a.stop_roll_up() },
-        "bodyWrithe" => if on { a.body_writhe(st.body_writhe.clone()) },
+        "bodyWrithe" => if on { a.body_writhe(st.body_writhe.clone()) } else if a.rdr2_core.is_some() { a.stop_writhe() },
         "braceForImpact" => if on { a.brace_for_impact(build, st.brace_for_impact.clone()) },
         "catchFall" => if on { a.catch_fall_full(build, st.catch_fall.clone()) } else { a.stop_catch_fall() },
         "fallOverWall" => if on { a.fall_over_wall(st.fall_over_wall.clone()) },
@@ -811,6 +840,18 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("bodyWrithe", "mask") => { let p = &mut st.body_writhe; p.mask = intern(v.s()?); }
         ("bodyWrithe", "armAmplitude") => { let p = &mut st.body_writhe; p.arm_amplitude = v.f()?; }
         ("bodyWrithe", "armPeriod") => { let p = &mut st.body_writhe; p.arm_period = v.f()?; }
+        ("bodyWrithe", "blendArms") => { let p = &mut st.body_writhe; p.rdr2.blend_arms = v.f()?; }
+        ("bodyWrithe", "blendBack") => { let p = &mut st.body_writhe; p.rdr2.blend_back = v.f()?; }
+        ("bodyWrithe", "blendLegs") => { let p = &mut st.body_writhe; p.rdr2.blend_legs = v.f()?; }
+        ("bodyWrithe", "applyStiffness") => { let p = &mut st.body_writhe; p.rdr2.apply_stiffness = v.b()?; }
+        ("bodyWrithe", "onFire") => { let p = &mut st.body_writhe; p.rdr2.on_fire = v.b()?; }
+        ("bodyWrithe", "shoulderLean1") => { let p = &mut st.body_writhe; p.rdr2.shoulder_lean1 = v.f()?; }
+        ("bodyWrithe", "shoulderLean2") => { let p = &mut st.body_writhe; p.rdr2.shoulder_lean2 = v.f()?; }
+        ("bodyWrithe", "lean1BlendFactor") => { let p = &mut st.body_writhe; p.rdr2.lean1_blend_factor = v.f()?; }
+        ("bodyWrithe", "lean2BlendFactor") => { let p = &mut st.body_writhe; p.rdr2.lean2_blend_factor = v.f()?; }
+        ("bodyWrithe", "rollTorqueScale") => { let p = &mut st.body_writhe; p.rdr2.roll_torque_scale = v.f()?; }
+        ("bodyWrithe", "maxRollOverTime") => { let p = &mut st.body_writhe; p.rdr2.max_roll_over_time = v.f()?; }
+        ("bodyWrithe", "rollOverRadius") => { let p = &mut st.body_writhe; p.rdr2.roll_over_radius = v.f()?; }
         ("braceForImpact", "bodyStiffness") => { let p = &mut st.brace_for_impact; p.body_stiffness = v.f()?; }
         ("braceForImpact", "look") => { let p = &mut st.brace_for_impact; p.look = v.v()?; }
         ("braceForImpact", "grabReachAngle") => { let p = &mut st.brace_for_impact; p.grab_reach_angle = v.f()?; }
@@ -952,6 +993,23 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("rollDownStairs", "zAxisSpinReduction") => { let p = &mut st.roll_down_stairs; p.z_axis_spin_reduction = v.f()?; }
         ("rollDownStairs", "asymmetricalLegs") => { let p = &mut st.roll_down_stairs; p.asymmetrical_legs = v.f()?; }
         ("rollDownStairs", "asymmetry") => { let p = &mut st.roll_down_stairs; p.asymmetry = v.f()?; }
+        ("rollDownStairs", "muscleStiffness") => { let p = &mut st.roll_down_stairs; p.rdr2.muscle_stiffness = v.f()?; }
+        ("rollDownStairs", "onlyApplyHelperForces") => { let p = &mut st.roll_down_stairs; p.helper_only = v.b()?; }
+        ("rollDownStairs", "useRelativeVelocity") => { let p = &mut st.roll_down_stairs; p.rdr2.use_relative_velocity = v.b()?; }
+        ("rollDownStairs", "maxAngVelAroundFrontwardAxis") => { let p = &mut st.roll_down_stairs; p.rdr2.max_ang_vel_around_frontward_axis = v.f()?; }
+        ("rollDownStairs", "applyNewRollingCheatingTorques") => { let p = &mut st.roll_down_stairs; p.rdr2.cheating_torques = v.b()?; }
+        ("rollDownStairs", "magOfTorqueToRoll") => { let p = &mut st.roll_down_stairs; p.rdr2.mag_of_torque_to_roll = v.f()?; }
+        ("rollDownStairs", "maxAngVel") => { let p = &mut st.roll_down_stairs; p.rdr2.max_ang_vel = v.f()?; }
+        ("rollDownStairs", "minAngVel") => { let p = &mut st.roll_down_stairs; p.rdr2.min_ang_vel = v.f()?; }
+        ("rollDownStairs", "applyHelPerTorqueToAlign") => { let p = &mut st.roll_down_stairs; p.rdr2.align = v.b()?; }
+        ("rollDownStairs", "delayToAlignBody") => { let p = &mut st.roll_down_stairs; p.rdr2.delay_to_align_body = v.f()?; }
+        ("rollDownStairs", "magOfTorqueToAlign") => { let p = &mut st.roll_down_stairs; p.rdr2.mag_of_torque_to_align = v.f()?; }
+        ("rollDownStairs", "airborneReduction") => { let p = &mut st.roll_down_stairs; p.rdr2.airborne_reduction = v.f()?; }
+        ("rollDownStairs", "applyFoetalToLegs") => { let p = &mut st.roll_down_stairs; p.rdr2.foetal_legs = v.b()?; }
+        ("rollDownStairs", "movementLegsInFoetalPosition") => { let p = &mut st.roll_down_stairs; p.rdr2.movement_legs_in_foetal_position = v.f()?; }
+        ("rollDownStairs", "limitSpinReduction") => { let p = &mut st.roll_down_stairs; p.rdr2.limit_spin_reduction = v.b()?; }
+        ("rollDownStairs", "targetLinearVelocity") => { let p = &mut st.roll_down_stairs; p.rdr2.target_linear_velocity = v.f()?; }
+        ("rollDownStairs", "targetLinearVelocityDecayTime") => { let p = &mut st.roll_down_stairs; p.rdr2.target_linear_velocity_decay_time = v.f()?; }
         ("setStiffness", "bodyStiffness") => { let p = &mut st.set_stiffness; p.body_stiffness = v.f()?; }
         ("setStiffness", "mask") => { let p = &mut st.set_stiffness; p.mask = v.s()?.to_string(); }
         ("setStiffness", "damping") => { let p = &mut st.set_stiffness; p.damping = v.f()?; }

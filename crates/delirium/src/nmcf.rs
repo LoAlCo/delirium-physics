@@ -150,6 +150,11 @@ impl CatchFall {
         CatchFall { p, dir: Vec3::ZERO, forward: 0.0, k: 1.0, upright: 0.0, leg, lean2, arm, touched: false, active: true, rd: None }
     }
 
+    /// RDR2's: something of his other than the lower legs and feet has touched the ground (false for GTA IV's).
+    pub fn on_ground(&self) -> bool {
+        self.rd.as_ref().is_some_and(|r| r.on_ground)
+    }
+
     pub fn deactivate(&mut self, head: &mut HeadLook, st: &mut SpineTwist) {
         if self.active {
             self.active = false;

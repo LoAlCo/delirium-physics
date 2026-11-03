@@ -1,5 +1,5 @@
 use crate::extras::{Extra, P};
-use crate::msg::{Error, Kind, Message, Param};
+use crate::msg::{Error, Kind, Message, Param, Value};
 use crate::nmrs::{ANKLE, CLAVICLE, ELBOW, HIP, KNEE, NECK, SHOULDER, SPINE};
 use crate::nmshot::Ctx;
 use bevy_math::Vec3;
@@ -130,6 +130,13 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "tumble", kind: Kind::Float, used: true, doc: "forward somersault in the air, rad/s, about the way he is going (0: none)" },
         Param { name: "rdsTargetLinearVelocity", kind: Kind::Float, used: false, doc: "(not done: 0)" },
         Param { name: "rdsTargetLinearVelocityDecayTime", kind: Kind::Float, used: false, doc: "(not done: 0)" },
+        Param { name: "initialState", kind: Kind::Int, used: true, doc: "RDR2 core only: the state it starts in, 0 airborne .. 6 hard landing .. 8 settle (0)" },
+        Param { name: "stopRollingTime", kind: Kind::Float, used: true, doc: "RDR2 core only (2)" },
+        Param { name: "splatWhenStopped", kind: Kind::Float, used: true, doc: "RDR2 core only: after a hard landing, lie still below this speed, m/s (0: off)" },
+        Param { name: "cfZAxisSpinReduction", kind: Kind::Float, used: true, doc: "RDR2 core only: catchFall's zAxisSpinReduction (0.5)" },
+        Param { name: "teeter", kind: Kind::Bool, used: true, doc: "RDR2 core only: teeter at the edge when landing on his feet, from initialState 7 (false)" },
+        Param { name: "teeterOffset", kind: Kind::Float, used: true, doc: "RDR2 core only: the edge this far ahead, m (0.3)" },
+        Param { name: "rdsForceVelThreshold", kind: Kind::Float, used: true, doc: "RDR2 core only (10)" },
     ] },
     Message { name: "balancerCollisionsReaction", params: &[
         Param { name: "objectBehindVictimPos", kind: Kind::Vec3, used: true, doc: "the obstacle behind him (zero: a hip-high wall 0.4 m behind)" },
@@ -619,6 +626,9 @@ pub struct SmartFall {
     air: bool,
     started: Vec<&'static str>,
     out: Vec<String>,
+    /// RDR2's, with the RDR2 core: its parameters and machine
+    rp: SfParams,
+    rd: Option<Box<SfRdr2>>,
 }
 const SF_AIR: u8 = 0;
 const SF_LAND: u8 = 1;
@@ -642,6 +652,7 @@ impl SmartFall {
         let (brace, max) = (p.f("minSpeedForBrace", delirium_data::kv!(84))?, p.f("maxSpeedForRecoverableFall", delirium_data::kv!(21))?);
         let normal = p.v("landingNormal", Vec3::Z)?.normalize_or(Vec3::Z);
         let (balance, fwd_roll, limp) = (p.b("balance", true)?, p.b("forwardRoll", false)?, p.b("alanRickman", false)?);
+        let rp = SfParams::read(p)?;
         let (rds, tumble) = (p.f("rdsForceMag", 2.0)?, p.f("tumble", 0.0)?);
         for n in ["pdStrength", "pdDamping", "sideD", "arms2LegsPhase", "hula", "aimAngleBase", "forwardVelRotation", "footVelCompScale",
                   "rdsTargetLinearVelocity", "rdsTargetLinearVelocityDecayTime"] {
@@ -651,7 +662,7 @@ impl SmartFall {
             p.b(n, false)?;
         }
         Ok(SmartFall { stiff, catch_time, cutoff, end_time, arms, legs, orient, brace, max, normal, balance, fwd_roll, limp, rds,
-                       tumble, axis: Vec3::ZERO, z0: 0.0, state: SF_AIR, t: 0.0, peak: 0.0, air: false, started: vec![], out: vec![] })
+                       tumble, axis: Vec3::ZERO, z0: 0.0, state: SF_AIR, t: 0.0, peak: 0.0, air: false, started: vec![], out: vec![], rp, rd: None })
     }
 
     fn to(&mut self, state: u8, name: &str) {
@@ -672,7 +683,29 @@ impl SmartFall {
     }
 }
 impl Extra for SmartFall {
+    fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
+        if c.ch.rdr2 {
+            let rp = self.rp;
+            self.rd.get_or_insert_with(|| Box::new(SfRdr2::new(rp))).probe(c, world, obs);
+        }
+    }
+
+    fn stop(&mut self, _c: &mut Ctx) {
+        if let Some(rd) = self.rd.as_mut() {
+            for n in std::mem::take(&mut rd.on) {
+                self.out.push(format!("{n} start=false"));
+            }
+        }
+    }
+
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            let rp = self.rp;
+            let rd = self.rd.get_or_insert_with(|| Box::new(SfRdr2::new(rp)));
+            rd.tick(c, dt);
+            self.out.append(&mut rd.out);
+            return;
+        }
         self.t += dt;
         let w = weight(c);
         if self.state == SF_AIR {
@@ -1183,3 +1216,628 @@ impl Extra for Crawl {
     }
 }
 
+/// RDR2's smartFall parameters, with RDR2's defaults where none is given (GTA IV's message, read with the RDR2 core).
+#[derive(Clone, Copy, Debug)]
+struct SfParams {
+    body_stiffness: f32,
+    body_damping: f32,
+    catch_fall_time: f32,
+    crash_or_land_cut_off: f32,
+    pd_strength: f32,
+    pd_damping: f32,
+    arms_up: f32,
+    leg_radius: f32,
+    leg_ang_speed: f32,
+    leg_asymmetry: f32,
+    arms2legs_phase: f32,
+    arms2legs_sync: i32,
+    arm_ang_speed: f32,
+    arm_amplitude: f32,
+    arm_phase: f32,
+    forward_offset: f32,
+    balance: bool,
+    orientate_to_fall: bool,
+    alan_rickman: bool,
+    orientate_twist: bool,
+    orientate_max: f32,
+    forward_roll: bool,
+    zero_pose_roll: bool,
+    ignore_world: bool,
+    adaptive_circling: bool,
+    hula: bool,
+    max_recoverable: f32,
+    landing_normal: f32,
+    rds_force_mag: f32,
+    rds_tlv: f32,
+    rds_tlv_decay: f32,
+    rds_force_vel: f32,
+    initial_state: u8,
+    stop_rolling_time: f32,
+    teeter: bool,
+    teeter_offset: f32,
+    cf_spin: f32,
+    splat: f32,
+}
+
+impl SfParams {
+    fn read(p: &mut P) -> Result<SfParams, Error> {
+        let f = |p: &mut P, n: &str, d: f32| -> Result<f32, Error> { p.get(n).map_or(Ok(d), Value::f) };
+        let b = |p: &mut P, n: &str, d: bool| -> Result<bool, Error> { p.get(n).map_or(Ok(d), Value::b) };
+        // GTA IV's message has these as numbers where RDR2's are flags, or a flag where RDR2's is a number
+        let fb = |p: &mut P, n: &str, d: bool| -> Result<bool, Error> { p.get(n).map_or(Ok(d), |v| v.f().map(|x| x != 0.0)) };
+        let bi = |p: &mut P, n: &str, d: i32| -> Result<i32, Error> { p.get(n).map_or(Ok(d), |v| v.b().map(i32::from)) };
+        Ok(SfParams {
+            body_stiffness: f(p, "bodyStiffness", 11.0)?, body_damping: f(p, "bodydamping", 1.0)?, catch_fall_time: f(p, "catchfalltime", 0.3)?,
+            crash_or_land_cut_off: f(p, "crashOrLandCutOff", 0.868)?, pd_strength: f(p, "pdStrength", 0.0)?, pd_damping: f(p, "pdDamping", 1.0)?,
+            arms_up: f(p, "armsUp", -3.1)?, leg_radius: f(p, "legRadius", 0.4)?, leg_ang_speed: f(p, "legAngSpeed", 7.85)?,
+            leg_asymmetry: f(p, "legAsymmetry", 4.0)?, arms2legs_phase: f(p, "arms2LegsPhase", 0.0)?, arms2legs_sync: bi(p, "arms2LegsSync", 1)?,
+            arm_ang_speed: f(p, "armAngSpeed", 7.85)?, arm_amplitude: f(p, "armAmplitude", 2.0)?, arm_phase: f(p, "armPhase", 3.1)?,
+            forward_offset: f(p, "forwardOffsetOfLegIK", 0.0)?, balance: b(p, "balance", true)?,
+            orientate_to_fall: b(p, "orientateBodyToFallDirection", false)?, alan_rickman: b(p, "alanRickman", false)?,
+            orientate_twist: fb(p, "orientateTwist", true)?, orientate_max: f(p, "orientateMax", 300.0)?, forward_roll: b(p, "forwardRoll", false)?,
+            zero_pose_roll: b(p, "useZeroPose_withForwardRoll", false)?, ignore_world: b(p, "ignorWorldCollisions", false)?,
+            adaptive_circling: b(p, "adaptiveCircling", true)?, hula: fb(p, "hula", true)?,
+            max_recoverable: f(p, "maxSpeedForRecoverableFall", 15.0)?, landing_normal: 0.6, rds_force_mag: f(p, "rdsForceMag", 0.8)?,
+            rds_tlv: f(p, "rdsTargetLinearVelocity", 1.0)?, rds_tlv_decay: f(p, "rdsTargetLinearVelocityDecayTime", 0.5)?,
+            rds_force_vel: f(p, "rdsForceVelThreshold", 10.0)?, initial_state: p.get("initialState").map_or(Ok(0), Value::i)?.clamp(0, 8) as u8,
+            stop_rolling_time: f(p, "stopRollingTime", 2.0)?, teeter: b(p, "teeter", false)?, teeter_offset: f(p, "teeterOffset", 0.3)?,
+            cf_spin: f(p, "cfZAxisSpinReduction", 0.5)?, splat: f(p, "splatWhenStopped", 0.0)?,
+        })
+    }
+}
+
+/// RDR2's smartFall (with the RDR2 core): a nine-state machine that runs the fall by starting and configuring other
+/// behaviours, from ground probes, the time to impact, the body's attitude and whether the fall is survivable.
+struct SfRdr2 {
+    p: SfParams,
+    state: u8,
+    /// the state's own clocks: rolling (5) and on the feet (7), and the hard landing's (6)
+    t200: f32,
+    t21c: f32,
+    smooth: f32,
+    /// time since the start
+    t: f32,
+    hula: f32,
+    /// state 0: time with the upper body touching
+    touching: f32,
+    first_floor: f32,
+    peak: Vec3,
+    start: Vec3,
+    leg_len: f32,
+    /// the feedback was sent (once per latch)
+    sent: bool,
+    pd: bool,
+    height: f32,
+    tti: f32,
+    land_up: f32,
+    landing_flat: bool,
+    class: u8,
+    class_now: u8,
+    class_mid: u8,
+    ground: Vec3,
+    contact: bool,
+    recoverable: bool,
+    failed: bool,
+    settled: bool,
+    back_pedal: bool,
+    first: bool,
+    on: Vec<&'static str>,
+    out: Vec<String>,
+}
+
+fn v3s(v: Vec3) -> String {
+    format!("{},{},{}", v.x, v.y, v.z)
+}
+
+fn unit(v: Vec3) -> Vec3 {
+    let l = v.length();
+    if l > 1e-6 { v / l } else { Vec3::ZERO }
+}
+
+/// The landing attitude: 0 feet down, 1 front down, 2 side or head down, 3 back down (ours [G]: RDR2's classifier
+/// isn't read; its states use 1 and 2 as the falls catchFall takes).
+fn attitude(a: [Vec3; 3], n: Vec3) -> u8 {
+    let (b, c) = (a[1], a[2]);
+    if b.dot(n) > 0.5 { 0 } else if c.dot(n) > 0.5 { 1 } else if c.dot(n) < -0.5 { 3 } else { 2 }
+}
+
+const SF_NAMES: [&str; 9] = ["airborne", "tumbling", "crash", "brace", "unrecoverable", "forward roll", "hard landing", "land on feet", "settle"];
+
+impl SfRdr2 {
+    fn new(p: SfParams) -> SfRdr2 {
+        SfRdr2 { p, state: p.initial_state, t200: 0.0, t21c: 0.0, smooth: 0.0, t: 0.0, hula: -0.1, touching: 0.0, first_floor: -1.0, peak: Vec3::ZERO,
+                 start: Vec3::ZERO, leg_len: 0.9, sent: false, pd: true, height: 5.0, tti: 30.0, land_up: 0.0, landing_flat: false, class: 3,
+                 class_now: 3, class_mid: 3, ground: Vec3::Z, contact: false, recoverable: true, failed: false, settled: false, back_pedal: false, first: true,
+                 on: vec![], out: vec![] }
+    }
+
+    fn ensure(&mut self, name: &'static str, line: String) {
+        if !self.on.contains(&name) {
+            self.on.push(name);
+            self.out.push(line);
+        }
+    }
+
+    fn stop(&mut self, name: &'static str) {
+        if self.on.contains(&name) {
+            self.on.retain(|&s| s != name);
+            self.out.push(format!("{name} start=false"));
+        }
+    }
+
+    fn feedback(&mut self, c: &mut Ctx, failure: bool) {
+        if !self.sent {
+            self.sent = true;
+            c.out.send(if failure { delirium_data::kv!(54 int) } else { delirium_data::kv!(55 int) }, "smartFall", 0.0);
+        }
+    }
+
+    /// RDR2's ground probes: the height under the COM (5 m down) and where a 1 s ballistic guess meets the ground, from
+    /// which the time to impact and the attitude he will land in.
+    fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
+        let up = c.up;
+        if self.state == 7 {
+            self.height = 1.0;
+        } else {
+            match crate::nmcf::cast(world, obs, c.com, -up, 5.0) {
+                Some((t, n, _)) => (self.height, self.ground) = (t, n),
+                None => self.height = 5.0,
+            }
+        }
+        if self.state == 7 {
+            self.tti = 30.0;
+            return;
+        }
+        let seg = c.vel - up * 9.81;
+        let len = seg.length();
+        // (no hit: the ground is further than a second away; ours, RDR2's probe keeps its last result)
+        let Some((t, n, _)) = (len > 1e-4).then(|| crate::nmcf::cast(world, obs, c.com, seg / len, len)).flatten() else {
+            self.tti = 30.0;
+            return;
+        };
+        let hit = c.com + seg / len * t;
+        (self.land_up, self.landing_flat) = (n.dot(up), n.dot(up) > self.p.landing_normal);
+        let mut d = up.dot(c.com - hit).abs();
+        if c.m.b.dot(up) > self.p.crash_or_land_cut_off && d > self.leg_len {
+            d -= self.leg_len;
+        }
+        let (vz, g) = (-c.vel.dot(up).abs(), crate::ragdoll::GRAVITY().abs().max(1.0));
+        self.tti = ((2.0 * g * d + vz * vz).sqrt() + vz) / g;
+        let q = bevy_math::Quat::from_scaled_axis(c.angvel * self.tti.min(1.0));
+        self.class = attitude([q * c.m.a, q * c.m.b, q * c.m.c], n);
+    }
+
+    fn begin(&mut self, c: &mut Ctx) {
+        (self.start, self.recoverable, self.first) = (c.com, true, false);
+        let (h, k, a) = (c.b.joint_pos((*HIP())[0]), c.b.joint_pos((*KNEE())[0]), c.b.joint_pos((*ANKLE())[0]));
+        self.leg_len = (h - k).length() + (k - a).length();
+        self.peak = c.vel;
+        self.first_floor = -1.0;
+        self.out.push(format!("#say smartFall (RDR2) {}", SF_NAMES[self.state as usize]));
+        self.enter(c, self.state);
+    }
+
+    fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if self.first {
+            self.begin(c);
+        }
+        let p = self.p;
+        let (up, v) = (c.up, c.vel);
+        let b = p.body_stiffness;
+        if !matches!(self.state, 2 | 6 | 7 | 8) {
+            // (RDR2 scales by the health, which is full here)
+            c.ch.set_stiffness((2.0 * b).max(5.0).min(b), p.body_damping, "fb", None);
+        }
+        let upright = up.dot(c.m.b) > p.crash_or_land_cut_off;
+        // the situation
+        let h = v - up * up.dot(v);
+        let down = -up.dot(v);
+        let share = down / (down.abs() + h.length()).max(1e-6);
+        let fwdish = unit(v).dot(-c.m.c) > -0.2;
+        self.class_now = attitude([c.m.a, c.m.b, c.m.c], self.ground);
+        let qm = bevy_math::Quat::from_scaled_axis(c.angvel * (0.5 * self.tti).min(1.0));
+        self.class_mid = attitude([qm * c.m.a, qm * c.m.b, qm * c.m.c], self.ground);
+        if v.length() > self.peak.length() {
+            self.peak = v;
+        }
+        let all: Vec<usize> = (0..c.b.build.parts.len()).collect();
+        let touch = c.b.doll.collided(&all);
+        if !self.first || matches!(p.initial_state, 6 | 7) {
+            self.contact = touch;
+            if !touch {
+                self.ground = up;
+            }
+        }
+        let floor = self.ground.dot(up) > 0.7;
+        if self.contact && floor && self.first_floor < 0.0 && self.state != 7 {
+            self.first_floor = self.t;
+        }
+        if self.state == 0 {
+            let legs: Vec<usize> = (2..4).flat_map(|i| crate::nmshot::limb(i).p[1..].to_vec()).collect();
+            let upper: Vec<usize> = (1..c.b.build.parts.len()).filter(|k| !legs.contains(k)).collect();
+            self.touching = if c.b.doll.collided(&upper) { self.touching + dt } else { 0.0 };
+        }
+        let impact = (self.state == 0 && self.touching > 0.3) || self.tti < p.catch_fall_time + 0.15;
+        let contact = self.contact && !p.ignore_world;
+        let f302 = upright && self.land_up > 0.7;
+        let (o1, o2, o5) = (self.class == 1, self.class == 2, self.class_now == 2 && self.class_mid == 2);
+        let forward = fwdish && matches!(self.class, 1 | 2);
+        let land = contact || (impact && !f302);
+        let slope = 10.0 * (1.0 - self.ground.dot(up)).clamp(0.0, 0.1);
+        self.recoverable &= (1.0 - slope) * v.dot(up) > -p.max_recoverable;
+        let high = !impact && self.tti > 0.4 && !contact && self.height > 1.5;
+        let vertical = share > 0.3;
+        let dead = false;
+        self.orientate(c, dt);
+        self.t += dt;
+        // the state machine: the update, then the transitions it asks for
+        self.update(c, dt);
+        let r = self.recoverable;
+        let air = |vertical: bool| if vertical { 0 } else { 1 };
+        let not_land = |s: &SfRdr2| if impact && s.landing_flat { Some(3) } else if vertical { None } else { Some(1) };
+        let next: Option<u8> = match self.state {
+            5 if self.sent => Some(6),
+            0 if land && dead => Some(8),
+            0 if impact && !r => Some(4),
+            0 if land => {
+                if forward && (o1 || (o2 && o5)) { Some(6) } else if forward && (!o2 || o5) { not_land(self) } else { Some(2) }
+            }
+            0 => not_land(self),
+            1 if land && dead => Some(8),
+            1 if impact && !r => Some(4),
+            1 if land => Some(if forward { 6 } else { 2 }),
+            1 if impact && self.landing_flat => Some(3),
+            1 if vertical => Some(0),
+            2 if contact => Some(if upright { 7 } else { 6 }),
+            2 if o5 => Some(6),
+            2 if !r => Some(4),
+            2 if self.tti > 0.4 && self.height > 1.5 && vertical => Some(0),
+            2 if self.height > 1.5 && !vertical => Some(1),
+            3 | 4 | 5 | 6 | 7 | 8 if high => Some(air(vertical)),
+            3 if !r => Some(4),
+            3 if !contact => None,
+            3 if dead => Some(8),
+            3 => Some(if p.forward_roll { 5 } else if upright { 7 } else { 6 }),
+            4 if !contact => None,
+            4 if !dead && r => Some(if upright { 7 } else { 6 }),
+            4 => Some(8),
+            6 if (p.splat > 0.0 && v.length() < p.splat) || dead || (contact && !r) => Some(8),
+            7 if self.failed && (dead || !r) => Some(8),
+            7 if self.failed && !self.on.contains(&"catchFall") && !self.on.contains(&"rollDownStairs") => Some(0),
+            _ => None,
+        };
+        if let Some(s) = next.filter(|&s| s != self.state) {
+            self.exit(c, self.state);
+            self.state = s;
+            self.out.push(format!("#say smartFall (RDR2) {}  height {:.2} m, impact in {:.2} s", SF_NAMES[s as usize], self.height, self.tti));
+            self.enter(c, s);
+        }
+    }
+
+    /// RDR2's orientation PD on the pelvis, while airborne: toward the fall's direction (or the heading he has), or for
+    /// alanRickman along where he started.
+    fn orientate(&mut self, c: &mut Ctx, dt: f32) {
+        let p = self.p;
+        if !self.pd || p.pd_strength <= 0.001 {
+            return;
+        }
+        let up = c.up;
+        let pel = c.b.pmat(0).m;
+        let (axis, angle) = if p.alan_rickman {
+            let a = (c.com - self.start).cross(-pel.c);
+            (unit(a), a.length().min(1.0).asin())
+        } else {
+            let h = c.vel - up * up.dot(c.vel);
+            let fwd_speed = -h.dot(c.m.c);
+            let (side, fwd) = if fwd_speed.abs() < 1.0 || !p.orientate_to_fall {
+                let a = unit(c.m.a - up * up.dot(c.m.a));
+                (a, up.cross(a))
+            } else {
+                let s = unit(-h);
+                (s, s.cross(up))
+            };
+            if p.orientate_twist {
+                let target = bevy_math::Quat::from_mat3(&bevy_math::Mat3::from_cols(side, up, -fwd));
+                let now = bevy_math::Quat::from_mat3(&bevy_math::Mat3::from_cols(unit(pel.a), unit(pel.b), unit(pel.c)));
+                let (ax, mut an) = (target * now.inverse()).to_axis_angle();
+                if an > std::f32::consts::PI {
+                    an -= std::f32::consts::TAU;
+                }
+                (ax, an)
+            } else {
+                let a = (-pel.c).cross(fwd);
+                (unit(a), a.length().min(1.0).asin())
+            }
+        };
+        let s = p.pd_strength;
+        let t = (260.0 * s * angle - 80.0 * s * p.pd_damping * axis.dot(c.angvel)).clamp(-p.orientate_max, p.orientate_max) / (60.0 * dt).clamp(1.0, 60.0);
+        c.out.torque(0, axis * t);
+    }
+
+    fn enter(&mut self, c: &mut Ctx, s: u8) {
+        let p = self.p;
+        let b = p.body_stiffness;
+        match s {
+            0 => {
+                self.pd = true;
+                (self.peak, self.touching, self.first_floor) = (Vec3::ZERO, 0.0, -1.0);
+            }
+            1 => self.pd = false,
+            2 => {
+                self.contact = false;
+                self.ensure("bodyFoetal", "bodyFoetal start=true stiffness=10 mask=ub".into());
+                self.ensure("pedalLegs", "pedalLegs start=true pedalLeftLeg=true pedalRightLeg=true radius=0.2 angularSpeed=3 backPedal=false \
+                                          legStiffness=9 radiusVariance=0.2 adaptivePedal4Dragging=false speedAsymmetry=1 pedalOffset=0.05".into());
+            }
+            4 => {
+                self.stop("pedalLegs");
+                self.ensure("bodyFoetal", "bodyFoetal start=true".into());
+                self.ensure("bodyWrithe", "bodyWrithe start=true blendArms=0.5 blendBack=0.5 blendLegs=0.5".into());
+            }
+            6 => {
+                for n in ["bodyWrithe", "bodyFoetal", "pedalLegs"] {
+                    self.stop(n);
+                }
+                self.t21c = 0.0;
+                self.on.retain(|&n| n != "catchFall");
+                self.ensure("catchFall", format!("catchFall start=true legsStiffness={} torsoStiffness={} armsStiffness={} zAxisSpinReduction={}",
+                                                 0.75 * b, 10.0 / 11.0 * b, 13.0 / 11.0 * b, p.cf_spin));
+            }
+            7 => {
+                self.ensure("bodyBalance", "bodyBalance start=true".into());
+                (self.t200, self.failed) = (0.0, false);
+            }
+            8 => self.settled = false,
+            _ => {}
+        }
+        let _ = c;
+    }
+
+    fn exit(&mut self, c: &mut Ctx, s: u8) {
+        match s {
+            0 => {
+                self.pd = false;
+                for n in ["headLook", "pedalLegs", "catchFall", "armsWindmillAdaptive", "bodyWrithe"] {
+                    self.stop(n);
+                }
+            }
+            1 | 4 => {
+                self.stop("bodyWrithe");
+                self.stop("bodyFoetal");
+            }
+            2 => {
+                self.stop("bodyFoetal");
+                self.stop("pedalLegs");
+            }
+            3 => {
+                self.stop("pedalLegs");
+                self.stop("catchFall");
+            }
+            5 => self.stop("rollDownStairs"),
+            6 => {
+                self.stop("catchFall");
+                self.t21c = 0.0;
+            }
+            7 => {
+                self.stop("teeter");
+                self.stop("bodyBalance");
+            }
+            _ => {}
+        }
+        let _ = c;
+    }
+
+    fn update(&mut self, c: &mut Ctx, dt: f32) {
+        let p = self.p;
+        let b = p.body_stiffness;
+        let (up, v) = (c.up, c.vel);
+        match self.state {
+            0 => {
+                self.sent = false;
+                let look = c.com - c.m.c + up * c.m.c.dot(up) - up * 2.0;
+                self.out.push(format!("headLook start=true alwaysLook=true pos={} vel={} stiffness={b} damping={}", v3s(look), v3s(v), p.body_damping));
+                self.on.retain(|&n| n != "headLook");
+                self.on.push("headLook");
+                // adaptive circling: pedal backwards (and the arms the other way) when pitching forward, from the pitch
+                // and the angular momentum about the side axis
+                if p.adaptive_circling {
+                    let pitch = {
+                        let a = c.m.c.z.clamp(-1.0, 1.0).asin();
+                        if c.m.b.z < 0.0 { if a >= 0.0 { std::f32::consts::PI - a } else { -std::f32::consts::PI - a } } else { a }
+                    };
+                    // (RDR2 reads the angular momentum about the side axis; ours, the spin about it [G])
+                    let l = c.m.a.dot(c.angvel);
+                    let e = if l.abs() > 12.0 || pitch.signum() != l.signum() { l - pitch } else { -pitch };
+                    if e < -2.2 {
+                        self.back_pedal = false;
+                    } else if e > 2.2 {
+                        self.back_pedal = true;
+                    }
+                }
+                let back = self.back_pedal;
+                // hula: legs circle wide and back when he falls face up and slowly
+                if p.hula {
+                    if c.m.c.z < -0.2 && c.m.b.z < 0.0 && c.angvel.length() < 7.0 && self.hula < 0.0 {
+                        self.hula = 1.0;
+                    } else if (c.m.c.z > 0.2 || c.m.b.z > 0.0) && (0.0..0.5).contains(&self.hula) {
+                        self.hula = -0.1;
+                    }
+                    if self.hula > 0.0 {
+                        self.hula -= dt;
+                    }
+                }
+                let pedal = if self.hula > 0.0 {
+                    "radius=1 radiusVariance=0 angularSpeed=8 centreUp=-0.25 legAngleVariance=0 backPedal=true speedAsymmetry=0".to_string()
+                } else {
+                    format!("radius={} angularSpeed={} centreUp=-0.1 radiusVariance=0.4 legAngleVariance=0.5 speedAsymmetry={} backPedal={back}",
+                            p.leg_radius, p.leg_ang_speed, p.leg_asymmetry)
+                };
+                self.on.retain(|&n| n != "pedalLegs");
+                self.on.push("pedalLegs");
+                self.out.push(format!("pedalLegs start=true pedalLeftLeg=true pedalRightLeg=true legStiffness={b} adaptivePedal4Dragging=false \
+                                       pedalOffset=0 centreForwards=0 {pedal}"));
+                let phase = p.arm_phase - if p.arms2legs_sync != 0 { p.arms2legs_phase } else { 0.0 };
+                self.on.retain(|&n| n != "armsWindmillAdaptive");
+                self.on.push("armsWindmillAdaptive");
+                self.out.push(format!("armsWindmillAdaptive start=true bodyStiffness={b} armStiffness={} period={} amplitude={} phase={phase} \
+                                       disableOnImpact=false", b * 14.0 / 11.0, std::f32::consts::TAU / p.arm_ang_speed.max(0.01), p.arm_amplitude));
+            }
+            1 => {
+                self.sent = false;
+                self.ensure("bodyFoetal", "bodyFoetal start=true".into());
+                self.ensure("bodyWrithe", "bodyWrithe start=true armStiffness=15 armPeriod=0.6 backPeriod=0.6 legPeriod=0.6 blendArms=1 \
+                                           blendBack=1 blendLegs=0.5 armAmplitude=3".into());
+            }
+            2 => {
+                let k = 0.95 - up.dot(c.m.b).clamp(0.85, 0.95);
+                self.out.push(format!("pedalLegs start=true centreForwards={} centreUp={}", 1.5 * k - 0.1, 3.0 * k + 0.05));
+                if v.length() < 0.05 {
+                    self.feedback(c, false);
+                }
+            }
+            3 => self.brace(c),
+            4 => {}
+            5 => self.roll(c, dt),
+            6 => {
+                self.t21c += dt;
+                if !p.balance {
+                    c.ch.set_stiffness(6.0, 1.0, "fb", Some(0.5));
+                }
+                if v.length() < 0.075 {
+                    self.feedback(c, false);
+                }
+            }
+            7 => {
+                self.ensure("bodyBalance", "bodyBalance start=true".into());
+                if p.teeter && p.initial_state == 7 && !self.on.contains(&"teeter") {
+                    let h = unit(v - up * up.dot(v));
+                    let feet = [2, 3].map(|i| c.b.part(crate::nmshot::limb(i).p[3]).m.d);
+                    let at = c.com + h * p.teeter_offset;
+                    let at = at - up * up.dot(at) + up * up.dot((feet[0] + feet[1]) * 0.5);
+                    let s = unit(up.cross(h));
+                    self.ensure("teeter", format!("teeter start=true edgeLeft={} edgeRight={} preTeeterTime=1 teeterTime=0.5 leanAwayScale=0.5 \
+                                                   callHighFall=false", v3s(at + s), v3s(at - s)));
+                }
+                self.t200 += dt;
+                if !p.balance {
+                    c.ch.set_stiffness(6.0, 1.0, "ub", Some(0.5));
+                }
+                // the balancer's failure, seen from outside (ours: smartFall reads the balancer's own flag)
+                let legs: Vec<usize> = (2..4).flat_map(|i| crate::nmshot::limb(i).p[1..].to_vec()).collect();
+                let trunk: Vec<usize> = (0..c.b.build.parts.len()).filter(|k| !legs.contains(k)).collect();
+                self.failed |= up.dot(c.m.b) < 0.5 || c.b.doll.collided(&trunk);
+                if v.length() < 0.15 {
+                    let f = self.failed;
+                    self.feedback(c, f);
+                }
+            }
+            8 => {
+                if v.length() <= 1.0 {
+                    for n in ["bodyRollUp", "bodyWrithe", "bodyFoetal", "pedalLegs", "catchFall"] {
+                        self.stop(n);
+                    }
+                    if !self.settled {
+                        self.settled = true;
+                        self.lie_still(c);
+                    }
+                } else {
+                    self.ensure("bodyRollUp", "bodyRollUp start=true".into());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// RDR2's brace before impact: catchFall early when falling any way but feet first (with arms up at -2 or lower),
+    /// else the arms up in front of the head (feet first), the legs pedalling under him.
+    fn brace(&mut self, c: &mut Ctx) {
+        let p = self.p;
+        let b = p.body_stiffness;
+        let up = c.up;
+        let mut ik = None;
+        if p.arms_up > -3.0 || self.class != 0 {
+            if p.arms_up <= -2.0 {
+                self.ensure("catchFall", format!("catchFall start=true legsStiffness={} torsoStiffness={} armsStiffness={} zAxisSpinReduction={}",
+                                                 0.75 * b, 10.0 / 11.0 * b, 13.0 / 11.0 * b, p.cf_spin));
+            } else {
+                let head = c.b.part(delirium_data::kv!(55 int)).m;
+                let r = head.d + up * p.arms_up + unit(head.a) * 0.3;
+                ik = Some([r - unit(head.a) * 0.6, r]);
+            }
+        } else {
+            let chest = c.b.part(CHEST()).m;
+            let at = |y: f32| chest.d + chest.a * 0.43 + chest.b * y - chest.c * 0.32;
+            ik = Some([at(0.38), at(-0.38)]);
+        }
+        if let Some(t) = ik {
+            c.ch.eff[(*NECK())[0]].desired[0] = 0.4;
+            c.ch.eff[(*NECK())[1]].desired[0] = 0.3;
+            for (i, side) in [(0, 1.0), (1, -1.0)] {
+                let l = crate::nmshot::limb(i);
+                let vel = c.b.part(l.p[0]).v;
+                crate::nmdbm::limb_ik_w(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], t[i], 0.0, 1.0, side, 1.0, vel, None, 1.0, false);
+            }
+        }
+        for &j in (*KNEE()).iter().chain((*HIP()).iter()) {
+            c.ch.eff[j].muscle_stiffness = 0.5;
+        }
+        self.ensure("pedalLegs", format!("pedalLegs start=true pedalLeftLeg=true pedalRightLeg=true radius={} angularSpeed={} legStiffness={b} \
+                                          speedAsymmetry=4 centreForwards={} centreUp=0 radiusVariance=0.1", p.leg_radius, p.leg_ang_speed, p.forward_offset));
+    }
+
+    /// RDR2's forward roll: tucked in, stiffening down from 12 over the roll, rollDownStairs' helper torques under it.
+    fn roll(&mut self, c: &mut Ctx, dt: f32) {
+        let p = self.p;
+        self.t200 += dt;
+        let ch = &mut *c.ch;
+        for &j in &(*SPINE()) {
+            ch.eff[j].desired[0] = 1.0;
+        }
+        for (i, e) in [(0, 1.6), (1, 1.4)] {
+            ch.eff[(*SHOULDER())[i]].desired = [2.0, -2.0, -0.8];
+            ch.eff[(*ELBOW())[i]].desired[0] = e;
+        }
+        ch.eff[(*HIP())[0]].desired[0] = 2.25;
+        ch.eff[(*HIP())[1]].desired[0] = 2.3;
+        for &j in &(*NECK()) {
+            ch.eff[j].desired[0] = 3.0;
+        }
+        self.smooth = 0.9 * self.smooth + 0.1 * c.vel.length();
+        ch.set_stiffness((p.body_stiffness - 12.0 * self.t200).clamp(8.0, 12.0), p.body_damping, "fb", None);
+        let ub = c.up.dot(c.m.b);
+        ch.eff[(*KNEE())[0]].desired[0] = ub - 1.75;
+        ch.eff[(*KNEE())[1]].desired[0] = ub - 1.65;
+        if p.zero_pose_roll {
+            for e in ch.eff.iter_mut() {
+                e.blend_to_zero(1.0);
+            }
+        }
+        self.ensure("rollDownStairs", "rollDownStairs start=true forcemag=1 spinWhenInAir=false onlyApplyHelperForces=true".into());
+        if self.t200 > 1.6 {
+            self.feedback(c, false);
+        }
+    }
+
+    /// RDR2's settle, once nearly still: the pose held where it is, elbows and hips eased, one arm out.
+    fn lie_still(&mut self, c: &mut Ctx) {
+        let ch = &mut *c.ch;
+        for j in 0..ch.eff.len() {
+            ch.eff[j].desired = ch.actual(j, c.b.frames);
+        }
+        for &j in &(*ELBOW()) {
+            ch.eff[j].desired[0] = 1.0;
+        }
+        for &j in &(*HIP()) {
+            ch.eff[j].desired[1] = -0.7;
+        }
+        // which arm by the side he lies on [P]
+        let n = self.ground;
+        let s = c.m.c.dot(n) * unit(c.up.cross(n)).dot(c.m.b);
+        let (a, o) = if s >= 0.0 { (0, 1) } else { (1, 0) };
+        ch.eff[(*SHOULDER())[a]].desired[1] = -0.2;
+        ch.eff[(*SHOULDER())[o]].desired[1] = -0.5;
+        ch.eff[(*ELBOW())[o]].desired[0] = 0.0;
+        // (RDR2's stiffness here wasn't read: ours, the hard landing's limp values)
+        ch.set_stiffness(6.0, 1.0, "fb", Some(0.5));
+    }
+}

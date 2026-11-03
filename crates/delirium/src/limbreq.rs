@@ -62,6 +62,7 @@ pub fn slot(message: &str) -> u32 {
         "reachForWound" => 0xa8,
         "duck" => 0xb0,
         "rdr2Sit" => 0x108,
+        "smartFall" => 0x110,
         "wallCollision" => 0x118,
         "keyframe" => 0x120,
         _ => CORE,

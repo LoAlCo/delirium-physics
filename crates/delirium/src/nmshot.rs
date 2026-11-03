@@ -134,6 +134,14 @@ pub struct Out {
     pub catch_fall: Option<[f32; 3]>,
     pub roll_up: Option<f32>,
     pub fall_stop: bool,
+    /// RDR2 core: the fall's sub-behaviours that GTA IV's hasn't stop with it (rollDownStairs, bodyWrithe, smartFall)
+    pub fall_stop_rdr2: bool,
+    /// RDR2 core, fallingReaction 2: rollDownStairs started with these if it isn't running, and its stiffness now
+    pub rds: Option<(crate::nmrds::RollDownStairs, Option<f32>)>,
+    /// RDR2 core, fallingReaction 3: smartFall started (from its hard landing) if it isn't running
+    pub smart_fall: bool,
+    /// RDR2 core, fallingReaction 4: bodyWrithe started with these if it isn't running
+    pub writhe: Option<crate::nm::BodyWrithe>,
     pub spine_twist: Option<(Vec3, f32)>,
     pub spine_twist_stop: bool,
     pub torque: Vec<Vec3>,
@@ -579,7 +587,7 @@ impl Shot {
         }
         let exits: [(usize, Act); 7] = [
             (REACH_L(), Shot::reach_exit), (REACH_R(), Shot::reach_exit), (STIFF(), Shot::stiff_exit),
-            (LOOK(), |_, c| c.out.head_look_stop = true), (FALL, |_, c| c.out.fall_stop = true), (FLING(), Shot::fling_exit),
+            (LOOK(), |_, c| c.out.head_look_stop = true), (FALL, Shot::fall_exit), (FLING(), Shot::fling_exit),
             (MELEE(), |_, c| c.out.spine_twist_stop = true),
         ];
         for (k, f) in exits {
@@ -855,9 +863,15 @@ impl Shot {
         for j in 0..c.ch.eff.len() {
             c.ch.eff[j].desired = c.actual(j);
         }
+        (self.rd.fall_t, self.rd.fall_cf, self.rd.fall_writhe) = (-10.0, false, false);
     }
 
-    fn fall_tick(&mut self, c: &mut Ctx, _dt: f32) {
+    fn fall_exit(&mut self, c: &mut Ctx) {
+        c.out.fall_stop = true;
+        c.out.fall_stop_rdr2 = c.ch.rdr2;
+    }
+
+    fn fall_tick(&mut self, c: &mut Ctx, dt: f32) {
         let p = self.p;
         let k = p.body_stiffness / self.s150;
         if self.new_hit {
@@ -873,9 +887,19 @@ impl Shot {
         for j in (*HIP()) {
             c.og(j, 2.0);
         }
-        // RDR2: fallingReaction 1 and 4 catch the fall (4's writhe after it isn't here), others roll up (rollDownStairs
-        // and smartFall aren't here)
-        let catch = match p.rdr2.falling_reaction.filter(|_| c.ch.rdr2) {
+        // RDR2: fallingReaction 0 rolls up, 1 catches the fall, 2 rolls down (rollDownStairs), 3 is smartFall from its
+        // hard landing, 4 catches the fall then writhes
+        let reaction = p.rdr2.falling_reaction.filter(|_| c.ch.rdr2);
+        match reaction {
+            Some(2) => return self.fall_rds_rdr2(c, dt),
+            Some(3) => {
+                c.out.smart_fall = true;
+                return;
+            }
+            Some(4) if self.rd.fall_writhe => return self.fall_writhe_rdr2(c),
+            _ => {}
+        }
+        let catch = match reaction {
             Some(r) => r == 1 || r == 4,
             None => p.use_catch_fall_on_fall,
         };
@@ -900,9 +924,53 @@ impl Shot {
                     let p = crate::nmcf::Params { torso_stiffness: torso, legs_stiffness: legs, arms_stiffness: arms, ..Default::default() };
                     *cf = Some(crate::nmcf::CatchFall::start(p, c, head, st));
                 }
+                // fallingReaction 4: once catchFall has him on the ground, it hands over to bodyWrithe
+                if reaction == Some(4) && cf.as_ref().is_some_and(|f| f.active && f.on_ground()) {
+                    self.rd.fall_writhe = true;
+                }
                 c.cf = Some((cf, head, st));
             }
+            self.rd.fall_cf = true;
+            if self.rd.fall_writhe {
+                c.out.catch_fall = None;
+                self.fall_writhe_rdr2(c);
+            }
         }
+    }
+
+    /// RDR2's fallingReaction 2: rollDownStairs with the shot's values, softer (6) 0.4 s after the upper back first
+    /// lands.
+    fn fall_rds_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let mut r = crate::nmrds::RollDownStairs::rdr2_defaults();
+        (r.damping, r.stiffness, r.z_axis_spin_reduction, r.forcemag, r.asymmetrical_legs) = (1.0, 8.0, 0.0, 0.55, 0.2);
+        (r.use_arm_to_slow_down, r.arm_reach_amount, r.arm_reach_length) = (-0.9, 1.4, 0.4);
+        r.rdr2 = crate::nmrds::Rdr2Params { muscle_stiffness: 1.0, foetal_legs: false, limit_spin_reduction: true, target_linear_velocity: 1.0,
+                                            target_linear_velocity_decay_time: 0.5, ..Default::default() };
+        // (RDR2's contact mask 0x102600: we read it as the upper spine, neck and head [G])
+        let upper = [delirium_data::kv!(104 int), delirium_data::kv!(81 int), delirium_data::kv!(113 int), delirium_data::kv!(55 int)];
+        if self.rd.fall_t < -1.0 && c.b.doll.collided(&upper) {
+            self.rd.fall_t = 0.0;
+        }
+        let soft = (self.rd.fall_t > 0.4).then_some(6.0);
+        if self.rd.fall_t >= 0.0 {
+            self.rd.fall_t += dt;
+        }
+        c.out.rds = Some((r, soft));
+    }
+
+    /// RDR2's fallingReaction 4 once on the ground: catchFall stopped, bodyWrithe slow and mostly over the held pose
+    /// (its own stiffness off), the upper body at bodyStiffness.
+    fn fall_writhe_rdr2(&mut self, c: &mut Ctx) {
+        if self.rd.fall_cf {
+            self.rd.fall_cf = false;
+            c.out.fall_stop = true;
+        }
+        let rdr2 = crate::nmbw::Rdr2Params { apply_stiffness: false, blend_arms: 0.1, blend_back: 0.4, blend_legs: 0.4, ..Default::default() };
+        c.out.writhe = Some(crate::nm::BodyWrithe { arm_period: 3.0, back_period: 5.0, leg_period: 4.0, arm_amplitude: 1.0, back_amplitude: 2.0,
+                                                    leg_amplitude: 0.5, arm_stiffness: 13.0, back_stiffness: 13.0, leg_stiffness: 11.0,
+                                                    arm_damping: 0.3, back_damping: 0.3, leg_damping: 0.3, roll_over: false, rdr2,
+                                                    ..Default::default() });
+        c.ch.set_stiffness(self.p.body_stiffness, 0.5, "ub", Some(0.5));
     }
 
     fn chicken_enter(&mut self, _c: &mut Ctx) {
@@ -1300,6 +1368,10 @@ struct ShotRdr2State {
     lean: [f32; 3],
     ramps: [[f32; 4]; 3],
     wrote: f32,
+    /// the fall's rollDownStairs timer (from the upper back's first landing), catchFall started, writhe taken over
+    fall_t: f32,
+    fall_cf: bool,
+    fall_writhe: bool,
 }
 
 /// RDR2's relax: shotRelax's lower-body period with its default (ours: our relax message gives only the upper one).
