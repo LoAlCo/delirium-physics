@@ -110,6 +110,7 @@ pub mod extras_fall;
 pub mod extras_fall_rdr2;
 pub mod extras_held;
 pub mod extras_rdr2;
+pub mod extras_pg_rdr2;
 pub mod nmbw;
 pub mod nmcf;
 pub mod nmdbm;
