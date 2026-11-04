@@ -439,12 +439,21 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     if s.flags & delirium_data::kv!(251 int) == 0 || s.flags & delirium_data::kv!(7 int) == 0 {
         let [l, r] = &mut f.pos;
         separate(l, r, p.rdr2.map_or(p.foot_width, |r| p.foot_width + r.p.extra_feet_apart));
+    } else if let Some(r) = p.rdr2 {
+        // RDR2: both feet down further apart than legsApartMax draw in toward the predicted COM
+        let [lf, rf] = &mut f.pos;
+        crate::nmdbm_rdr2::Rdr2::pull_in(lf, rf, r.p.legs_apart_max + p.foot_width + r.p.extra_feet_apart,
+                                         s.vel.mul_add(Vec3::splat(p.lead), s.com), up);
     }
     f.centre = (f.pos[0] + f.pos[1]) * 0.5;
     f.dist = [0.0; 2];
     let pc = sat(s.hvel.mul_add(Vec3::splat(p.lead), s.com), up, sdot(f.centre, up, b"zyx"), b"yxz");
-    // RDR2 core: teeter's exclusion plane keeps the prediction on its side
-    let pc = match p.rdr2 { Some(r) if r.plane.is_some() => r.exclude(pc), _ => pc };
+    // RDR2 core: braceForImpact's car box clips the prediction, else teeter's exclusion plane keeps it on its side
+    let pc = match p.rdr2 {
+        Some(r) if r.car.is_some() => r.clip_car(s.com, pc),
+        Some(r) if r.plane.is_some() => r.exclude(pc),
+        _ => pc,
+    };
     let inside = match p.rdr2 {
         Some(r) => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172 - r.p.step_decision_threshold,
         None => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172,
@@ -582,7 +591,9 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
         pv.yaw[1] = -pv.yaw[0];
     } else {
         let step = p.dt * 0.5;
-        let goal = [p.p152 - p.p148, -p.p152 - p.p148];
+        // RDR2: the legs' twist rest offset (a crouch start's turn-out) on top of the base
+        let rest = p.rdr2.map_or(p.p148, |r| p.p148 + r.twist_rest);
+        let goal = [p.p152 - rest, -p.p152 - rest];
         for k in 0..2 {
             let y = pv.yaw[k];
             pv.yaw[k] = if y > goal[k] { (y - step).max(goal[k]) } else { (y + step).min(goal[k]) };
@@ -885,27 +896,46 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     let mut bal = [0.0f32; 2];
     // RDR2's ankle balance twist: the twist laying the foot on the ground / on the tilted normal
     let mut twist_flat = [None; 2];
+    // RDR2 (rdr2_balancer3.md §3): moving backward along the back axis; the stance ankle's knee predicted from the
+    // hip's desired angles only then and off the ankle balance (whose pitch takes the actual knee and foot); in
+    // stagger mode moving backward (more than 0.3 of the speed), the swing ankle's shin term adds its damping part
+    let (back, balancing) = match p.rdr2 {
+        Some(r) => {
+            let v = horizontal(s.vel, up);
+            let dir = v.normalize_or_zero().dot(horizontal(s.m.c, up).normalize_or_zero());
+            ((dir > 0.0, r.stagger && dir > 0.3), aim.is_some() && s.vel.length() < 1.0)
+        }
+        None => ((false, false), false),
+    };
     for (i, planted) in [lp, rp].into_iter().enumerate() {
         let side = if i == 0 { 1.0 } else { -1.0 };
         let leg = &mut s.legs[i];
         let a = if !planted {
             let sh = &leg.shin;
-            let a = (-sdot(sh.w, sh.m.a, b"yzx")).fma(leg.ankle.damping / leg.ankle.strength, sdot(sh.m.c, normal[i], b"yzx"));
+            let a = if back.1 {
+                sdot(sh.w, sh.m.a, b"yzx").fma(leg.ankle.damping / leg.ankle.strength.max(1e-10), sdot(sh.m.c, normal[i], b"yzx"))
+            } else {
+                (-sdot(sh.w, sh.m.a, b"yzx")).fma(leg.ankle.damping / leg.ankle.strength, sdot(sh.m.c, normal[i], b"yzx"))
+            };
             let mut a = sdot(p.normal[i], vnorm(leg.foot.m.a.vx(up)), b"zyx").fma(delirium_data::kv!(20), a * delirium_data::kv!(60));
             if sdot(leg.foot.v, s.m.c, b"yzx") < 0.0 {
                 a -= delirium_data::kv!(60);
             }
             a + acos(p.leg_length.clamp(delirium_data::kv!(72), delirium_data::kv!(263)))
         } else {
-            let k = predict_knee(&leg.hip, &leg.knee, side);
+            let (k, foot) = match p.rdr2 {
+                Some(_) if balancing || !back.0 => (leg.knee.m.d, leg.foot.m.d),
+                Some(_) => (predict_knee(&leg.hip, &leg.knee, side), leg.foot.m.d),
+                None => (predict_knee(&leg.hip, &leg.knee, side), target[i]),
+            };
             if let Some((_, tilt)) = aim {
                 let n = bevy_math::Quat::from_rotation_arc(Vec3::Z, tilt) * normal[i];
-                bal[i] = asin(sdot(leg.knee.m.c, vnorm(k - target[i]).vx(n), b"xyz"));
-                let d = vnorm(k - target[i]);
+                bal[i] = asin(sdot(leg.knee.m.c, vnorm(k - foot).vx(n), b"xyz"));
+                let d = vnorm(k - foot);
                 let tw = |n: Vec3| asin(vnorm(n.vx(leg.knee.m.c)).vd(d.vx(n)));
                 twist_flat[i] = Some((tw(normal[i]), tw(n)));
             }
-            asin(sdot(leg.knee.m.c, vnorm(k - target[i]).vx(normal[i]), b"xyz"))
+            asin(sdot(leg.knee.m.c, vnorm(k - foot).vx(normal[i]), b"xyz"))
         };
         leg.ankle.desired[0] = a;
     }
@@ -1435,7 +1465,12 @@ impl Dbm {
         if let Some(r) = self.p.rdr2.as_mut() {
             let low = up_low(self.p.up, b.foot(0), b.foot(1));
             let hip = (s.legs[0].hip.actual[0] + s.legs[1].hip.actual[0]) * 0.5;
-            r.crouch_start(self.p.up.vd(s.com) - low, self.p.pelvis_height, hip);
+            let (gup, legs) = (self.p.gup, &s.legs);
+            r.crouch_start(self.p.up.vd(s.com) - low, self.p.pelvis_height, hip, || {
+                use crate::nmdbm_rdr2::Rdr2;
+                (Rdr2::legs_lying(gup, [0, 1].map(|i| (legs[i].knee.m.d, legs[i].ankle.m.d))),
+                 Rdr2::turn_out(s.pelvis.m.a, s.pelvis.m.b, [0, 1].map(|i| (legs[i].thigh.m.b, legs[i].thigh.m.c))))
+            });
         }
         if let Some(r) = self.p.rdr2 {
             let (lean, more) = r.lean_against(horizontal(s.hvel, self.p.up));
