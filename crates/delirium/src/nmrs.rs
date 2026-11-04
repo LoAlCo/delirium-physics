@@ -578,7 +578,7 @@ pub struct Character {
 #[derive(Clone, Copy, Debug)]
 pub struct CoreState {
     /// the foot yaw hold's gains (RDR2's ctx+0x1034 / +0x1038): 60 and 10 until the balancer writes
-    /// footSlipStiffness into the first
+    /// footSlipStiffness and its damping
     pub foot_slip: (f32, f32),
     /// useZMPGravityCompensation (ctx+0x2b54): gravity opposition aimed at the support point, and none with no foot
     /// connected; off (keyframe, animPose), the full gravity even airborne
@@ -589,11 +589,13 @@ pub struct CoreState {
     pub hands_auto: [bool; 2],
     /// feet animPose set this step (their auto bytes cleared); None: from contact, as every step
     pub feet: [Option<bool>; 2],
+    /// StayUpright's slow and fast sets (ctx+0x29a0, ctx+0x2a70)
+    pub stay: [crate::nmdbm_rdr2::StayUpright; 2],
 }
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2] }
+        CoreState { foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2], stay: Default::default() }
     }
 }
 

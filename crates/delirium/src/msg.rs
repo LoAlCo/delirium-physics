@@ -583,6 +583,45 @@ pub static MESSAGES: [Message; 30] = [
     Message { name: "stayUpright", params: &[
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "" },
         Param { name: "dampingScale", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "side", kind: Kind::Int, used: true, doc: "RDR2 core: which set, 0 slow or 1 fast (both)" },
+        Param { name: "useForces", kind: Kind::Bool, used: true, doc: "RDR2 core: the force (false)" },
+        Param { name: "useTorques", kind: Kind::Bool, used: true, doc: "RDR2 core: the righting torque (false)" },
+        Param { name: "lastStandMode", kind: Kind::Bool, used: true, doc: "RDR2 core: carried, not applied (false)" },
+        Param { name: "velocityBased", kind: Kind::Bool, used: true, doc: "RDR2 core: force and torque scaled by tanh of the COM speed (false)" },
+        Param { name: "torqueOnlyInAir", kind: Kind::Bool, used: true, doc: "RDR2 core: the torque only with no foot down (false)" },
+        Param { name: "leanRelative", kind: Kind::Bool, used: true, doc: "RDR2 core: the torque's frame turned by his lean (false)" },
+        Param { name: "torqueparts", kind: Kind::Bool, used: true, doc: "RDR2 core: the torque spread over every part by inertia (false)" },
+        Param { name: "turnTowardsBullets", kind: Kind::Bool, used: true, doc: "RDR2 core: carried, not applied (false)" },
+        Param { name: "switchSpeed", kind: Kind::Float, used: true, doc: "RDR2 core: the fast set's: at this horizontal speed it takes over (100)" },
+        Param { name: "lastStandSinkRate", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0.3)" },
+        Param { name: "lastStandHorizDamping", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0.4)" },
+        Param { name: "lastStandMaxTime", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0.4)" },
+        Param { name: "forceStrength", kind: Kind::Float, used: true, doc: "RDR2 core: the force's gain (3)" },
+        Param { name: "forceDamping", kind: Kind::Float, used: true, doc: "RDR2 core: its damping's share, negative: 0.2 (-1)" },
+        Param { name: "forceFeetMult", kind: Kind::Float, used: true, doc: "RDR2 core: the feet's share (1)" },
+        Param { name: "forceSpine3Share", kind: Kind::Float, used: true, doc: "RDR2 core: the spine top's part of the trunk's share, the rest on the pelvis (0.3)" },
+        Param { name: "forceLeanReduction", kind: Kind::Float, used: true, doc: "RDR2 core: how much his lean takes it off (1)" },
+        Param { name: "forceInAirShare", kind: Kind::Float, used: true, doc: "RDR2 core: one foot down, that foot's share (0.5)" },
+        Param { name: "forceMin", kind: Kind::Float, used: true, doc: "RDR2 core: unused, as RDR2 passes it (-1)" },
+        Param { name: "forceMax", kind: Kind::Float, used: true, doc: "RDR2 core: unused, as RDR2 passes it (-1)" },
+        Param { name: "forceSaturationVel", kind: Kind::Float, used: true, doc: "RDR2 core: velocityBased: m/s (4)" },
+        Param { name: "forceThresholdVel", kind: Kind::Float, used: true, doc: "RDR2 core: velocityBased: off below this, m/s (0.5)" },
+        Param { name: "torqueSaturationVel", kind: Kind::Float, used: true, doc: "RDR2 core: velocityBased: m/s (4)" },
+        Param { name: "torqueThresholdVel", kind: Kind::Float, used: true, doc: "RDR2 core: velocityBased: off below this, m/s (2.5)" },
+        Param { name: "torqueleanreduction", kind: Kind::Float, used: true, doc: "RDR2 core: how much leaning past leanmin takes the torque off (0)" },
+        Param { name: "leanmin", kind: Kind::Float, used: true, doc: "RDR2 core: rad (0.5)" },
+        Param { name: "leanmax", kind: Kind::Float, used: true, doc: "RDR2 core: rad (1.1)" },
+        Param { name: "lean", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0)" },
+        Param { name: "supportPosition", kind: Kind::Float, used: true, doc: "RDR2 core: both feet this far behind the COM, noSupportForceMult applies, m (2)" },
+        Param { name: "noSupportForceMult", kind: Kind::Float, used: true, doc: "RDR2 core: (1)" },
+        Param { name: "stepUpHelp", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0)" },
+        Param { name: "stayUpAcc", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0.7)" },
+        Param { name: "stayUpAccMax", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (5)" },
+        Param { name: "antigrav", kind: Kind::Float, used: true, doc: "RDR2 core: fall assist: the share of his weight pushed up while falling (0)" },
+        Param { name: "antigravtime", kind: Kind::Float, used: true, doc: "RDR2 core: fall assist: only while the balancer is younger than this, s (0.5)" },
+        Param { name: "antigravspeed", kind: Kind::Float, used: true, doc: "RDR2 core: fall assist: only over this horizontal speed, m/s (1.5)" },
+        Param { name: "torqueStrength", kind: Kind::Vec3, used: true, doc: "RDR2 core: the torque's stiffness about the two tilts and yaw (0,0,0)" },
+        Param { name: "torqueDamping", kind: Kind::Vec3, used: true, doc: "RDR2 core: its damping (0.5,0.5,0)" },
     ] },
     Message { name: "stopAllBehaviours", params: &[
     ] },
@@ -734,10 +773,13 @@ impl Default for ShotRelax {
 pub struct StayUpright {
     pub stiffness: f32,
     pub damping_scale: f32,
+    /// RDR2 core: this message's record, the template under its parameters, and the set it fills (both without one)
+    pub rdr2: crate::nmdbm_rdr2::StayUpright,
+    pub side: Option<i32>,
 }
 impl Default for StayUpright {
     fn default() -> StayUpright {
-        StayUpright { stiffness: delirium_data::kv!(5), damping_scale: 0.5 }
+        StayUpright { stiffness: delirium_data::kv!(5), damping_scale: 0.5, rdr2: Default::default(), side: None }
     }
 }
 
@@ -822,6 +864,10 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
     } else if !one_shot {
         a.held_params(st, msg);
     }
+    // RDR2 core: StayUpright's message copies the template over the set, then its parameters
+    if msg == "stayUpright" && a.rdr2_core.is_some() {
+        (st.stay_upright.rdr2, st.stay_upright.side) = (Default::default(), None);
+    }
     let has = |n: &str| params.iter().any(|(p, _)| *p == n);
     let ang_vel = has("angVelMultiplier") && has("angVelThreshold");
     let mut unused = 0;
@@ -858,6 +904,11 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
         "setStiffness" => { let p = &st.set_stiffness; a.set_stiffness_mask(p.body_stiffness, p.damping, &p.mask); }
         "shotRelax" => a.shot_relax(st.shot_relax.relax_period),
         "stopAllBehaviours" => a.stop_all_behaviours(),
+        // RDR2 core: a message with RDR2's parameters, or a stop, is RDR2's; GTA IV's two alone stay GTA IV's stabiliser
+        "stayUpright" if a.rdr2_core.is_some() && (start == Some(false) || params.iter().any(|(n, _)| !matches!(*n, "start" | "stiffness" | "dampingScale"))) => {
+            let p = &st.stay_upright;
+            a.stay_upright_rdr2(start != Some(false), p.side.map(|i| i.max(0) as usize), p.rdr2);
+        }
         "stayUpright" => { let p = &st.stay_upright; a.stay_upright(start != Some(false), p.stiffness, p.damping_scale); }
         _ if start.is_none() => {
             a.update_params(build, world, st, msg, params.iter().any(|(n, _)| *n == "bodyPart"));
@@ -1316,6 +1367,15 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("shotRelax", "relaxPeriod") => { let p = &mut st.shot_relax; p.relax_period = v.f()?; }
         ("stayUpright", "stiffness") => { let p = &mut st.stay_upright; p.stiffness = v.f()?; }
         ("stayUpright", "dampingScale") => { let p = &mut st.stay_upright; p.damping_scale = v.f()?; }
+        ("stayUpright", "side") => st.stay_upright.side = Some(v.i()?),
+        ("stayUpright", "torqueStrength") => st.stay_upright.rdr2.torque_strength = v.v()?,
+        ("stayUpright", "torqueDamping") => st.stay_upright.rdr2.torque_damping = v.v()?,
+        ("stayUpright", n) => {
+            let x = if crate::nmdbm_rdr2::StayUpright::is_flag(n) { v.b()? as u8 as f32 } else { v.f()? };
+            if !st.stay_upright.rdr2.set(n, x) {
+                return Err(Error::Param);
+            }
+        }
         ("upperBodyFlinch", "handDistanceFrontBack") => { let p = &mut st.upper_body_flinch; p.hand_distance_front_back = v.f()?; }
         ("upperBodyFlinch", "noiseScale") => { let p = &mut st.upper_body_flinch; p.noise_scale = v.f()?; }
         ("upperBodyFlinch", "handDistanceVertical") => { let p = &mut st.upper_body_flinch; p.hand_distance_vertical = v.f()?; }
@@ -1648,6 +1708,13 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("shotRelax", "relaxPeriod") => { let p = &st.shot_relax; Value::Float(p.relax_period) }
         ("stayUpright", "stiffness") => { let p = &st.stay_upright; Value::Float(p.stiffness) }
         ("stayUpright", "dampingScale") => { let p = &st.stay_upright; Value::Float(p.damping_scale) }
+        ("stayUpright", "side") => Value::Int(st.stay_upright.side.unwrap_or(-1)),
+        ("stayUpright", "torqueStrength") => Value::Vec3(st.stay_upright.rdr2.torque_strength),
+        ("stayUpright", "torqueDamping") => Value::Vec3(st.stay_upright.rdr2.torque_damping),
+        ("stayUpright", n) => {
+            let x = st.stay_upright.rdr2.get(n)?;
+            if crate::nmdbm_rdr2::StayUpright::is_flag(n) { Value::Bool(x != 0.0) } else { Value::Float(x) }
+        }
         ("upperBodyFlinch", "handDistanceFrontBack") => { let p = &st.upper_body_flinch; Value::Float(p.hand_distance_front_back) }
         ("upperBodyFlinch", "noiseScale") => { let p = &st.upper_body_flinch; Value::Float(p.noise_scale) }
         ("upperBodyFlinch", "handDistanceVertical") => { let p = &st.upper_body_flinch; Value::Float(p.hand_distance_vertical) }

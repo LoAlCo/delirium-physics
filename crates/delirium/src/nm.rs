@@ -809,6 +809,21 @@ impl Agent {
         }
     }
 
+    /// RDR2 core: StayUpright's message fills one set, or both without a side (0x2a5ac10): its law in place of GTA IV's
+    /// stabiliser. `on` false clears useForces, useTorques and lastStandMode.
+    pub fn stay_upright_rdr2(&mut self, on: bool, side: Option<usize>, mut rec: crate::nmdbm_rdr2::StayUpright) {
+        if !on {
+            (rec.use_forces, rec.use_torques, rec.last_stand_mode) = (false, false, false);
+        }
+        if let Some(ch) = self.ch.as_mut() {
+            ch.stabilise = None;
+            match side {
+                Some(i) => ch.core.stay[i.min(1)] = rec,
+                None => ch.core.stay = [rec; 2],
+            }
+        }
+    }
+
     pub fn shot_relax(&mut self, period: f32) {
         self.nm_relax = Some(period);
     }
@@ -1506,6 +1521,7 @@ impl Agent {
         let (body_k, body_d) = self.stiffness;
         let mut catch = None;
         let mut dbm_lost = false;
+        let mut fall_assist = 0.0;
         let awake = self.doll.awake();
         if self.doll.rigid.is_none() {
             self.doll.rigid = crate::nmdbm::own_rage(&self.doll);
@@ -1582,9 +1598,13 @@ impl Agent {
                 let failed = match tick {
                     Some(s) => {
                         dbm.apply(&s, ch);
-                        // RDR2 core: the balancer sets the foot yaw hold's gain every step it runs (it stays after)
+                        // RDR2 core: the balancer sets the foot yaw hold's gains every step it runs (they stay after),
+                        // and its fall assist runs on this tick
                         if let Some(r) = dbm.p.rdr2 {
-                            ch.core.foot_slip.0 = r.p.foot_slip_stiffness;
+                            let k = r.p.foot_slip_stiffness;
+                            ch.core.foot_slip = (k, 2.0 * k.sqrt());
+                            let rec = crate::nmdbm_rdr2::stay_live(&ch.core.stay, s.vel);
+                            fall_assist = rec.fall_assist(r.time, s.vel, self.doll.mass());
                         }
                         if let Some(r) = self.limb_reqs.as_mut() {
                             // its lean of the lowest spine joint and its ankles are defaults the others override (limbreq.rs)
@@ -2173,6 +2193,7 @@ impl Agent {
         }
         let rigid = self.ch.as_ref().map_or(vec![], |ch| ch.rigid(dt, self.strength, self.most));
         let (mut torque, mut force, mut push) = (vec![], vec![], vec![]);
+        let mut stay_at: Vec<(usize, Vec3, Vec3)> = vec![];
         for &(k, v, f) in &shot_out.seq {
             torque.resize(torque.len().max(k + 1), Vec3::ZERO);
             torque[k] = if f { self.doll.force_moment(k, v, torque[k]) } else { torque[k] + v };
@@ -2201,6 +2222,14 @@ impl Agent {
             if let Some((k, _)) = ch.stabilise {
                 push = crate::nmdbm::stabilise(&body, k, dt);
             }
+            // RDR2 core: StayUpright's applier runs while the balancer is active; the torque not once it has failed or
+            // under staggerFall
+            if ch.rdr2 && self.balance.as_ref().is_some_and(|b| b.dbm.is_some()) {
+                let rec = crate::nmdbm_rdr2::stay_live(&snap.core.stay, self.doll.com().1);
+                let righting = !self.fallen && !self.extras.on.iter().any(|(n, _)| *n == "staggerFall");
+                torque.resize(torque.len().max(build.parts.len()), Vec3::ZERO);
+                crate::nmdbm::stay_upright(&body, &rec, dt, righting, &mut torque, &mut stay_at);
+            }
             if self.locomotion_tracking {
                 self.locomotion_terms=Some(locomotion_drive::NativeTerms{torque:torque.clone(),push:push.clone(),yaw:ch.foot_yaw,attached:snap.attached});
             }
@@ -2208,6 +2237,14 @@ impl Agent {
         }
         for (k, p) in push.into_iter().enumerate().filter(|(_, p)| *p != Vec3::ZERO) {
             self.doll.impulse(k, self.doll.centre(k), p);
+        }
+        for (k, at, p) in stay_at {
+            self.doll.impulse(k, at, p);
+        }
+        // RDR2 core: the fall assist, on the pelvis at the COM: the force for this tick's dt
+        if let (true, Some(ch)) = (fall_assist > 0.0, self.ch.as_ref()) {
+            let pelvis = ch.joints[(*crate::nmrs::HIP())[0]].parent;
+            self.doll.impulse(pelvis, self.doll.com().0, Vec3::Z * (fall_assist * dt));
         }
         for (v, add) in [(&mut torque, &shot_out.torque), (&mut force, &shot_out.force)] {
             if v.len() < add.len() {
