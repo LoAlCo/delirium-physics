@@ -2920,8 +2920,8 @@ impl Reactions {
         self.on_shot_core(rand, part, at, dir, fwd, false)
     }
 
-    /// As `on_shot`; with the RDR2 core (`core`) a shot in a thigh or shin also starts staggerFall with the shot, as
-    /// RDR2 was recorded doing (with RDR2's defaults, which the RDR2 core reads).
+    /// As `on_shot`; with the RDR2 core (`core`) only what RDR2's shot task was recorded starting: reachForWound, and
+    /// staggerFall for a shot in a thigh or shin (with RDR2's defaults, which the RDR2 core reads).
     pub fn on_shot_core(&self, rand: &mut delirium_data::rng::Rand, part: usize, at: Vec3, dir: Vec3, fwd: Vec3, core: bool) -> Vec<Start> {
         use crate::msg::Value::{Bool as B, Float as F, Int as I, Vec3 as V};
         let mut out: Vec<Start> = vec![];
@@ -2933,6 +2933,19 @@ impl Reactions {
         // Delirium's stand-in for them, so it stays off
         if self.balance && !core {
             go("rdr2Balance", vec![]);
+        }
+        if core {
+            // RDR2's shot task, as recorded (pistol on a standing townsman, chest, back and leg, five recordings): the
+            // shot's snap, shotspin, shockSpin, fromBehind, inGuts, injured-limb, fallToKnees and headLook modules all
+            // stay off; reachForWound runs on every shot and staggerFall on a leg shot
+            if matches!(part, 1 | 2 | 4 | 5) {
+                go("staggerFall", vec![]);
+            }
+            if !matches!(part, 3 | 6 | 11 | 12 | 16 | 20) {
+                go("reachForWound", vec![("hitPoint", V(at)), ("hitPart", I(part as i32)), ("reachWithOneHand", B(true)),
+                                         ("timeBeforeReachForWound", F(rand.float_in_range(0.1, 0.3))), ("grabHoldTime", F(rand.float_in_range(1.5, 3.0)))]);
+            }
+            return out;
         }
         if self.snap {
             go("shotSnap", vec![("bulletDir", V(dir)), ("bodyPart", I(part as i32)), ("snapMag", F(rand.float_in_range(0.3, 0.5)))]);
@@ -2957,9 +2970,6 @@ impl Reactions {
                 go("shotInGuts", vec![("sigSpineAmount", F(rand.float_in_range(0.45, 0.7))), ("sigPeriod", F(rand.float_in_range(1.0, 2.0)))]);
             } else if !knees && matches!(part, 1 | 2 | 4 | 5) {
                 go("shotInjuredLeg", vec![("bodyPart", I(part as i32)), ("legInjuryTime", F(rand.float_in_range(1.0, 2.0)))]);
-                if core {
-                    go("staggerFall", vec![]);
-                }
             } else if matches!(part, 14..=16 | 18..=20) {
                 go("shotInjuredArm", vec![("bodyPart", I(part as i32)), ("bulletDir", V(dir))]);
             }
