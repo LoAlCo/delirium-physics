@@ -313,6 +313,25 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "fowardVelCutOff", kind: Kind::Float, used: true, doc: "" },
         Param { name: "legStrength", kind: Kind::Float, used: true, doc: "" },
         Param { name: "zeroPoseRoll", kind: Kind::Bool, used: true, doc: "" },
+        Param { name: "pdDamping", kind: Kind::Float, used: false, doc: "RDR2 core only: the orientation PD's damping (1)" },
+        Param { name: "armAngSpeed", kind: Kind::Float, used: false, doc: "RDR2 core only: the windmill's speed, rad/s (7.85)" },
+        Param { name: "armPhase", kind: Kind::Float, used: false, doc: "RDR2 core only: the windmill's phase (3.1)" },
+        Param { name: "armBendElbows", kind: Kind::Bool, used: false, doc: "RDR2 core only: (true; not done: the windmill has no elbow bend)" },
+        Param { name: "legAsymmetry", kind: Kind::Float, used: false, doc: "RDR2 core only: pedalLegs speedAsymmetry (4)" },
+        Param { name: "arms2LegsPhase", kind: Kind::Float, used: false, doc: "RDR2 core only: the windmill's phase offset from the legs (0)" },
+        Param { name: "arms2LegsSync", kind: Kind::Int, used: false, doc: "RDR2 core only: 1: that offset every tick, 2: at the start (1)" },
+        Param { name: "startplayerset", kind: Kind::Float, used: false, doc: "RDR2 core only: (not read by RDR2)" },
+        Param { name: "balance", kind: Kind::Bool, used: false, doc: "RDR2 core only: bodyBalance when he lands on his feet (true)" },
+        Param { name: "alanRickman", kind: Kind::Bool, used: false, doc: "RDR2 core only: the orientation PD keeps him along where he started (false)" },
+        Param { name: "orientateTwist", kind: Kind::Bool, used: false, doc: "RDR2 core only: the orientation PD turns him about up too (true)" },
+        Param { name: "orientateMax", kind: Kind::Float, used: false, doc: "RDR2 core only: the orientation PD's torque clamp (300)" },
+        Param { name: "forwardRoll", kind: Kind::Bool, used: false, doc: "RDR2 core only: RDR2's name of fowardRoll (false)" },
+        Param { name: "forwardOffsetOfLegIK", kind: Kind::Float, used: false, doc: "RDR2 core only: RDR2's unnamed pedalLegs centreForwards in the brace, GTA IV's fowardOffsetOfLegIK (0)" },
+        Param { name: "adaptiveCircling", kind: Kind::Bool, used: false, doc: "RDR2 core only: the legs pedal backwards when he pitches forward (true)" },
+        Param { name: "hula", kind: Kind::Bool, used: false, doc: "RDR2 core only: the legs circle wide when he falls face up (true)" },
+        Param { name: "minSpeedForBrace", kind: Kind::Float, used: false, doc: "RDR2 core only: above this sideways speed the unrecoverable fall catches itself, m/s (10)" },
+        Param { name: "maxSpeedForRecoverableFall", kind: Kind::Float, used: false, doc: "RDR2 core only: faster than this at impact he can't recover, m/s (15)" },
+        Param { name: "landingNormal", kind: Kind::Float, used: false, doc: "RDR2 core only: ground flatter than this (normal.up) counts as a landing (0.6)" },
     ] },
     Message { name: "incomingTransforms", params: &[
     ] },
@@ -680,6 +699,10 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
     if let Some(r) = a.extras.send(msg, params) {
         return r;
     }
+    // RDR2 core: RDR2's highFall, from this message's parameters over RDR2's defaults (its start reloads them)
+    if msg == "highFall" && a.rdr2_core.is_some() {
+        return a.extras.send_named("highFall", params);
+    }
     let m = find(msg).ok_or(Error::Message)?;
     let start = params.iter().find(|(n, _)| *n == "start").map(|(_, v)| v.b()).transpose()?;
     let one_shot = matches!(msg, "activePose" | "applyImpulse" | "bodyRelax" | "defineAttachedObject" | "leanInDirection"
@@ -740,7 +763,10 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
         "fallOverWall" => if on { a.fall_over_wall(st.fall_over_wall.clone()) },
         "grab" => a.grab(build, on.then(|| st.grab.clone())),
         "headLook" => { let p = &st.head_look; a.head_look(build, on.then_some((p.pos, p.vel)), p.stiffness, p.damping, p.always_look, p.always_eyes_horizontal); }
-        "highFall" => if on { a.high_fall(st.high_fall.clone()) },
+        "highFall" => if on {
+            a.high_fall(st.high_fall.clone());
+            a.hf_rdr2 = Some(params.iter().map(|(n, v)| (n.to_string(), v.clone())).collect());
+        },
         "pedalLegs" => if on { a.pedal_legs(st.pedal_legs.clone()) } else { a.stop_pedal() },
         "pointArm" => a.point_arm(on.then_some(st.point_arm)),
         "rollDownStairs" => if on { a.roll_down_stairs(st.roll_down_stairs.clone()) } else { a.stop_roll_down_stairs() },

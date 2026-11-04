@@ -10,7 +10,7 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "edgeRight", kind: Kind::Vec3, used: true, doc: "its other end" },
         Param { name: "reactDistance", kind: Kind::Float, used: true, doc: "COM to edge where he starts teetering, m (0.5)" },
         Param { name: "restartDistance", kind: Kind::Float, used: true, doc: "COM back from the edge that counts as recovered, m (0.8)" },
-        Param { name: "useExclusionZone", kind: Kind::Bool, used: false, doc: "(not done: false)" },
+        Param { name: "useExclusionZone", kind: Kind::Bool, used: true, doc: "RDR2 core: the balancer keeps the COM's prediction exclusionZone on his side of the edge (true); not done without it" },
         Param { name: "useHeadLook", kind: Kind::Bool, used: true, doc: "look at the edge, then where he falls (true)" },
         Param { name: "callHighFall", kind: Kind::Bool, used: true, doc: "highFall when he goes over (true)" },
         Param { name: "leanAway", kind: Kind::Bool, used: true, doc: "lean away from the edge (true)" },
@@ -18,6 +18,11 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "leanAwayTime", kind: Kind::Float, used: true, doc: "how long the lean away lasts, s (0.8)" },
         Param { name: "teeterTime", kind: Kind::Float, used: true, doc: "how long he teeters before it resolves, s (2)" },
         Param { name: "leanAwayScale", kind: Kind::Float, used: true, doc: "how hard he leans away (0.1)" },
+        Param { name: "edgehandle", kind: Kind::Int, used: false, doc: "RDR2 core: the object the edge moves with (none here: the edge is in the world)" },
+        Param { name: "leantowards", kind: Kind::Bool, used: true, doc: "RDR2 core only: lean toward the drop instead (false)" },
+        Param { name: "writhefall", kind: Kind::Bool, used: true, doc: "RDR2 core only: writhe while falling clear with no highFall (true)" },
+        Param { name: "forceBalance", kind: Kind::Bool, used: true, doc: "RDR2 core only: no new steps while the COM is past the edge (true)" },
+        Param { name: "exclusionZone", kind: Kind::Float, used: true, doc: "RDR2 core only: m on his side of the edge the balancer's prediction keeps to (0.2)" },
     ] },
     Message { name: "stumble", params: &[
         Param { name: "legsStiffness", kind: Kind::Float, used: true, doc: "legs, damping 0.5 (12)" },
@@ -203,6 +208,8 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "stumble" => b(Stumble::new(p)),
         "staggerFall" => b(StaggerFall::new(p)),
         "smartFall" => b(SmartFall::new(p)),
+        // only the RDR2 core sends highFall to the extras (msg.rs)
+        "highFall" => b(crate::extras_fall_rdr2::HighFall::new(p)),
         "balancerCollisionsReaction" => b(Collide::new(p)),
         "injuredOnGround" => b(Injured::new(p)),
         "learnedCrawl" => b(Crawl::new(p)),
@@ -212,7 +219,7 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
 
 #[allow(non_snake_case)]
 #[inline]
-fn CHEST() -> usize { (*SPINE())[delirium_data::kv!(0 int)] + 1 }
+pub(crate) fn CHEST() -> usize { (*SPINE())[delirium_data::kv!(0 int)] + 1 }
 const TAU: f32 = std::f32::consts::TAU;
 
 fn weight(c: &Ctx) -> f32 {
@@ -251,6 +258,9 @@ pub struct Teeter {
     state: u8,
     t: f32,
     out: Vec<String>,
+    /// RDR2's, with the RDR2 core: its parameters and state
+    rp: crate::extras_fall_rdr2::TtParams,
+    rd: Option<Box<crate::extras_fall_rdr2::TeeterRdr2>>,
 }
 const PRE: u8 = 0;
 const TEETERING: u8 = 1;
@@ -261,7 +271,8 @@ fn RECOVERED() -> u8 { delirium_data::kv!(0 int) }
 impl Teeter {
     fn new(p: &mut P) -> Result<Teeter, Error> {
         p.b("useExclusionZone", false)?;
-        Ok(Teeter { ends: (p.v("edgeLeft", Vec3::ZERO)?, p.v("edgeRight", Vec3::ZERO)?), react: p.f("reactDistance", 0.5)?,
+        let rp = crate::extras_fall_rdr2::TtParams::read(p)?;
+        Ok(Teeter { rp, rd: None, ends: (p.v("edgeLeft", Vec3::ZERO)?, p.v("edgeRight", Vec3::ZERO)?), react: p.f("reactDistance", 0.5)?,
                     restart: p.f("restartDistance", delirium_data::kv!(20))?, head: p.b("useHeadLook", true)?, high_fall: p.b("callHighFall", true)?,
                     lean: p.b("leanAway", true)?, pre: p.f("preTeeterTime", delirium_data::kv!(60))?, lean_time: p.f("leanAwayTime", delirium_data::kv!(20))?,
                     teeter_time: p.f("teeterTime", 2.0)?, lean_scale: p.f("leanAwayScale", delirium_data::kv!(78))?, normal: Vec3::ZERO, state: PRE,
@@ -280,7 +291,28 @@ impl Teeter {
     }
 }
 impl Extra for Teeter {
+    fn update(&mut self, p: &mut P) -> Result<(), Error> {
+        if let Some(rd) = self.rd.as_mut() {
+            rd.update(p)?;
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self, c: &mut Ctx) {
+        if let Some(rd) = self.rd.as_mut() {
+            rd.stop(c);
+            self.out.append(&mut rd.out);
+        }
+    }
+
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            let rp = self.rp;
+            let rd = self.rd.get_or_insert_with(|| Box::new(crate::extras_fall_rdr2::TeeterRdr2::new(rp)));
+            rd.tick(c, dt);
+            self.out.append(&mut rd.out);
+            return;
+        }
         let (com, vel) = (c.com, c.vel);
         if self.normal == Vec3::ZERO {
             if self.ends.0 == self.ends.1 {
@@ -342,7 +374,7 @@ impl Extra for Teeter {
     }
 
     fn done(&self) -> bool {
-        self.state >= FALLING
+        self.rd.is_none() && self.state >= FALLING
     }
 }
 
@@ -1649,18 +1681,18 @@ struct SfRdr2 {
     out: Vec<String>,
 }
 
-fn v3s(v: Vec3) -> String {
+pub(crate) fn v3s(v: Vec3) -> String {
     format!("{},{},{}", v.x, v.y, v.z)
 }
 
-fn unit(v: Vec3) -> Vec3 {
+pub(crate) fn unit(v: Vec3) -> Vec3 {
     let l = v.length();
     if l > 1e-6 { v / l } else { Vec3::ZERO }
 }
 
 /// The landing attitude: 0 feet down, 1 front down, 2 side or head down, 3 back down (ours [G]: RDR2's classifier
 /// isn't read; its states use 1 and 2 as the falls catchFall takes).
-fn attitude(a: [Vec3; 3], n: Vec3) -> u8 {
+pub(crate) fn attitude(a: [Vec3; 3], n: Vec3) -> u8 {
     let (b, c) = (a[1], a[2]);
     if b.dot(n) > 0.5 { 0 } else if c.dot(n) > 0.5 { 1 } else if c.dot(n) < -0.5 { 3 } else { 2 }
 }
@@ -1845,37 +1877,7 @@ impl SfRdr2 {
         if !self.pd || p.pd_strength <= 0.001 {
             return;
         }
-        let up = c.up;
-        let pel = c.b.pmat(0).m;
-        let (axis, angle) = if p.alan_rickman {
-            let a = (c.com - self.start).cross(-pel.c);
-            (unit(a), a.length().min(1.0).asin())
-        } else {
-            let h = c.vel - up * up.dot(c.vel);
-            let fwd_speed = -h.dot(c.m.c);
-            let (side, fwd) = if fwd_speed.abs() < 1.0 || !p.orientate_to_fall {
-                let a = unit(c.m.a - up * up.dot(c.m.a));
-                (a, up.cross(a))
-            } else {
-                let s = unit(-h);
-                (s, s.cross(up))
-            };
-            if p.orientate_twist {
-                let target = bevy_math::Quat::from_mat3(&bevy_math::Mat3::from_cols(side, up, -fwd));
-                let now = bevy_math::Quat::from_mat3(&bevy_math::Mat3::from_cols(unit(pel.a), unit(pel.b), unit(pel.c)));
-                let (ax, mut an) = (target * now.inverse()).to_axis_angle();
-                if an > std::f32::consts::PI {
-                    an -= std::f32::consts::TAU;
-                }
-                (ax, an)
-            } else {
-                let a = (-pel.c).cross(fwd);
-                (unit(a), a.length().min(1.0).asin())
-            }
-        };
-        let s = p.pd_strength;
-        let t = (260.0 * s * angle - 80.0 * s * p.pd_damping * axis.dot(c.angvel)).clamp(-p.orientate_max, p.orientate_max) / (60.0 * dt).clamp(1.0, 60.0);
-        c.out.torque(0, axis * t);
+        orient_pd(c, dt, (p.pd_strength, p.pd_damping, p.orientate_max), p.alan_rickman, p.orientate_to_fall, p.orientate_twist, self.start);
     }
 
     fn enter(&mut self, c: &mut Ctx, s: u8) {
@@ -2038,7 +2040,8 @@ impl SfRdr2 {
                     let feet = [2, 3].map(|i| c.b.part(crate::nmshot::limb(i).p[3]).m.d);
                     let at = c.com + h * p.teeter_offset;
                     let at = at - up * up.dot(at) + up * up.dot((feet[0] + feet[1]) * 0.5);
-                    let s = unit(up.cross(h));
+                    // RDR2's order: edgeLeft on the -up x v side, so the edge's normal (up x (right - left)) faces him
+                    let s = unit(h.cross(up));
                     self.ensure("teeter", format!("teeter start=true edgeLeft={} edgeRight={} preTeeterTime=1 teeterTime=0.5 leanAwayScale=0.5 \
                                                    callHighFall=false", v3s(at + s), v3s(at - s)));
                 }
@@ -2164,4 +2167,39 @@ impl SfRdr2 {
         // (RDR2's stiffness here wasn't read: ours, the hard landing's limp values)
         ch.set_stiffness(6.0, 1.0, "fb", Some(0.5));
     }
+}
+
+/// RDR2's orientation PD on the pelvis (smartFall and highFall): toward the fall's direction (or the heading he has),
+/// or for alanRickman along where he started; (strength, damping, torque clamp).
+pub(crate) fn orient_pd(c: &mut Ctx, dt: f32, (s, damping, max): (f32, f32, f32), alan_rickman: bool, to_fall: bool, twist: bool, start: Vec3) {
+    let up = c.up;
+    let pel = c.b.pmat(0).m;
+    let (axis, angle) = if alan_rickman {
+        let a = (c.com - start).cross(-pel.c);
+        (unit(a), a.length().min(1.0).asin())
+    } else {
+        let h = c.vel - up * up.dot(c.vel);
+        let fwd_speed = -h.dot(c.m.c);
+        let (side, fwd) = if fwd_speed.abs() < 1.0 || !to_fall {
+            let a = unit(c.m.a - up * up.dot(c.m.a));
+            (a, up.cross(a))
+        } else {
+            let s = unit(-h);
+            (s, s.cross(up))
+        };
+        if twist {
+            let target = bevy_math::Quat::from_mat3(&bevy_math::Mat3::from_cols(side, up, -fwd));
+            let now = bevy_math::Quat::from_mat3(&bevy_math::Mat3::from_cols(unit(pel.a), unit(pel.b), unit(pel.c)));
+            let (ax, mut an) = (target * now.inverse()).to_axis_angle();
+            if an > std::f32::consts::PI {
+                an -= std::f32::consts::TAU;
+            }
+            (ax, an)
+        } else {
+            let a = (-pel.c).cross(fwd);
+            (unit(a), a.length().min(1.0).asin())
+        }
+    };
+    let t = (260.0 * s * angle - 80.0 * s * damping * axis.dot(c.angvel)).clamp(-max, max) / (60.0 * dt).clamp(1.0, 60.0);
+    c.out.torque(0, axis * t);
 }
