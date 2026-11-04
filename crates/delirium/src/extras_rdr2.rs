@@ -2929,7 +2929,9 @@ impl Reactions {
             ps.insert(0, ("start", B(true)));
             out.push((name, ps));
         };
-        if self.balance {
+        // under the RDR2 core the balancer itself runs RDR2's running mode and flat feet (nmdbm_rdr2.rs); this extra is
+        // Delirium's stand-in for them, so it stays off
+        if self.balance && !core {
             go("rdr2Balance", vec![]);
         }
         if self.snap {
@@ -2978,7 +2980,7 @@ impl Reactions {
             return vec![];
         }
         let mut out: Vec<Start> = vec![];
-        if self.balance {
+        if self.balance && !core {
             out.push(("rdr2Balance", vec![("start", B(true))]));
         }
         if core {

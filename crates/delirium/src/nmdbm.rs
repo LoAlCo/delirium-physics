@@ -869,8 +869,8 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
                             w: 1.0, reach: 0.0, lift: 0.0, swing: !planted, free: false };
         if !planted {
             // RDR2 (rdr2_balancer2.md §7.2) lifts each swing foot by its own velocity; GTA IV reads the left foot's for both
-            let fv = if p.rdr2.is_some() { leg.foot.v } else { lfoot_v };
-            let ahead = target[i] - (fv - p.gvel[0]).mul_add(Vec3::splat(delirium_data::kv!(68)), leg.foot.m.d);
+            let (fv, gv) = if p.rdr2.is_some() { (leg.foot.v, p.gvel[i]) } else { (lfoot_v, p.gvel[0]) };
+            let ahead = target[i] - (fv - gv).mul_add(Vec3::splat(delirium_data::kv!(68)), leg.foot.m.d);
             (c.lead, c.reach, c.lift) = (p.p168, p.rdr2.map_or(delirium_data::kv!(64), |r| r.p.max_foot_speed), sdot(up, ahead, b"yxz").fma(delirium_data::kv!(84), delirium_data::kv!(78)).clamp(delirium_data::kv!(9), delirium_data::kv!(119)));
         }
         let limb = leg.limb;
