@@ -215,6 +215,8 @@ pub struct PedalLegs {
     pub leg_angle_variance: f32,
     pub centre_forwards: f32,
     pub centre_up: f32,
+    /// RDR2's further parameters (read with the RDR2 core)
+    pub rdr2: crate::nmpd::Rdr2Params,
 }
 
 #[derive(Clone, Copy)]
@@ -250,7 +252,7 @@ impl Default for PedalLegs {
     fn default() -> PedalLegs {
         PedalLegs { leg_stiffness: delirium_data::kv!(31), radius: delirium_data::kv!(17), angular_speed: delirium_data::kv!(31), pedal_offset: delirium_data::kv!(9), speed_asymmetry: delirium_data::kv!(65), back_pedal: false,
                     adaptive: false, drag_multiplier: delirium_data::kv!(24), left: true, right: true, radius_variance: delirium_data::kv!(116), random_seed: delirium_data::kv!(197 int),
-                    leg_angle_variance: 0.5, centre_forwards: 0.0, centre_up: 0.0 }
+                    leg_angle_variance: 0.5, centre_forwards: 0.0, centre_up: 0.0, rdr2: Default::default() }
     }
 }
 
@@ -827,6 +829,7 @@ impl Agent {
                 }
             }
             "pointArm" => st.point_arm = match self.nm_pa_msg { Some(Some(p)) => p, _ => self.nm_pa.p },
+            "pedalLegs" if self.rdr2_core.is_some() && self.nm_pd.active => self.nm_pd.held(&mut st.pedal_legs),
             "bodyBalance" => {
                 if let Some(bb) = self.balance.as_ref().and_then(|b| b.bb.as_ref()) {
                     st.body_balance = bb.p;
@@ -879,11 +882,8 @@ impl Agent {
                 }
             }
             "braceForImpact" => { let p = &st.brace_for_impact; self.brace_at(p.pos, p.look, p.instance_index); }
-            // RDR2 core: a running pedalLegs takes new backPedal, variances and speed (injuredOnGround re-draws them)
-            "pedalLegs" if self.rdr2_core.is_some() => {
-                let (p, d) = (&st.pedal_legs, &mut self.nm_pd);
-                (d.back_pedal, d.radius_variance, d.leg_angle_variance, d.angular_speed) = (p.back_pedal, p.radius_variance, p.leg_angle_variance, p.angular_speed);
-            }
+            // RDR2 core: a running pedalLegs takes the message's values over its own (injuredOnGround re-draws some)
+            "pedalLegs" if self.rdr2_core.is_some() => self.nm_pd.take(&st.pedal_legs),
             _ => {}
         }
     }
@@ -1670,6 +1670,7 @@ impl Agent {
         let mut walked = bb_walked;
         let mut stop_dbm = false;
         let mut hf_balance = None;
+        let mut bb_req = (false, None, None);
         if let Some(ch) = self.ch.as_mut().filter(|_| nm_tick) {
             let snap = ch.clone();
             let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
@@ -1705,6 +1706,8 @@ impl Agent {
             }
         }
         if let Some(ch) = self.ch.as_mut().filter(|_| nm_tick) {
+            // RDR2 core: bodyFoetal's requests are its own slot's (0x30)
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&ch.eff, 0x20); }
             match self.nm_bf_msg.take() {
                 Some(Some(p)) => {
                     self.nm_bf = crate::nmbf::Foetal { active: self.nm_bf.active, ..p };
@@ -1714,6 +1717,7 @@ impl Agent {
                 None => {}
             }
             self.nm_bf.tick(ch);
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&ch.eff, 0x30); }
         }
         let hl_was = self.nm_head.active;
         let msgs = (self.nm_cf_msg.is_some() || self.nm_cf.as_ref().is_some_and(|f| f.active), self.nm_ru_msg.is_some() || self.nm_ru.active);
@@ -1752,11 +1756,13 @@ impl Agent {
             }
             let mut out = crate::nmshot::Out::default();
             let mut c = crate::nmshot::Ctx::new(&mut *ch, &body, &mut out, dbm_lost);
+            c.incoming = &self.incoming;
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             c.shot_on = self.nm_shot.is_some();
+            c.shot_scale = self.nm_shot.as_ref().map_or(1.0, |s| s.rdr2_scale());
             c.dbm = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).filter(|_| !self.fallen).map(|d| crate::nmshot::DbmView {
                 stepping: d.f.stepping, planted: d.pv.planted, failing: d.p.rdr2.is_some_and(|r| r.failing.is_some()),
-                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps) });
+                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps), leg: d.p.pelvis_height });
             if let Some(p) = self.nm_cf_msg.take() {
                 let b = walk_actives!(self);
                 start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);
@@ -1849,11 +1855,11 @@ impl Agent {
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x58); }
             if let Some(m) = self.nm_pd_msg.take() {
                 let p = &mut self.nm_pd;
-                (p.leg_stiffness, p.radius, p.angular_speed) = (m.leg_stiffness, m.radius, m.angular_speed);
-                (p.pedal_offset, p.speed_asymmetry, p.back_pedal) = (m.pedal_offset, m.speed_asymmetry, m.back_pedal);
-                (p.adaptive, p.drag_multiplier) = (m.adaptive, m.drag_multiplier);
-                (p.left, p.right, p.radius_variance, p.random_seed) = (m.left, m.right, m.radius_variance, m.random_seed);
-                (p.leg_angle_variance, p.centre_forwards, p.centre_up) = (m.leg_angle_variance, m.centre_forwards, m.centre_up);
+                p.take(&m);
+                // RDR2 core: the message starts RDR2's pedalLegs (braceForImpact's own pedalling stays GTA IV's)
+                if !p.active {
+                    p.r2 = c.ch.rdr2;
+                }
                 p.activate(&mut c);
             }
             if self.pedal.is_none() && !self.nm_br.active && !self.nm_hf.active() {
@@ -2018,10 +2024,14 @@ impl Agent {
                 self.nm_gr.tick(&mut c, &mut self.nm_head, &mut self.nm_twist, dbm, dt);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xd0); }
-            if (hl_was || (shot_out.head_look_start.is_none() && !shot_out.head_look_activate)) && !waits(walk_actives!(self), W_HEAD()) {
+            // RDR2 core: headLook and pointArm's arms yield to animPose when its override is set and it holds them
+            let ap = self.extras.on.iter().filter(|_| c.ch.rdr2).find(|(n, _)| *n == "animPose").and_then(|(_, e)| e.anim_pose_yield());
+            let ap = ap.unwrap_or_default();
+            if (hl_was || (shot_out.head_look_start.is_none() && !shot_out.head_look_activate)) && !waits(walk_actives!(self), W_HEAD()) && !ap[0] {
                 self.nm_head.tick(c.ch, &body, dt);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xf8); }
+            self.nm_pa.held = [ap[1], ap[2]];
             self.nm_pa.tick(&mut c);
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x100); }
             // an extra (RDR2's duck) may ask the balancer to crouch; nothing else here sets these, so they're None
@@ -2080,6 +2090,8 @@ impl Agent {
             }
             // an extra (RDR2's fall to knees) may switch the balancer off
             stop_dbm |= out.dbm == Some(false);
+            // RDR2 core: an extra (onFire) stops or starts bodyBalance and sets the balancer's leg stiffness
+            bb_req = (out.bb_stop, out.bb_start.take(), out.dbm_leg_stiffness);
             // RDR2 core: an extra (teeter) runs spineTwist toward a point, from the next tick
             if let Some((pos, k)) = out.spine_twist {
                 if !self.nm_twist.active {
@@ -2102,6 +2114,15 @@ impl Agent {
         }
         if stop_dbm {
             self.balance = None;
+        }
+        if bb_req.0 {
+            self.body_balance_stop();
+        }
+        if let Some(p) = bb_req.1 {
+            self.body_balance_full(build, world, p);
+        }
+        if let (Some(s), Some(d)) = (bb_req.2, self.balance.as_mut().and_then(|b| b.dbm.as_mut())) {
+            (self.config.leg_stiffness, d.p.leg_stiffness) = (s, s);
         }
         if let Some((p, set)) = hf_balance {
             self.body_balance_with(build, world, BodyBalance::from(p), Some(p));
@@ -2727,7 +2748,7 @@ impl PointGun {
             let twist = lo + (hi - lo) * a.random.next();
             let arm_straightness = delirium_data::kv!(18) + delirium_data::kv!(60) * a.random.next();
             let p = crate::nmpa::PointArmParams { target, twist, arm_straightness, instance_index: -1, point_swing_limit: 1.0,
-                                                  use_zero_pose_when_not_pointing: true, ..a.nm_pa.p };
+                                                  use_zero_pose_when_not_pointing: true, rdr2: None, ..a.nm_pa.p };
             a.point_arm(Some(p));
             self.started = true;
         } else {

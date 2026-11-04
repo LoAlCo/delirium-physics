@@ -3205,7 +3205,11 @@ impl Sim {
             "flinch" => vec![format!("upperBodyFlinch start=true pos={}", v3(head + s.fwd * 2.0))],
             "brace" => vec![format!("braceForImpact start=true pos={} look={}", v3(chest + s.fwd), v3(chest + s.fwd))],
             "look" => vec![format!("headLook start=true alwaysLook=true pos={}", v3(head + s.fwd * 2.0 + s.left()))],
+            // the RDR2 core's pointArm has a target and a use flag per arm (none on by default)
+            "point" if self.rdr2_core => vec![format!("pointArm start=true useRightArm=true targetRight={}", v3(chest + s.fwd * 2.0 - s.left()))],
             "point" => vec![format!("pointArm start=true target={}", v3(chest + s.fwd * 2.0 - s.left()))],
+            // the RDR2 core's duck does nothing until a new hit
+            "duck" if self.rdr2_core => vec!["duck start=true newHit=true".into()],
             "lean" => vec!["bodyBalance start=true".into(), format!("leanInDirection start=true leanAmount={} dir={}", LEAN_BUTTON(), v3(s.fwd))],
             "relax" => vec!["bodyRelax start=true".into()],
             "stayup" => vec![format!("stayUpright start=true stiffness={}", STAYUP_STIFFNESS())],
@@ -3224,6 +3228,10 @@ impl Sim {
             // RDR2 core: RDR2's meleeReact does nothing until a blow comes, so the button lands one on the chest from the front
             "meleeReact" if self.rdr2_core => vec![format!("meleeReact start=true hitNew=true hitLocal=false hitPart={CHEST} hitPoint={} hitNormal={}",
                                                          v3(chest + s.fwd * 0.12), v3(s.fwd))],
+            // pointGun: a pistol in the right hand aimed 3 m ahead (RDR2's under the RDR2 core, pointArm without it)
+            "pointGun" => vec![format!("pointGun start=true weapon=1 rightHandTarget={}", v3(chest + s.fwd * 3.0))],
+            // RDR2 core: controlledFall turns his chest's front toward the floor 2 m ahead (without the core it does nothing)
+            "controlledFall" => vec![format!("controlledFall start=true TARGET={}", v3((chest + s.fwd * 2.0).with_z(0.0)))],
             "STOP all" => vec!["stopAllBehaviours".into()],
             x if delirium::extras::messages().any(|m| m.name == x) => vec![format!("{x} start=true")],
             _ => vec![],

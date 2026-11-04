@@ -54,7 +54,15 @@
 //! - crouch start (crouch, off by default): starting crouched, deeper than crouchBendThresh (up to
 //!   crouchBendMax), he keeps the knees bent (at most 0.5) and the hips as they were, letting them go at
 //!   crouchStandRate and crouchHipRate, for crouchTime. The crouch depth is (0.99 - COM height over the lower foot /
-//!   (leg length - 0.0375)) x 0.79235, the leg length taken as his standing pelvis height (ours).
+//!   (leg length - 0.0375)) x 0.79235, the leg length taken as his standing pelvis height (ours). Both shins lying
+//!   (more than acos 0.2 off up) veto it, and the thighs' turn-out (up to 0.35) becomes the legs' twist rest offset;
+//! - both feet down and further apart than legsApartMax (2) + their minimum spread + extraFeetApart, the feet are
+//!   drawn in toward the COM predicted ahead, the one nearer it moving most;
+//! - the stance ankle's pitch and twist from the actual knee and foot (the knee predicted from the hip's desired
+//!   angles only moving backward off the ankle balance); in stagger mode moving backward, the swing ankle's shin term
+//!   adds its damping part instead of taking it off;
+//! - braceForImpact's car: the predicted COM clipped to the car's box widened by 0.05 m (in place of an exclusion
+//!   plane);
 //! Not here: extra foot friction on slopes (where RDR2 reads it isn't known, and Delirium's friction is fixed per
 //! part), obstacle and other-leg avoidance, lean priorities, hipError (nothing at its default 0), the turn step's
 //! flat-foot test, and fallType 3 (slump: it only sets balancerCollisionsReaction's state, so here it is fallType 0).
@@ -81,6 +89,9 @@ pub struct Params {
     /// stepping downhill (slopeDrop2 / slopeDrop1: RDR2's two unnamed values)
     pub slope_drop: [f32; 2],
     pub legs_apart_restep: f32,
+    /// both feet down and further apart than this (plus their minimum spread and extraFeetApart), they are drawn in
+    /// toward the predicted COM
+    pub legs_apart_max: f32,
     pub legs_together_restep: f32,
     pub step_decision_threshold: f32,
     pub step_wait: f32,
@@ -145,7 +156,7 @@ impl Default for Params {
         Params { max_steps: 100, max_balance_time: 50.0, max_still_time: 50.0, balance_indefinitely: false, giveup_height: 0.5,
                  fall_type: 0, fall_mult: 1.0, step_height_inc4_step: 0.1, ankle_balance: true, start_flat: 0.1, end_flat: 0.3,
                  slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.7, 1.8], legs_apart_restep: 0.2,
-                 legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
+                 legs_apart_max: 2.0, legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
                  always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
                  taper_knee_strength_run: false, limp_scale: 1.0, limb_requests: true, limb_order_reversed: true,
                  max_foot_speed: 5.0, ramp_hip_pitch_on_fail: true, prediction_time: 0.2, prediction_time_variance: 0.0,
@@ -180,6 +191,7 @@ impl Params {
             "slopeDrop2" => self.slope_drop[0] = v,
             "slopeDrop1" => self.slope_drop[1] = v,
             "legsApartRestep" => self.legs_apart_restep = v,
+            "legsApartMax" => self.legs_apart_max = v,
             "legsTogetherRestep" => self.legs_together_restep = v,
             "stepDecisionThreshold" => self.step_decision_threshold = v,
             "stepWait" => self.step_wait = v,
@@ -278,6 +290,14 @@ const ANKLE_AHEAD: f32 = 0.4;
 const ANKLE_SPEED: f32 = 0.3;
 pub const ANKLE_TILT: f32 = 0.2;
 const SIDEWAYS_SPEED2: f32 = 0.25;
+/// The runtime reset's current-step age (bal+0x204) and leg-twist limits (+0x394 / +0x398, until the first step's draw).
+const RESET_STEP_AGE: f32 = 0.3;
+const RESET_LEG_TWIST: (f32, f32) = (-1.9, 0.6);
+/// braceForImpact's car box: its half extents across and along widened by this (m) for the balancer.
+pub const CAR_MARGIN: f32 = 0.05;
+/// Crouch start: a shin this close to lying (cosine of its angle to up) on both legs vetoes it; the turn-out kept, at most.
+const LYING_SHIN: f32 = 0.2;
+const TURN_OUT_MAX: f32 = 0.35;
 
 /// One channel of RDR2's owned crouch request: a target the balancer follows at a rate (infinite: at once). The
 /// highest id asking this step owns it; the owner resets every step but the target stays until someone asks again
@@ -400,6 +420,11 @@ pub struct Rdr2 {
     /// crouch start: knee bend and hip pitch it holds (letting them go), and until when
     pub crouching: Option<(f32, f32, f32)>,
     started: bool,
+    /// the legs' twist rest offset (bal+0x22c): the pelvis control relaxes the leg twists toward it, less GTA IV's base;
+    /// a crouch start keeps the thighs' turn-out here
+    pub twist_rest: f32,
+    /// braceForImpact's car this step (bal+0x1b0..+0x1e0): its box's corners, widened by CAR_MARGIN, in order round it
+    pub car: Option<[bevy_math::Vec3; 4]>,
     /// staggerFall's stagger mode this step (bal+0xbe2): feet further apart before a re-step, the alternation bias, the
     /// sideways test, its fail height, and no ankle balance on the stance foot
     pub stagger: bool,
@@ -416,11 +441,11 @@ pub struct Rdr2 {
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
         Rdr2 { p, time: 0.0, still: 0.0, steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
-               since_step: 100000.0, step_age: 0.0, speed: 0.0, running: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
+               since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false,
-               leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, pause: 0.0, aligned: false, landed: false, crouching: None,
-               started: false, stagger: false, lead: None, lead_add: 0.0, taper: true, plane: None }
+               leg_twist: RESET_LEG_TWIST, turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, pause: 0.0, aligned: false, landed: false, crouching: None,
+               started: false, twist_rest: 0.0, car: None, stagger: false, lead: None, lead_add: 0.0, taper: true, plane: None }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.
@@ -433,6 +458,8 @@ impl Rdr2 {
             self.draw();
         }
         self.crouch_step(dt);
+        // the car is the brace's this step: placement has used it
+        self.car = None;
         if self.failing.is_some() && self.p.ramp_hip_pitch_on_fail {
             self.owned.ask(FAIL_OWNER, 0.0, FAIL_HIP_PITCH, FAIL_HIP_RATE);
         }
@@ -576,15 +603,99 @@ impl Rdr2 {
     }
 
     /// Crouch start, at his first step: `h` the COM's height over the lower foot, `leg` the leg length, `hip` the hips'
-    /// pitch now.
-    pub fn crouch_start(&mut self, h: f32, leg: f32, hip: f32) {
+    /// pitch now; `legs` whether both shins lie (which vetoes it) and the thighs' turn-out, asked only when it would
+    /// start. The turn-out (clamped to 0.35) becomes the legs' twist rest offset.
+    pub fn crouch_start(&mut self, h: f32, leg: f32, hip: f32, legs: impl FnOnce() -> (bool, f32)) {
         if std::mem::replace(&mut self.started, true) || !self.p.crouch {
             return;
         }
         let c = (0.99 - h / (leg - 0.5 * 0.075)) * 0.79235;
         if c > self.p.crouch_bend_thresh && c < self.p.crouch_bend_max {
+            let (lying, turn_out) = legs();
+            if lying {
+                return;
+            }
             self.crouching = Some((-c.min(0.5), hip.clamp(-1.5, 1.5), self.p.crouch_time));
+            let t = turn_out.clamp(0.0, TURN_OUT_MAX);
+            if t > 0.0 {
+                self.twist_rest = t;
+            }
         }
+    }
+
+    /// Crouch start's veto: both shins (knee to ankle joint) further than acos 0.2 off `up`, lying or kneeling.
+    pub fn legs_lying(up: bevy_math::Vec3, shins: [(bevy_math::Vec3, bevy_math::Vec3); 2]) -> bool {
+        shins.iter().all(|&(knee, ankle)| (knee - ankle).normalize_or_zero().dot(up) < LYING_SHIN)
+    }
+
+    /// The thighs' mean angle about the pelvis's long axis `a`, from its side axis `b`, less a right angle: each
+    /// thigh's side axis `t[i].0` (mirrored on the right; its third axis when the side axis lies within acos 0.95 of
+    /// `a`) taken off `a`, then its angle to `b`.
+    pub fn turn_out(a: bevy_math::Vec3, b: bevy_math::Vec3, t: [(bevy_math::Vec3, bevy_math::Vec3); 2]) -> f32 {
+        let angle = |x: bevy_math::Vec3| crate::nmdbm::acos((x - a * x.dot(a)).dot(b));
+        let (l1, l2) = t[0];
+        let l = if l1.dot(a).abs() > 0.95 { -l2 } else { l1 };
+        let (r1, r2) = t[1];
+        let r = if a.dot(-r1).abs() > 0.95 { r2 } else { -r1 };
+        (angle(l) + angle(r)) * 0.5 - std::f32::consts::FRAC_PI_2
+    }
+
+    /// The legsApartMax pull: both feet down and further apart than `max`, each foot moves toward the predicted COM
+    /// `p` (at its own height) by the excess times the other foot's share of their distances from it.
+    pub fn pull_in(a: &mut bevy_math::Vec3, b: &mut bevy_math::Vec3, max: f32, p: bevy_math::Vec3, up: bevy_math::Vec3) {
+        let d = (*b - *a).length();
+        if d <= max {
+            return;
+        }
+        let (pa, pb) = (p + up * up.dot(*a - p), p + up * up.dot(*b - p));
+        let (da, db) = ((pa - *a).length().max(0.002), (pb - *b).length().max(0.002));
+        let e = (d - max) / (da + db);
+        *a += (pa - *a).normalize_or_zero() * (e * db);
+        *b += (pb - *b).normalize_or_zero() * (e * da);
+    }
+
+    /// braceForImpact's car (bal+0x346): the predicted COM `q`, on the line from the COM `p`, clipped to the car box
+    /// (world x, y). Both faces crossed ahead of the COM: the nearer if q is past it; the COM inside the box: the
+    /// nearest way out, even behind it; otherwise q stays.
+    pub fn clip_car(&self, p: bevy_math::Vec3, q: bevy_math::Vec3) -> bevy_math::Vec3 {
+        let Some(c) = self.car else { return q };
+        let cross = |a: bevy_math::Vec2, b: bevy_math::Vec2| a.x * b.y - a.y * b.x;
+        let d = (q - p).truncate();
+        let mut hit = [(0.0f32, q); 2];
+        let mut n = 0;
+        for i in 0..4 {
+            let (v, e) = (c[i].truncate(), (c[(i + 1) % 4] - c[i]).truncate());
+            let den = cross(e, d);
+            if den.abs() <= 1e-6 {
+                continue;
+            }
+            let w = v - p.truncate();
+            let (s, t) = (cross(d, w) / den, cross(e, w) / den);
+            if s > 0.0 && s <= 1.0 {
+                hit[n] = (t, (v + e * s).extend(q.z));
+                n += 1;
+                if n == 2 {
+                    break;
+                }
+            }
+        }
+        if n < 2 {
+            return q;
+        }
+        let [(t0, x0), (t1, x1)] = hit;
+        if t0 > 0.0 && t1 > 0.0 {
+            if t0 < 1.0 || t1 < 1.0 { if t0 < t1 { x0 } else { x1 } } else { q }
+        } else if (t0 > 0.0 && t1 < 0.0) || (t0 < 0.0 && t1 > 0.0) {
+            if t0.abs() < t1.abs() { x0 } else { x1 }
+        } else {
+            q
+        }
+    }
+
+    /// The car box's corners for the balancer, round it: `centre`, the car's across / along axes and half extents.
+    pub fn car_box(centre: bevy_math::Vec3, ux: bevy_math::Vec3, uy: bevy_math::Vec3, half: bevy_math::Vec2) -> [bevy_math::Vec3; 4] {
+        let (x, y) = (ux * (half.x + CAR_MARGIN), uy * (half.y + CAR_MARGIN));
+        [centre + x + y, centre - x + y, centre - x - y, centre + x - y]
     }
 
     /// Crouch start each step: the held bends let go at their rates; asks the crouch request (owner 1).

@@ -324,6 +324,24 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "pullUpStrengthLeft", kind: Kind::Float, used: true, doc: "" },
         Param { name: "grabHoldMaxTimer", kind: Kind::Float, used: true, doc: "" },
         Param { name: "reachDistance", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "justBrace", kind: Kind::Bool, used: true, doc: "RDR2's name for justbrace" },
+        Param { name: "useLineGrab", kind: Kind::Bool, used: true, doc: "RDR2's name for linegrab" },
+        Param { name: "grabDistance", kind: Kind::Float, used: true, doc: "RDR2's name for grabDist" },
+        Param { name: "maxReachDistance", kind: Kind::Float, used: true, doc: "RDR2's name for reachDistance" },
+        Param { name: "dropWeaponIfNecessary", kind: Kind::Bool, used: true, doc: "RDR2 core only: a busy hand may still grab (false)" },
+        Param { name: "dropWeaponDistance", kind: Kind::Float, used: true, doc: "RDR2 core only: asks to drop it this close (0.3)" },
+        Param { name: "stickyHands", kind: Kind::Float, used: true, doc: "RDR2 core only: the held hand's pull (4)" },
+        Param { name: "turnToTarget", kind: Kind::Int, used: true, doc: "RDR2 core only: the balancer's heading, 0 none, 1 toward, 2 away (1)" },
+        Param { name: "handsCollide", kind: Kind::Bool, used: true, doc: "RDR2 core only: the hands collide while reaching (false)" },
+        Param { name: "pointsX4grab", kind: Kind::Bool, used: true, doc: "RDR2 core only: pos3/pos4 a second pair, taken when nearer the chest (false)" },
+        Param { name: "normalL2", kind: Kind::Vec3, used: true, doc: "RDR2 core only: the second pair's left normal (zero: facing the shoulder)" },
+        Param { name: "normalR2", kind: Kind::Vec3, used: true, doc: "RDR2 core only: and its right (zero)" },
+        Param { name: "orientationConstraintScale", kind: Kind::Float, used: true, doc: "RDR2 core only: the held wrist's turn torque (1)" },
+        Param { name: "maxWristAngle", kind: Kind::Float, used: true, doc: "RDR2 core only: a hand lets go past this wrist angle, rad (pi)" },
+        Param { name: "useHeadLookToTarget", kind: Kind::Bool, used: true, doc: "RDR2 core only: with a hand held, look and twist to targetForHeadLook and pull up on one hand (false)" },
+        Param { name: "lookAtGrab", kind: Kind::Bool, used: true, doc: "RDR2 core only: headLook at the grab (true)" },
+        Param { name: "targetForHeadLook", kind: Kind::Vec3, used: true, doc: "RDR2 core only (zero)" },
+        Param { name: "move2Radius", kind: Kind::Float, used: false, doc: "RDR2 core only: (0; not read by RDR2)" },
     ] },
     Message { name: "headLook", params: &[
         Param { name: "instanceIndex", kind: Kind::Int, used: false, doc: "a game object index (the SDK has no level objects: positions are world coordinates)" },
@@ -414,6 +432,11 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "centreForwards", kind: Kind::Float, used: true, doc: "" },
         Param { name: "legAngleVariance", kind: Kind::Float, used: true, doc: "" },
         Param { name: "randomSeed", kind: Kind::Int, used: true, doc: "" },
+        Param { name: "dragReduction", kind: Kind::Float, used: false, doc: "RDR2 core only: the IK's drag reduction (0.25; Delirium's leg IK has none)" },
+        Param { name: "centresideways", kind: Kind::Float, used: true, doc: "RDR2 core only: the circles' centre moved sideways, m (0)" },
+        Param { name: "ellipse", kind: Kind::Float, used: true, doc: "RDR2 core only: the circle's height over its length, -1..1; negative: its length over its height (1)" },
+        Param { name: "spread", kind: Kind::Float, used: true, doc: "RDR2 core only: the feet's circles apart sideways, m (0)" },
+        Param { name: "hula", kind: Kind::Bool, used: true, doc: "RDR2 core only: level circles at the hips' height, the upper body swaying against them (false)" },
     ] },
     Message { name: "pointArm", params: &[
         Param { name: "instanceIndex", kind: Kind::Int, used: true, doc: "" },
@@ -425,6 +448,23 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "useZeroPoseWhenNotPointing", kind: Kind::Bool, used: true, doc: "" },
         Param { name: "armDamping", kind: Kind::Float, used: true, doc: "" },
         Param { name: "armStiffness", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "useRightArm", kind: Kind::Bool, used: true, doc: "RDR2 core only: point the right arm (under the core useLeftArm points the left; both may) (false)" },
+        Param { name: "targetLeft", kind: Kind::Vec3, used: true, doc: "RDR2 core only: where the left arm points, world (zero)" },
+        Param { name: "targetRight", kind: Kind::Vec3, used: true, doc: "RDR2 core only: where the right arm points, world (zero)" },
+        Param { name: "twistLeft", kind: Kind::Float, used: true, doc: "RDR2 core only (0.3)" },
+        Param { name: "twistRight", kind: Kind::Float, used: true, doc: "RDR2 core only (0.3)" },
+        Param { name: "armStraightnessLeft", kind: Kind::Float, used: true, doc: "RDR2 core only: the hand 0.7 m times this from the shoulder (0.8)" },
+        Param { name: "armStraightnessRight", kind: Kind::Float, used: true, doc: "RDR2 core only (0.8)" },
+        Param { name: "armStiffnessLeft", kind: Kind::Float, used: true, doc: "RDR2 core only (15)" },
+        Param { name: "armStiffnessRight", kind: Kind::Float, used: true, doc: "RDR2 core only (15)" },
+        Param { name: "armDampingLeft", kind: Kind::Float, used: true, doc: "RDR2 core only (1)" },
+        Param { name: "armDampingRight", kind: Kind::Float, used: true, doc: "RDR2 core only (1)" },
+        Param { name: "pointSwingLimitLeft", kind: Kind::Float, used: true, doc: "RDR2 core only: past this clavicle swing (of its range) the arm stops pointing (1.5)" },
+        Param { name: "pointSwingLimitRight", kind: Kind::Float, used: true, doc: "RDR2 core only (1.5)" },
+        Param { name: "instanceHandleLeft", kind: Kind::Int, used: false, doc: "RDR2 core only: a game object the target is relative to (the SDK has no level objects: world coordinates)" },
+        Param { name: "instanceHandleRight", kind: Kind::Int, used: false, doc: "RDR2 core only: as instanceHandleLeft" },
+        Param { name: "useZeroPoseWhenNotPointingLeft", kind: Kind::Bool, used: true, doc: "RDR2 core only (false)" },
+        Param { name: "useZeroPoseWhenNotPointingRight", kind: Kind::Bool, used: true, doc: "RDR2 core only (false)" },
     ] },
     Message { name: "rollDownStairs", params: &[
         Param { name: "forcemag", kind: Kind::Float, used: true, doc: "" },
@@ -763,8 +803,22 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
     let start = params.iter().find(|(n, _)| *n == "start").map(|(_, v)| v.b()).transpose()?;
     let one_shot = matches!(msg, "activePose" | "applyImpulse" | "bodyRelax" | "defineAttachedObject" | "leanInDirection"
                                  | "leanToPosition" | "leanTowardsObject" | "setStiffness" | "shotRelax");
+    // RDR2 core: grab's start reloads RDR2's defaults
+    if start == Some(true) && msg == "grab" && a.rdr2_core.is_some() {
+        st.grab = crate::nmgr::GrabParams::rdr2();
+    }
     if start == Some(true) && matches!(msg, "bodyBalance" | "shot" | "pointArm") {
         reset(st, msg);
+        // RDR2 core: pointArm's own two-arm parameters
+        if msg == "pointArm" && a.rdr2_core.is_some() {
+            st.point_arm.rdr2 = Some(Default::default());
+        }
+    } else if start == Some(true) && a.rdr2_core.is_some() && matches!(msg, "pedalLegs" | "bodyFoetal") {
+        // RDR2 core: a start reloads RDR2's defaults before the message's values
+        match msg {
+            "pedalLegs" => st.pedal_legs = crate::nmpd::rdr2_message(),
+            _ => st.body_foetal = crate::nmbf::Foetal::rdr2(),
+        }
     } else if !one_shot {
         a.held_params(st, msg);
     }
@@ -1055,6 +1109,23 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("grab", "pullUpStrengthLeft") => { let p = &mut st.grab; p.pull_up_strength[0] = v.f()?; }
         ("grab", "grabHoldMaxTimer") => { let p = &mut st.grab; p.grab_hold_max_timer = v.f()?; }
         ("grab", "reachDistance") => { let p = &mut st.grab; p.max_reach = v.f()?; }
+        ("grab", "justBrace") => { let p = &mut st.grab; p.justbrace = v.b()?; }
+        ("grab", "useLineGrab") => { let p = &mut st.grab; p.linegrab = v.b()?; }
+        ("grab", "grabDistance") => { let p = &mut st.grab; p.grab_dist = v.f()?; }
+        ("grab", "maxReachDistance") => { let p = &mut st.grab; p.max_reach = v.f()?; }
+        ("grab", "dropWeaponIfNecessary") => { let p = &mut st.grab; p.drop_weapon = v.b()?; }
+        ("grab", "dropWeaponDistance") => { let p = &mut st.grab; p.drop_weapon_distance = v.f()?; }
+        ("grab", "stickyHands") => { let p = &mut st.grab; p.sticky_hands = v.f()?; }
+        ("grab", "turnToTarget") => { let p = &mut st.grab; p.turn_to_target = v.i()?; }
+        ("grab", "handsCollide") => { let p = &mut st.grab; p.hands_collide = v.b()?; }
+        ("grab", "pointsX4grab") => { let p = &mut st.grab; p.points_x4 = v.b()?; }
+        ("grab", "normalL2") => { let p = &mut st.grab; p.normal_l2 = v.v()?; }
+        ("grab", "normalR2") => { let p = &mut st.grab; p.normal_r2 = v.v()?; }
+        ("grab", "orientationConstraintScale") => { let p = &mut st.grab; p.orientation_scale = v.f()?; }
+        ("grab", "maxWristAngle") => { let p = &mut st.grab; p.max_wrist_angle = v.f()?; }
+        ("grab", "useHeadLookToTarget") => { let p = &mut st.grab; p.head_look_to_target = v.b()?; }
+        ("grab", "lookAtGrab") => { let p = &mut st.grab; p.look_at_grab = v.b()?; }
+        ("grab", "targetForHeadLook") => { let p = &mut st.grab; p.head_look_target = v.v()?; }
         ("headLook", "pos") => { let p = &mut st.head_look; p.pos = v.v()?; }
         ("headLook", "stiffness") => { let p = &mut st.head_look; p.stiffness = v.f()?; }
         ("headLook", "alwaysEyesHorizontal") => { let p = &mut st.head_look; p.always_eyes_horizontal = v.b()?; }
@@ -1109,8 +1180,27 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("pedalLegs", "centreForwards") => { let p = &mut st.pedal_legs; p.centre_forwards = v.f()?; }
         ("pedalLegs", "legAngleVariance") => { let p = &mut st.pedal_legs; p.leg_angle_variance = v.f()?; }
         ("pedalLegs", "randomSeed") => { let p = &mut st.pedal_legs; p.random_seed = v.i()?.max(0) as u32; }
+        ("pedalLegs", "centresideways") => { let p = &mut st.pedal_legs; p.rdr2.centre_sideways = v.f()?; }
+        ("pedalLegs", "ellipse") => { let p = &mut st.pedal_legs; p.rdr2.ellipse = v.f()?; }
+        ("pedalLegs", "spread") => { let p = &mut st.pedal_legs; p.rdr2.spread = v.f()?; }
+        ("pedalLegs", "hula") => { let p = &mut st.pedal_legs; p.rdr2.hula = v.b()?; }
         ("pointArm", "instanceIndex") => { let p = &mut st.point_arm; p.instance_index = v.i()?; }
-        ("pointArm", "useLeftArm") => { let p = &mut st.point_arm; p.use_left_arm = v.b()?; }
+        ("pointArm", "useLeftArm") => { let p = &mut st.point_arm; p.use_left_arm = v.b()?; if let Some(r) = p.rdr2.as_mut() { r[0].use_arm = p.use_left_arm; } }
+        ("pointArm", "targetLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].target = v.v()?; }
+        ("pointArm", "targetRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].target = v.v()?; }
+        ("pointArm", "twistLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].twist = v.f()?; }
+        ("pointArm", "twistRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].twist = v.f()?; }
+        ("pointArm", "armStraightnessLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].arm_straightness = v.f()?; }
+        ("pointArm", "armStraightnessRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].arm_straightness = v.f()?; }
+        ("pointArm", "armStiffnessLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].arm_stiffness = v.f()?; }
+        ("pointArm", "armStiffnessRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].arm_stiffness = v.f()?; }
+        ("pointArm", "armDampingLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].arm_damping = v.f()?; }
+        ("pointArm", "armDampingRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].arm_damping = v.f()?; }
+        ("pointArm", "pointSwingLimitLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].point_swing_limit = v.f()?; }
+        ("pointArm", "pointSwingLimitRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].point_swing_limit = v.f()?; }
+        ("pointArm", "useRightArm") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].use_arm = v.b()?; }
+        ("pointArm", "useZeroPoseWhenNotPointingLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].use_zero_pose = v.b()?; }
+        ("pointArm", "useZeroPoseWhenNotPointingRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].use_zero_pose = v.b()?; }
         ("pointArm", "twist") => { let p = &mut st.point_arm; p.twist = v.f()?; }
         ("pointArm", "target") => { let p = &mut st.point_arm; p.target = v.v()?; }
         ("pointArm", "pointSwingLimit") => { let p = &mut st.point_arm; p.point_swing_limit = v.f()?; }
@@ -1402,6 +1492,23 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("grab", "pullUpStrengthLeft") => { let p = &st.grab; Value::Float(p.pull_up_strength[0]) }
         ("grab", "grabHoldMaxTimer") => { let p = &st.grab; Value::Float(p.grab_hold_max_timer) }
         ("grab", "reachDistance") => { let p = &st.grab; Value::Float(p.max_reach) }
+        ("grab", "justBrace") => { let p = &st.grab; Value::Bool(p.justbrace) }
+        ("grab", "useLineGrab") => { let p = &st.grab; Value::Bool(p.linegrab) }
+        ("grab", "grabDistance") => { let p = &st.grab; Value::Float(p.grab_dist) }
+        ("grab", "maxReachDistance") => { let p = &st.grab; Value::Float(p.max_reach) }
+        ("grab", "dropWeaponIfNecessary") => { let p = &st.grab; Value::Bool(p.drop_weapon) }
+        ("grab", "dropWeaponDistance") => { let p = &st.grab; Value::Float(p.drop_weapon_distance) }
+        ("grab", "stickyHands") => { let p = &st.grab; Value::Float(p.sticky_hands) }
+        ("grab", "turnToTarget") => { let p = &st.grab; Value::Int(p.turn_to_target) }
+        ("grab", "handsCollide") => { let p = &st.grab; Value::Bool(p.hands_collide) }
+        ("grab", "pointsX4grab") => { let p = &st.grab; Value::Bool(p.points_x4) }
+        ("grab", "normalL2") => { let p = &st.grab; Value::Vec3(p.normal_l2) }
+        ("grab", "normalR2") => { let p = &st.grab; Value::Vec3(p.normal_r2) }
+        ("grab", "orientationConstraintScale") => { let p = &st.grab; Value::Float(p.orientation_scale) }
+        ("grab", "maxWristAngle") => { let p = &st.grab; Value::Float(p.max_wrist_angle) }
+        ("grab", "useHeadLookToTarget") => { let p = &st.grab; Value::Bool(p.head_look_to_target) }
+        ("grab", "lookAtGrab") => { let p = &st.grab; Value::Bool(p.look_at_grab) }
+        ("grab", "targetForHeadLook") => { let p = &st.grab; Value::Vec3(p.head_look_target) }
         ("headLook", "pos") => { let p = &st.head_look; Value::Vec3(p.pos) }
         ("headLook", "stiffness") => { let p = &st.head_look; Value::Float(p.stiffness) }
         ("headLook", "alwaysEyesHorizontal") => { let p = &st.head_look; Value::Bool(p.always_eyes_horizontal) }
@@ -1456,8 +1563,27 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("pedalLegs", "centreForwards") => { let p = &st.pedal_legs; Value::Float(p.centre_forwards) }
         ("pedalLegs", "legAngleVariance") => { let p = &st.pedal_legs; Value::Float(p.leg_angle_variance) }
         ("pedalLegs", "randomSeed") => { let p = &st.pedal_legs; Value::Int(p.random_seed as i32) }
+        ("pedalLegs", "centresideways") => { let p = &st.pedal_legs; Value::Float(p.rdr2.centre_sideways) }
+        ("pedalLegs", "ellipse") => { let p = &st.pedal_legs; Value::Float(p.rdr2.ellipse) }
+        ("pedalLegs", "spread") => { let p = &st.pedal_legs; Value::Float(p.rdr2.spread) }
+        ("pedalLegs", "hula") => { let p = &st.pedal_legs; Value::Bool(p.rdr2.hula) }
         ("pointArm", "instanceIndex") => { let p = &st.point_arm; Value::Int(p.instance_index) }
         ("pointArm", "useLeftArm") => { let p = &st.point_arm; Value::Bool(p.use_left_arm) }
+        ("pointArm", "targetLeft") => { let p = &st.point_arm; Value::Vec3(p.rdr2.unwrap_or_default()[0].target) }
+        ("pointArm", "targetRight") => { let p = &st.point_arm; Value::Vec3(p.rdr2.unwrap_or_default()[1].target) }
+        ("pointArm", "twistLeft") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[0].twist) }
+        ("pointArm", "twistRight") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[1].twist) }
+        ("pointArm", "armStraightnessLeft") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[0].arm_straightness) }
+        ("pointArm", "armStraightnessRight") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[1].arm_straightness) }
+        ("pointArm", "armStiffnessLeft") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[0].arm_stiffness) }
+        ("pointArm", "armStiffnessRight") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[1].arm_stiffness) }
+        ("pointArm", "armDampingLeft") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[0].arm_damping) }
+        ("pointArm", "armDampingRight") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[1].arm_damping) }
+        ("pointArm", "pointSwingLimitLeft") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[0].point_swing_limit) }
+        ("pointArm", "pointSwingLimitRight") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[1].point_swing_limit) }
+        ("pointArm", "useRightArm") => { let p = &st.point_arm; Value::Bool(p.rdr2.unwrap_or_default()[1].use_arm) }
+        ("pointArm", "useZeroPoseWhenNotPointingLeft") => { let p = &st.point_arm; Value::Bool(p.rdr2.unwrap_or_default()[0].use_zero_pose) }
+        ("pointArm", "useZeroPoseWhenNotPointingRight") => { let p = &st.point_arm; Value::Bool(p.rdr2.unwrap_or_default()[1].use_zero_pose) }
         ("pointArm", "twist") => { let p = &st.point_arm; Value::Float(p.twist) }
         ("pointArm", "target") => { let p = &st.point_arm; Value::Vec3(p.target) }
         ("pointArm", "pointSwingLimit") => { let p = &st.point_arm; Value::Float(p.point_swing_limit) }
