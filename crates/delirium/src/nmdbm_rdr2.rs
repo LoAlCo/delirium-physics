@@ -58,9 +58,9 @@
 //!   (more than acos 0.2 off up) veto it, and the thighs' turn-out (up to 0.35) becomes the legs' twist rest offset;
 //! - both feet down and further apart than legsApartMax (2) + their minimum spread + extraFeetApart, the feet are
 //!   drawn in toward the COM predicted ahead, the one nearer it moving most;
-//! - the stance ankle's pitch and twist from the actual knee and foot (the knee predicted from the hip's desired
-//!   angles only moving backward off the ankle balance); in stagger mode moving backward, the swing ankle's shin term
-//!   adds its damping part instead of taking it off;
+//! - the stance ankle's pitch and twist from the actual knee and foot (off the ankle balance and moving forward: from
+//!   the knee predicted from the hip's desired angles to the foot target); in stagger mode, a swing foot moving
+//!   against its own third axis has its ankle's shin term add its damping part instead of taking it off;
 //! - braceForImpact's car: the predicted COM clipped to the car's box widened by 0.05 m (in place of an exclusion
 //!   plane);
 //! Not here: extra foot friction on slopes (where RDR2 reads it isn't known, and Delirium's friction is fixed per

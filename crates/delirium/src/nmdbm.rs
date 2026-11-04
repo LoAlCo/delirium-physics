@@ -896,23 +896,23 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     let mut bal = [0.0f32; 2];
     // RDR2's ankle balance twist: the twist laying the foot on the ground / on the tilted normal
     let mut twist_flat = [None; 2];
-    // RDR2 (rdr2_balancer3.md §3): moving backward along the back axis; the stance ankle's knee predicted from the
-    // hip's desired angles only then and off the ankle balance (whose pitch takes the actual knee and foot); in
-    // stagger mode moving backward (more than 0.3 of the speed), the swing ankle's shin term adds its damping part
-    let (back, balancing) = match p.rdr2 {
-        Some(r) => {
-            let v = horizontal(s.vel, up);
-            let dir = v.normalize_or_zero().dot(horizontal(s.m.c, up).normalize_or_zero());
-            ((dir > 0.0, r.stagger && dir > 0.3), aim.is_some() && s.vel.length() < 1.0)
-        }
-        None => ((false, false), false),
+    // RDR2 (0x2aae0b4, rdr2_balancer3.md §3.2 and §9): off the ankle balance, the stance ankle aims from the knee
+    // predicted from the hip's desired angles to the foot target while the velocity has a part along -s.m.c (the COM
+    // frame's third row, snapshot +0x4d0, whose negative is forward: moving forward); otherwise from the actual knee
+    // to the actual foot. In stagger mode a swing foot moving against its own third axis (velocity relative to the
+    // ground, both horizontal and unit: dot < -0.3) has its shin term add the damping part instead of taking it off.
+    let (ahead, balancing) = match p.rdr2 {
+        Some(_) => (s.vel.vd(horizontal(s.m.c, up)) < 0.0, aim.is_some() && s.vel.length() < 1.0),
+        None => (false, false),
     };
     for (i, planted) in [lp, rp].into_iter().enumerate() {
         let side = if i == 0 { 1.0 } else { -1.0 };
         let leg = &mut s.legs[i];
         let a = if !planted {
             let sh = &leg.shin;
-            let a = if back.1 {
+            let back = p.rdr2.is_some_and(|r| r.stagger)
+                && horizontal(leg.foot.v - p.gvel[i], up).normalize_or_zero().vd(horizontal(leg.foot.m.c, up).normalize_or_zero()) < -0.3;
+            let a = if back {
                 sdot(sh.w, sh.m.a, b"yzx").fma(leg.ankle.damping / leg.ankle.strength.max(1e-10), sdot(sh.m.c, normal[i], b"yzx"))
             } else {
                 (-sdot(sh.w, sh.m.a, b"yzx")).fma(leg.ankle.damping / leg.ankle.strength, sdot(sh.m.c, normal[i], b"yzx"))
@@ -924,8 +924,8 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             a + acos(p.leg_length.clamp(delirium_data::kv!(72), delirium_data::kv!(263)))
         } else {
             let (k, foot) = match p.rdr2 {
-                Some(_) if balancing || !back.0 => (leg.knee.m.d, leg.foot.m.d),
-                Some(_) => (predict_knee(&leg.hip, &leg.knee, side), leg.foot.m.d),
+                Some(_) if balancing || !ahead => (leg.knee.m.d, leg.foot.m.d),
+                Some(_) => (predict_knee(&leg.hip, &leg.knee, side), target[i]),
                 None => (predict_knee(&leg.hip, &leg.knee, side), target[i]),
             };
             if let Some((_, tilt)) = aim {
