@@ -243,6 +243,10 @@ const STEP_UP: f32 = 0.1;
 const SWING_ANKLE_CLAMP: f32 = 9.7;
 /// On a slope he re-steps for feet at least this far apart.
 const SLOPE_RESTEP: f32 = 0.7;
+/// Stagger mode: the feet may be this much further apart before he re-steps.
+const STAGGER_RESTEP: f32 = 0.3;
+/// Stagger mode fails him once the COM is less than this many leg lengths over the higher foot (staggerFailHeight).
+pub const STAGGER_FAIL_HEIGHT: f32 = 0.65;
 /// stepWait applies below this speed (m/s); above it the wait is FAST_STEP_WAIT, which never holds a step back.
 const STEP_WAIT_SPEED: f32 = 0.7;
 const FAST_STEP_WAIT: f32 = -0.1;
@@ -396,6 +400,11 @@ pub struct Rdr2 {
     /// crouch start: knee bend and hip pitch it holds (letting them go), and until when
     pub crouching: Option<(f32, f32, f32)>,
     started: bool,
+    /// staggerFall's stagger mode this step (bal+0xbe2): feet further apart before a re-step, the alternation bias, the
+    /// sideways test, its fail height, and no ankle balance on the stance foot
+    pub stagger: bool,
+    /// staggerFall's prediction time this step (bal+0x6bc over the base), in place of the balancer's own
+    pub lead: Option<f32>,
 }
 
 impl Rdr2 {
@@ -405,7 +414,7 @@ impl Rdr2 {
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false,
                leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, pause: 0.0, aligned: false, landed: false, crouching: None,
-               started: false }
+               started: false, stagger: false, lead: None }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.
@@ -517,7 +526,7 @@ impl Rdr2 {
 
     /// Moving sideways: `along_side` is the velocity direction along the pelvis's side axis.
     pub fn sideways(&mut self, stepping: bool, speed2: f32, along_side: f32) {
-        self.sideways = !stepping && self.p.sideways_cheat_force.abs() >= 0.01 && speed2 > SIDEWAYS_SPEED2
+        self.sideways = !stepping && (self.stagger || self.p.sideways_cheat_force.abs() >= 0.01) && speed2 > SIDEWAYS_SPEED2
             && along_side.abs() > self.p.sideways_thresh;
     }
 
@@ -611,7 +620,8 @@ impl Rdr2 {
 
     /// Feet at least this far apart (beyond their minimum spread) make him step though the COM is supported.
     pub fn legs_apart(&self) -> f32 {
-        if self.on_slope { self.p.legs_apart_restep.max(SLOPE_RESTEP) } else { self.p.legs_apart_restep }
+        let r = if self.on_slope { self.p.legs_apart_restep.max(SLOPE_RESTEP) } else { self.p.legs_apart_restep };
+        if self.stagger { r + STAGGER_RESTEP } else { r }
     }
 
     /// May a new step start now? stepWait holds the next one back when he's slow.

@@ -3294,7 +3294,7 @@ impl Sim {
     /// The RDR2 reactions to a shot (part hit at `at`, the bullet along `dir`), as message lines.
     fn rdr2_shot(&mut self, part: usize, at: Vec3, dir: Vec3) -> Vec<String> {
         let fwd = self.ours().fwd;
-        let o = self.rdr2_pick.on_shot(&mut self.rand, part, at, dir, fwd);
+        let o = self.rdr2_pick.on_shot_core(&mut self.rand, part, at, dir, fwd, self.rdr2_core);
         self.say(format!("room  RDR2 reactions: {}", o.iter().map(|m| m.0).collect::<Vec<_>>().join(", ")));
         o.iter().map(rdr2_line).collect()
     }

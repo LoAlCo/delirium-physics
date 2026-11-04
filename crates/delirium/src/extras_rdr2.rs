@@ -2639,6 +2639,12 @@ impl Reactions {
     /// What a bullet starts, sent after the shot itself: `part` hit at `at`, travelling along `dir`; `fwd` is the
     /// way he faces ((left clavicle - right clavicle) x up).
     pub fn on_shot(&self, rand: &mut delirium_data::rng::Rand, part: usize, at: Vec3, dir: Vec3, fwd: Vec3) -> Vec<Start> {
+        self.on_shot_core(rand, part, at, dir, fwd, false)
+    }
+
+    /// As `on_shot`; with the RDR2 core (`core`) a shot in a thigh or shin also starts staggerFall with the shot, as
+    /// RDR2 was recorded doing (with RDR2's defaults, which the RDR2 core reads).
+    pub fn on_shot_core(&self, rand: &mut delirium_data::rng::Rand, part: usize, at: Vec3, dir: Vec3, fwd: Vec3, core: bool) -> Vec<Start> {
         use crate::msg::Value::{Bool as B, Float as F, Int as I, Vec3 as V};
         let mut out: Vec<Start> = vec![];
         let mut go = |name, mut ps: Vec<_>| {
@@ -2671,6 +2677,9 @@ impl Reactions {
                 go("shotInGuts", vec![("sigSpineAmount", F(rand.float_in_range(0.45, 0.7))), ("sigPeriod", F(rand.float_in_range(1.0, 2.0)))]);
             } else if !knees && matches!(part, 1 | 2 | 4 | 5) {
                 go("shotInjuredLeg", vec![("bodyPart", I(part as i32)), ("legInjuryTime", F(rand.float_in_range(1.0, 2.0)))]);
+                if core {
+                    go("staggerFall", vec![]);
+                }
             } else if matches!(part, 14..=16 | 18..=20) {
                 go("shotInjuredArm", vec![("bodyPart", I(part as i32)), ("bulletDir", V(dir))]);
             }

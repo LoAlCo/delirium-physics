@@ -120,6 +120,9 @@ pub struct Out {
     /// RDR2 core: force this foot (0 left, 1 right) to step next, dropping the step in progress (Some(None): no more)
     pub dbm_force_step: Option<Option<usize>>,
     pub dbm_turn_facing: Option<f32>,
+    /// RDR2 core: staggerFall's stagger mode for the balancer this step, and its prediction time
+    pub dbm_stagger: bool,
+    pub dbm_lead: Option<f32>,
     /// RDR2 core: a hip lean asked of the balancer (hipsLean*)
     pub hip_lean: Option<Vec3>,
     /// A lean asked for by an extra (RDR2's lean family, onFire's stagger): the balancer leans that way from the next
@@ -297,13 +300,29 @@ pub struct Ctx<'a, 'b> {
     pub shot_slot: u32,
     /// the balancer is running and balancing him (RDR2's bal+0x48 = 0); only the RDR2 core's extras read it
     pub upright: bool,
+    /// RDR2 core: what the balancer is doing, for the extras that read it (staggerFall); None without a balancer
+    pub dbm: Option<DbmView>,
+    /// RDR2 core: the shot behaviour is running (staggerFall leaves the fall to it)
+    pub shot_on: bool,
+}
+
+/// What an extra may read of the balancer this step (RDR2's bal+0x45c, +0x550 and its fail ramp).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DbmView {
+    /// the stepping foot: 0 none, 1 left, 2 right
+    pub stepping: u32,
+    /// each foot fully planted
+    pub planted: [bool; 2],
+    /// the timed fail has started (RDR2's fail ramp)
+    pub failing: bool,
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {
     pub fn new(ch: &'a mut Character, b: &'a Body<'b>, out: &'a mut Out, dbm_failed: bool) -> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
-        Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed }
+        Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed,
+              dbm: None, shot_on: false }
     }
 
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.
