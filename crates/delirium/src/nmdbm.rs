@@ -1058,7 +1058,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     s.legs[0].ankle.desired[1] = twist(0, lp);
     if rp {
         s.legs[1].ankle.desired[0] = match w[1] {
-            Some(w) if rd.is_some() => if slow { ankle(1, s.legs[1].ankle.desired[0], w) } else { s.legs[1].ankle.desired[0] } - stance_lean,
+            Some(w) if rd.is_some() => (if slow { ankle(1, s.legs[1].ankle.desired[0], w) } else { s.legs[1].ankle.desired[0] }) - stance_lean,
             Some(w) => s.legs[1].ankle.desired[0] + (pv.out[1] - lean) * w,
             None => s.legs[1].ankle.desired[0] + (pv.out[1] - lean),
         };
