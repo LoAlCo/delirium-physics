@@ -578,6 +578,13 @@ impl Extra for PointGun {
         std::mem::take(&mut self.out)
     }
 
+    /// RDR2's controlledFall: timeWarpStrengthScale from it, and the left hand off (RDR2 turns enableLeft off when
+    /// either hand's weapon state is 0; Delirium's left hand never holds a weapon, see `states`).
+    fn pg_set(&mut self, time_warp_scale: f32) {
+        self.time_warp.1 = time_warp_scale;
+        self.enable[0] = false;
+    }
+
     fn fire(&mut self) {
         for a in &mut self.arms {
             a.relax_t = self.relax.0;

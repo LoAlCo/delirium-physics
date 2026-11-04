@@ -1648,6 +1648,7 @@ impl Agent {
         let mut walked = bb_walked;
         let mut stop_dbm = false;
         let mut hf_balance = None;
+        let mut bb_req = (false, None, None);
         if let Some(ch) = self.ch.as_mut().filter(|_| nm_tick) {
             let snap = ch.clone();
             let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
@@ -1736,6 +1737,7 @@ impl Agent {
             c.incoming = &self.incoming;
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             c.shot_on = self.nm_shot.is_some();
+            c.shot_scale = self.nm_shot.as_ref().map_or(1.0, |s| s.rdr2_scale());
             c.dbm = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).filter(|_| !self.fallen).map(|d| crate::nmshot::DbmView {
                 stepping: d.f.stepping, planted: d.pv.planted, failing: d.p.rdr2.is_some_and(|r| r.failing.is_some()),
                 hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps), leg: d.p.pelvis_height });
@@ -2066,6 +2068,8 @@ impl Agent {
             }
             // an extra (RDR2's fall to knees) may switch the balancer off
             stop_dbm |= out.dbm == Some(false);
+            // RDR2 core: an extra (onFire) stops or starts bodyBalance and sets the balancer's leg stiffness
+            bb_req = (out.bb_stop, out.bb_start.take(), out.dbm_leg_stiffness);
             // RDR2 core: an extra (teeter) runs spineTwist toward a point, from the next tick
             if let Some((pos, k)) = out.spine_twist {
                 if !self.nm_twist.active {
@@ -2088,6 +2092,15 @@ impl Agent {
         }
         if stop_dbm {
             self.balance = None;
+        }
+        if bb_req.0 {
+            self.body_balance_stop();
+        }
+        if let Some(p) = bb_req.1 {
+            self.body_balance_full(build, world, p);
+        }
+        if let (Some(s), Some(d)) = (bb_req.2, self.balance.as_mut().and_then(|b| b.dbm.as_mut())) {
+            (self.config.leg_stiffness, d.p.leg_stiffness) = (s, s);
         }
         if let Some((p, set)) = hf_balance {
             self.body_balance_with(build, world, BodyBalance::from(p), Some(p));

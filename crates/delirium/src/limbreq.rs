@@ -72,6 +72,8 @@ pub fn slot(message: &str) -> u32 {
         "pointGun" => 0xf0,
         "rdr2Sit" => 0x108,
         "smartFall" => 0x110,
+        "controlledFall" => 0xc8,
+        "onFire" => 0xe0,
         "wallCollision" => 0x118,
         "keyframe" => 0x120,
         _ => CORE,

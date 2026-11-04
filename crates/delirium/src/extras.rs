@@ -4,7 +4,7 @@ use bevy_transform::components::Transform;
 
 pub fn messages() -> impl Iterator<Item = &'static Message> {
     MESSAGES.iter().chain(&crate::extras_fall::MESSAGES).chain(&crate::extras_held::MESSAGES).chain(&crate::extras_rdr2::MESSAGES)
-        .chain(&crate::extras_pg_rdr2::MESSAGES)
+        .chain(&crate::extras_pg_rdr2::MESSAGES).chain(&crate::extras_cf_rdr2::MESSAGES)
 }
 
 pub static MESSAGES: [Message; 3] = [
@@ -95,6 +95,13 @@ pub trait Extra: Send + Sync {
     fn anim_pose_yield(&self) -> Option<[bool; 3]> {
         None
     }
+    /// The RDR2 core's controlledFall: what it wrote into pointGun this step (its timeWarpStrengthScale, and
+    /// enableLeft off), None if nothing.
+    fn pg_coupling(&self) -> Option<f32> {
+        None
+    }
+    /// The RDR2 core's pointGun: controlledFall's writes.
+    fn pg_set(&mut self, _time_warp_scale: f32) {}
 }
 
 #[derive(Default)]
@@ -208,6 +215,10 @@ impl Extras {
             }
             self.outbox.extend(e.lines());
             self.want.extend(e.constraints());
+        }
+        // RDR2 core: controlledFall writes into a running pointGun (here after both have ticked)
+        for s in self.on.iter().filter_map(|(_, e)| e.pg_coupling()).collect::<Vec<_>>() {
+            self.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.pg_set(s));
         }
         self.take_off(|_, e| e.done());
     }

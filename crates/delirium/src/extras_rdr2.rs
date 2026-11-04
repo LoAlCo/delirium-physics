@@ -394,6 +394,7 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
     match name {
         "duck" => Some(Duck::new(p).map(|e| Box::new(e) as _)),
         "pointGun" => crate::extras_pg_rdr2::build(name, p),
+        "controlledFall" => crate::extras_cf_rdr2::build(name, p),
         "shotSnap" => Some(Snap::new(p).map(|e| Box::new(e) as _)),
         "shotSpin" => Some(Spin::new(p).map(|e| Box::new(e) as _)),
         "shotFallToKnees" => Some(Knees::new(p).map(|e| Box::new(e) as _)),
@@ -3377,10 +3378,14 @@ impl Extra for Lean {
 /// arms flailing between a windmill and a writhe (armsWindmillWritheBlend), his spine and legs joining in by their
 /// blends. Then (or once his balance goes) the balancer lets go; down, he writhes between curled up and thrashing (the
 /// *PoseWritheBlend values) and, with rollOverFlag, rolls back and forth (rollTorqueScale) for maxRollOverTime while
-/// within rollOverRadius of where he fell. It runs until stopped.
+/// within rollOverRadius of where he fell. It runs until stopped. With the RDR2 core it runs RDR2's own onFire
+/// instead (extras_cf_rdr2.rs).
 pub struct OnFire {
     stagger: f32, lean_rate: f32, back: f32, fwd: f32, up_blend: [f32; 3], down_blend: [f32; 3], roll_k: f32, predict: f32,
     roll: bool, roll_time: f32, radius: f32, t: f32, phase: f32, lean: f32, goal: f32, next: f32, down: Option<(f32, Vec3)>,
+    /// RDR2 core: the message's values as RDR2 takes them, and RDR2's onFire once it runs
+    rp: crate::extras_cf_rdr2::FireParams,
+    r: Option<crate::extras_cf_rdr2::OnFireRdr2>,
 }
 
 impl OnFire {
@@ -3394,6 +3399,7 @@ impl OnFire {
             roll_k: p.f("rollTorqueScale", 25.0)?.max(0.0), predict: p.f("predictTime", 0.1)?.max(0.0),
             roll: p.b("rollOverFlag", true)?, roll_time: p.f("maxRollOverTime", 8.0)?.max(0.0), radius: p.f("rollOverRadius", 2.0)?.max(0.0),
             t: 0.0, phase: 0.0, lean: 0.0, goal: 0.0, next: 0.0, down: None,
+            rp: crate::extras_cf_rdr2::FireParams::parse(p, Default::default())?, r: None,
         })
     }
 }
@@ -3401,6 +3407,11 @@ impl OnFire {
 impl Extra for OnFire {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
         use std::f32::consts::PI;
+        if c.ch.rdr2 {
+            let p = self.rp;
+            self.r.get_or_insert_with(|| crate::extras_cf_rdr2::OnFireRdr2::new(p)).tick(c, dt);
+            return;
+        }
         self.t += dt;
         self.phase += dt * 2.0 * PI / 0.45;
         let (ph, up) = (self.phase, c.up);
@@ -3509,6 +3520,28 @@ impl Extra for OnFire {
                 }
             }
         }
+    }
+
+    /// RDR2 core: deactivate (its children stopped, the balancer's hips and knees let go).
+    fn stop(&mut self, c: &mut Ctx) {
+        if let Some(r) = self.r.as_mut() {
+            r.stop(c);
+        }
+    }
+
+    /// RDR2 core: a start while it runs reloads the defaults and the message's values; it keeps running.
+    fn hit(&mut self, p: &mut P) -> Option<Result<(), Error>> {
+        let r = self.r.as_mut()?;
+        Some(crate::extras_cf_rdr2::FireParams::parse(p, Default::default()).map(|x| (r.p, self.rp) = (x, x)))
+    }
+
+    /// RDR2 core: values sent without start replace the running ones.
+    fn update(&mut self, p: &mut P) -> Result<(), Error> {
+        if let Some(r) = self.r.as_mut() {
+            r.p = crate::extras_cf_rdr2::FireParams::parse(p, r.p)?;
+            self.rp = r.p;
+        }
+        Ok(())
     }
 }
 
