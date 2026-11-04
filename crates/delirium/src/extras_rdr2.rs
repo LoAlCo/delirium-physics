@@ -383,6 +383,7 @@ const FORCE_LEAN_RANDOM: &[Param] = &[
 pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
     match name {
         "duck" => Some(Duck::new(p).map(|e| Box::new(e) as _)),
+        "pointGun" => crate::extras_pg_rdr2::build(name, p),
         "shotSnap" => Some(Snap::new(p).map(|e| Box::new(e) as _)),
         "shotSpin" => Some(Spin::new(p).map(|e| Box::new(e) as _)),
         "shotFallToKnees" => Some(Knees::new(p).map(|e| Box::new(e) as _)),

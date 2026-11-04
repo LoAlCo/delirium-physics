@@ -3224,6 +3224,8 @@ impl Sim {
             // RDR2 core: RDR2's meleeReact does nothing until a blow comes, so the button lands one on the chest from the front
             "meleeReact" if self.rdr2_core => vec![format!("meleeReact start=true hitNew=true hitLocal=false hitPart={CHEST} hitPoint={} hitNormal={}",
                                                          v3(chest + s.fwd * 0.12), v3(s.fwd))],
+            // pointGun: a pistol in the right hand aimed 3 m ahead (RDR2's under the RDR2 core, pointArm without it)
+            "pointGun" => vec![format!("pointGun start=true weapon=1 rightHandTarget={}", v3(chest + s.fwd * 3.0))],
             "STOP all" => vec!["stopAllBehaviours".into()],
             x if delirium::extras::messages().any(|m| m.name == x) => vec![format!("{x} start=true")],
             _ => vec![],

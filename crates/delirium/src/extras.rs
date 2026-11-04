@@ -4,6 +4,7 @@ use bevy_transform::components::Transform;
 
 pub fn messages() -> impl Iterator<Item = &'static Message> {
     MESSAGES.iter().chain(&crate::extras_fall::MESSAGES).chain(&crate::extras_held::MESSAGES).chain(&crate::extras_rdr2::MESSAGES)
+        .chain(&crate::extras_pg_rdr2::MESSAGES)
 }
 
 pub static MESSAGES: [Message; 3] = [
