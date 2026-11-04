@@ -18,7 +18,14 @@ use crate::ragdoll::GRAVITY;
 use crate::nmshot::Ctx;
 use bevy_math::Vec3;
 
-pub static MESSAGES: [Message; 27] = [
+pub static MESSAGES: [Message; 28] = [
+    Message { name: "applyBulletImpulse", params: &[
+        Param { name: "partIndex", kind: Kind::Int, used: true, doc: "the part hit (0)" },
+        Param { name: "impulse", kind: Kind::Vec3, used: true, doc: "the bullet's impulse, N s, world (zero)" },
+        Param { name: "hitPoint", kind: Kind::Vec3, used: true, doc: "where it hit, world (unset: the part's centre)" },
+        Param { name: "equalizeAmount", kind: Kind::Float, used: true, doc: "0: the impulse as given, 1: scaled by the part's mass over the mean part's (RDR2's shot sends 0) (0)" },
+        Param { name: "extraShare", kind: Kind::Float, used: true, doc: "a share also given to the trunk (Spine0): less than 0 adds |share| of it there on top, 0..1 splits it between the trunk and the part hit, more than 1 none. RDR2's shot sends minus COMImpulseScale on trunk hits (0)" },
+    ] },
     Message { name: "rdr2Sit", params: &[
         Param { name: "seatPos", kind: Kind::Vec3, used: true, doc: "where his pelvis sits, world; send rdr2Sit again without start to move it with the horse (zero: where his pelvis is)" },
         Param { name: "seatUp", kind: Kind::Vec3, used: true, doc: "the seat's up, world (0,0,1). RDR2 gives the seat as a part of its horse with seatuplocal and seatrightlocal in that part's frame" },
@@ -387,6 +394,7 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "rdr2Lasso" => Some(Lasso::new(p).map(|e| Box::new(e) as _)),
         "rdr2Bolas" => Some(Bolas::new(p).map(|e| Box::new(e) as _)),
         "rdr2Sit" => Some(Sit::new(p).map(|e| Box::new(e) as _)),
+        "applyBulletImpulse" => Some(BulletImpulse::new(p).map(|e| Box::new(e) as _)),
         "leanRandom" | "hipsLeanInDirection" | "hipsLeanToPosition" | "hipsLeanTowardsObject" | "hipsLeanRandom" | "forceLeanInDirection"
         | "forceLeanToPosition" | "forceLeanTowardsObject" | "forceLeanRandom" => Some(Lean::new(name, p).map(|e| Box::new(e) as _)),
         _ => None,
@@ -3631,5 +3639,86 @@ impl Spin {
             }
         }
         c.out.dbm_turn = Some(Vec3::ZERO);
+    }
+}
+
+/// RDR2's NM bullet applier (applyBulletImpulse): each bullet becomes one or two records, the extra share on the trunk
+/// part (RDR2's part 3, Spine0: ours 7) and the main one on the part hit, each spread evenly over 0.1 s and scaled by
+/// NM's own shot modifier, which drops 0.15 after each main record (floor 0.2). Its recovery between bullets, 0.38/s,
+/// is read off the recording, not the code. A new bullet while this runs adds its records to the ones still going.
+pub struct BulletImpulse {
+    /// part, hit point in the part's frame (None: its centre), the record's whole impulse, s left
+    recs: Vec<(usize, Option<Vec3>, Vec3, f32)>,
+    /// new records not yet placed in their part's frame (world hit points)
+    new: Vec<(usize, Option<Vec3>, Vec3, f32)>,
+    modifier: f32,
+}
+
+/// RDR2's record period (+0x34), s.
+const BULLET_PERIOD: f32 = 0.1;
+/// RDR2's trunk part for the extra share (part 3, SKEL_Spine0Body) on our body.
+const BULLET_TRUNK: usize = 7;
+
+impl BulletImpulse {
+    fn new(p: &mut P) -> Result<BulletImpulse, Error> {
+        let mut b = BulletImpulse { recs: vec![], new: vec![], modifier: 1.0 };
+        b.take(p)?;
+        Ok(b)
+    }
+
+    fn take(&mut self, p: &mut P) -> Result<(), Error> {
+        let part = p.i("partIndex", 0)?.max(0) as usize;
+        let imp = p.v("impulse", Vec3::ZERO)?;
+        let at = p.v("hitPoint", Vec3::NAN)?;
+        let at = (!at.is_nan()).then_some(at);
+        let equalize = p.f("equalizeAmount", 0.0)?;
+        let s = p.f("extraShare", 0.0)?;
+        let (extra, main) = if s < 0.0 { (-s, 1.0) } else if s <= 1.0 { (s, 1.0 - s) } else { (0.0, 1.0) };
+        if extra.abs() >= 1e-4 {
+            self.new.push((BULLET_TRUNK, None, imp * extra * self.modifier, equalize));
+        }
+        if main.abs() >= 1e-4 {
+            self.new.push((part, at, imp * main * self.modifier, equalize));
+            self.modifier = (self.modifier - 0.15).clamp(0.2, 1.0);
+        }
+        Ok(())
+    }
+}
+
+impl Extra for BulletImpulse {
+    fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        let f = c.b.frames;
+        for (k, at, imp, equalize) in std::mem::take(&mut self.new) {
+            if k >= f.len() {
+                continue;
+            }
+            let imp = if equalize != 0.0 {
+                let mean = (0..f.len()).map(|q| c.b.doll.part_mass(q)).sum::<f32>() / f.len() as f32;
+                imp * (1.0 - equalize + equalize * c.b.doll.part_mass(k) / mean)
+            } else {
+                imp
+            };
+            let local = at.map(|p| f[k].rotation.inverse() * (p - f[k].translation));
+            self.recs.push((k, local, imp, BULLET_PERIOD));
+        }
+        for (k, local, imp, left) in &mut self.recs {
+            let h = dt.min(*left);
+            if h <= 0.0 {
+                continue;
+            }
+            let at = f[*k].translation + local.map_or(Vec3::ZERO, |l| f[*k].rotation * l);
+            c.out.impulse.push((*k, at, *imp * (h / BULLET_PERIOD)));
+            *left -= h;
+        }
+        self.recs.retain(|r| r.3 > 0.0);
+        self.modifier = (self.modifier + 0.38 * dt).min(1.0);
+    }
+
+    fn done(&self) -> bool {
+        self.recs.is_empty() && self.new.is_empty() && self.modifier >= 1.0
+    }
+
+    fn hit(&mut self, p: &mut P) -> Option<Result<(), Error>> {
+        Some(self.take(p))
     }
 }

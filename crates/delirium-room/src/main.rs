@@ -3272,7 +3272,14 @@ impl Sim {
         let set = w.map_or("*", |w| delirium::nm::weapon_set(w, if self.weak { 2 } else { 3 }));
         let (at, d, n) = aim.unwrap_or((ours.p(part) + ours.fwd * 0.1, -ours.fwd, ours.fwd));
         let vel = shottask::bullet(at, at - d.normalize() * BULLET_BACK(), w.map_or(WEAPONS[self.weapon].2, |w| w.force), false);
-        let mut o = vec![format!("applyImpulse partIndex={part} hitPoint={} impulse={}", v3(at), v3(vel))];
+        // RDR2 core: the game's applyBulletImpulse, which NM spreads over 0.1 s, with an extra share on the trunk for a
+        // trunk hit (minus COMImpulseScale: 0.75 in the running game, read off its recording; the exported XML says 0.5)
+        let mut o = vec![if self.rdr2_core && !was_dead {
+            let extra = if matches!(part, 0 | 7..=10) { " extraShare=-0.75" } else { "" };
+            format!("applyBulletImpulse start=true partIndex={part} hitPoint={} impulse={}{extra}", v3(at), v3(vel))
+        } else {
+            format!("applyImpulse partIndex={part} hitPoint={} impulse={}", v3(at), v3(vel))
+        }];
         if was_dead {
             return self.send_ours(o);
         }
