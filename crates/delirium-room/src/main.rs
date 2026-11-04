@@ -2935,7 +2935,7 @@ impl Sim {
         o.extend(mo);
         if let (&hero::Hit::Swing(_, at, j), true) = (&hit, self.rdr2) {
             let k = self.agent.doll.nearest(&self.build, at);
-            let r = self.rdr2_pick.on_melee(&mut self.rand, k, at, j);
+            let r = self.rdr2_pick.on_melee(&mut self.rand, k, at, j, self.rdr2_core);
             o.extend(r.iter().map(rdr2_line));
         }
         if let hero::Hit::Bump(from) = hit {
@@ -3215,7 +3215,15 @@ impl Sim {
                 vec![format!("grab start=true linegrab=true useLeft=true useRight=true dontLetGo=true pos1={} pos2={}",
                              v3(at + s.left() * 0.5), v3(at - s.left() * 0.5))]
             }
+            // RDR2 core: RDR2's fallOverWall takes the wall as a segment, here 2 m along the same edge
+            "overwall" if self.rdr2_core => {
+                let at = (s.p(0) - s.fwd * 0.3).with_z(0.9);
+                vec![format!("fallOverWall start=true fallOverWallEndA={} fallOverWallEndB={}", v3(at + s.left()), v3(at - s.left()))]
+            }
             "overwall" => vec![format!("fallOverWall start=true fallOverPoint={} fallOverEdge={}", v3((s.p(0) - s.fwd * 0.3).with_z(0.9)), v3(s.left()))],
+            // RDR2 core: RDR2's meleeReact does nothing until a blow comes, so the button lands one on the chest from the front
+            "meleeReact" if self.rdr2_core => vec![format!("meleeReact start=true hitNew=true hitLocal=false hitPart={CHEST} hitPoint={} hitNormal={}",
+                                                         v3(chest + s.fwd * 0.12), v3(s.fwd))],
             "STOP all" => vec!["stopAllBehaviours".into()],
             x if delirium::extras::messages().any(|m| m.name == x) => vec![format!("{x} start=true")],
             _ => vec![],

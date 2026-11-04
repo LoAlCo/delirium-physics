@@ -185,6 +185,7 @@ impl Extras {
                 c.ch.eff[j].injury = amount;
             }
         }
+        c.extras_on = self.on.iter().map(|(n, _)| *n).collect();
         for mut e in self.stopping.drain(..) {
             e.stop(c);
             self.outbox.extend(e.lines());

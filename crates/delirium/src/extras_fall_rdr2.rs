@@ -1,6 +1,7 @@
-//! RDR2's teeter and highFall, with the RDR2 core, from clean-room studies of RDR2's behaviours
-//! (rdr2-decomp/study/rdr2_teeter.md, rdr2_highfall.md). Teeter is the RDR2 path of the teeter extra; highFall runs as
-//! an extra only with the RDR2 core (msg.rs sends it here), GTA IV's highFall (nmhf.rs) otherwise.
+//! RDR2's teeter, highFall and fallOverWall, with the RDR2 core, from clean-room studies of RDR2's behaviours
+//! (rdr2-decomp/study/rdr2_teeter.md, rdr2_highfall.md, rdr2_fallwall.md). Teeter is the RDR2 path of the teeter
+//! extra; highFall and fallOverWall run as extras only with the RDR2 core (msg.rs sends them here), GTA IV's
+//! (nmhf.rs, nmfow.rs) otherwise.
 use crate::extras::{Extra, P};
 use crate::extras_fall::{attitude, orient_pd, unit, v3s, CHEST};
 use crate::msg::{Error, Value};
@@ -1077,5 +1078,331 @@ impl Extra for HighFall {
 
     fn lines(&mut self) -> Vec<String> {
         std::mem::take(&mut self.out)
+    }
+}
+
+// ---- fallOverWall ----
+
+/// RDR2's fallOverWall parameters, RDR2's defaults where none is given. wallhandle, forceAngleAbort (unread by RDR2)
+/// and stepExclusionZone (balancerCollisionsReaction's, not modelled) are read and unused, and so are GTA IV's own
+/// fallOverPoint, fallOverEdge and useSpecifiedPoint: the wall is the segment fallOverWallEndA-EndB in the world.
+#[derive(Clone, Copy, Debug)]
+pub struct FowParams {
+    end_a: Vec3,
+    end_b: Vec3,
+    damping: f32,
+    body_stiffness: f32,
+    mag_of_force: f32,
+    force_time_out: f32,
+    min_leg_height: f32,
+    max_dist: f32,
+    max_force_dist: f32,
+    /// the twist torque's range, 45 and 85 times bodyTwist
+    twist: (f32, f32),
+    max_twist: f32,
+    move_arms: bool,
+    move_legs: bool,
+    bend_spine: bool,
+    leaning: f32,
+    leg_twist: f32,
+    leg_amp: f32,
+    spin: f32,
+    angle_dir: f32,
+    max_ang_vel: f32,
+    adapt: bool,
+    max_wall_height: f32,
+    success_dist: f32,
+    rolling_back: f32,
+    rolling_potential: f32,
+}
+
+/// RDR2's leg swing noise rate (an unnamed parameter, hash 0x31a7053c, default 2).
+const FOW_LEG_RATE: f32 = 2.0;
+
+/// RDR2's fallOverWall arm pose per arm: elbow, clavicle (lean1, lean2), shoulder (lean1, lean2, twist).
+const FOW_ARMS: [(f32, [f32; 2], [f32; 3]); 2] = [
+    (1.12, [-0.02269, -1.45534], [0.14776, -1.43301, -1.73880]),
+    (1.024, [-0.04673, -1.65534], [0.11821, -1.52854, -1.79447]),
+];
+
+impl FowParams {
+    fn read(p: &mut P) -> Result<FowParams, Error> {
+        let f = |p: &mut P, n: &str, d: f32| -> Result<f32, Error> { p.get(n).map_or(Ok(d), Value::f) };
+        let b = |p: &mut P, n: &str, d: bool| -> Result<bool, Error> { p.get(n).map_or(Ok(d), Value::b) };
+        let v = |p: &mut P, n: &str| -> Result<Vec3, Error> { p.get(n).map_or(Ok(Vec3::ZERO), Value::v) };
+        p.get("wallhandle").map(Value::i).transpose()?;
+        f(p, "forceAngleAbort", -0.2)?;
+        f(p, "stepExclusionZone", 0.5)?;
+        v(p, "fallOverPoint")?;
+        v(p, "fallOverEdge")?;
+        b(p, "useSpecifiedPoint", false)?;
+        let bt = f(p, "bodyTwist", 0.54)?;
+        Ok(FowParams {
+            end_a: v(p, "fallOverWallEndA")?, end_b: v(p, "fallOverWallEndB")?, damping: f(p, "damping", 0.5)?,
+            body_stiffness: f(p, "bodyStiffness", 9.0)?, mag_of_force: f(p, "magOfForce", 0.5)?, force_time_out: f(p, "forceTimeOut", 2.0)?,
+            min_leg_height: f(p, "minLegHeight", 0.4)?, max_dist: f(p, "maxDistanceFromPelToHitPoint", 0.25)?,
+            max_force_dist: f(p, "maxForceDist", 0.8)?, twist: (45.0 * bt, 85.0 * bt), max_twist: f(p, "maxTwist", std::f32::consts::PI)?,
+            move_arms: b(p, "moveArms", true)?, move_legs: b(p, "moveLegs", true)?, bend_spine: b(p, "bendSpine", true)?,
+            leaning: f(p, "leaningAngleThreshold", 180.0)?, leg_twist: f(p, "legtwist", 1.0)?, leg_amp: f(p, "legamp", 1.0)?,
+            spin: f(p, "zAxisSpinReduction", 0.0)?, angle_dir: f(p, "angleDirWithWallNormal", 180.0)?, max_ang_vel: f(p, "maxAngVel", 2.0)?,
+            adapt: b(p, "adaptForcesToLowWall", false)?, max_wall_height: f(p, "maxWallHeight", -1.0)?,
+            success_dist: f(p, "distanceToSendSuccessMessage", -1.0)?, rolling_back: f(p, "rollingBackThr", 0.5)?,
+            rolling_potential: f(p, "rollingPotential", 0.3)?,
+        })
+    }
+}
+
+/// RDR2's fallOverWall (rdr2_fallwall.md), with the RDR2 core (msg.rs sends it here; GTA IV's is nmfow.rs). The wall
+/// is the segment A-B; its normal n (horizontal, up x d) points to the side the pelvis starts on, and W is the
+/// wall's top above the pelvis. Until a contact latches it (pelvis or low spine at once; a thigh, hand, forearm or
+/// the third spine part only within maxDistanceFromPelToHitPoint of the wall, horizontally) and the start tests pass
+/// (feet out from the pelvis by minLegHeight, the lean and approach angle thresholds, maxWallHeight), it only
+/// watches. Then by the approach speed against rollingPotential: state 2, going over, or 1, not enough momentum.
+/// In state 2: whole-body stiffness, the fixed arm pose, the spine bent by the pelvis' tilt to the wall, the legs
+/// swung up by noise-driven IK, forces turning each spine part about the wall's edge (forceTimeOut, maxForceDist,
+/// maxAngVel) and the twist torque that keeps him rolling the way he twists. States 3 over, 4 stalled, 5 fell back;
+/// fallOverWallState on each change and the fallOverWall feedback (1, 4, 5 failure, 3 success) every tick.
+pub struct FallOverWall {
+    p: FowParams,
+    started: bool,
+    a: Vec3,
+    b: Vec3,
+    d: Vec3,
+    n: Vec3,
+    contact: Vec3,
+    w: Vec3,
+    wp: Vec3,
+    /// the time in state 2, the twist about the spine, the approach speed (and whether it is known)
+    t2: f32,
+    twist: f32,
+    approach: Option<f32>,
+    /// noise offsets (the third also the noise time)
+    noise: [f32; 3],
+    state: u8,
+    feet: [bool; 2],
+    latched: bool,
+    past: bool,
+    over: bool,
+    rolling_back: bool,
+    speed: f32,
+    upright: f32,
+    /// angular momentum about the COM
+    l: Vec3,
+}
+
+impl FallOverWall {
+    pub fn new(p: &mut P) -> Result<FallOverWall, Error> {
+        Ok(FallOverWall { p: FowParams::read(p)?, started: false, a: Vec3::ZERO, b: Vec3::ZERO, d: Vec3::ZERO, n: Vec3::ZERO,
+                          contact: Vec3::ZERO, w: Vec3::ZERO, wp: Vec3::ZERO, t2: 0.0, twist: 0.0, approach: None, noise: [0.0; 3],
+                          state: 0, feet: [false; 2], latched: false, past: false, over: false, rolling_back: false, speed: 0.0,
+                          upright: 0.0, l: Vec3::ZERO })
+    }
+
+    /// The wall's top above `p`: p's horizontal foot on the line A-B (not clamped to the segment), at the line's
+    /// height there (A's plus the slope along it).
+    fn top(&self, p: Vec3, up: Vec3) -> Vec3 {
+        let flat = |v: Vec3| v - up * up.dot(v);
+        let (ah, e) = (flat(self.a), flat(self.b) - flat(self.a));
+        let len = e.length();
+        if len <= 1e-6 {
+            return flat(p) + up * up.dot(self.a);
+        }
+        let along = (flat(p) - ah).dot(e / len);
+        ah + e / len * along + up * (up.dot(self.a) + (up.dot(self.b) - up.dot(self.a)) / len * along)
+    }
+
+    /// The distance from `p` to the segment A-B.
+    fn to_segment(&self, p: Vec3) -> f32 {
+        let e = self.b - self.a;
+        let l2 = e.length_squared();
+        let t = if l2 > 1e-12 { ((p - self.a).dot(e) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        (p - (self.a + e * t)).length()
+    }
+
+    /// The contact search and the start tests, while nothing has latched.
+    fn search(&mut self, c: &mut Ctx, pel: Vec3, up: Vec3) {
+        let p = self.p;
+        let sp = crate::nmshot::spine_parts();
+        let flat = |v: Vec3| v - up * up.dot(v);
+        let record = |c: &Ctx, k: usize| c.b.doll.hit[k].map_or((c.b.part(k).m.d, Vec3::X), |(at, n, _)| (at, n));
+        let mut found = [sp[0], sp[1], sp[2]].into_iter().find(|&k| c.b.doll.collided(&[k])).map(|k| record(c, k));
+        if found.is_none() && flat(self.wp).length() < p.max_dist {
+            found = [limb(2).p[1], limb(3).p[1], limb(0).p[3], limb(1).p[3], limb(1).p[2], limb(0).p[2], sp[3]].into_iter()
+                .find(|&k| c.b.doll.collided(&[k])).map(|k| (self.w, record(c, k).1));
+        }
+        let Some((at, normal)) = found else { return };
+        (self.latched, self.contact) = (true, at);
+        if self.approach.is_none() {
+            // the upper body's speed towards the wall (the ground still)
+            let v: Vec3 = sp[2..].iter().map(|&k| c.b.part(k).v).sum();
+            self.approach = Some(-0.2 * self.n.dot(v));
+        }
+        let feet = [limb(2).p[3], limb(3).p[3]].map(|k| c.b.part(k).m.d);
+        let lf = feet.iter().map(|&f| flat(f - pel).length()).fold(0.0, f32::max);
+        let nc = if normal.dot(up).abs() > 0.7 { self.n } else { normal };
+        let lean = up.dot(self.n.cross(c.b.joint_pos(crate::nmshot::spine_joints()[4]) - pel).normalize_or_zero()).abs();
+        let c1 = if p.leaning > 90.0 { 1.0 } else { p.leaning.to_radians().sin() };
+        let c2 = if p.angle_dir > 90.0 { 1.0 } else { p.angle_dir.to_radians().cos().abs() };
+        let toward = flat(c.vel).normalize_or_zero().dot(self.n) < c2;
+        let low = p.max_wall_height < 0.0 || up.dot(self.a).min(up.dot(self.b)) - up.dot(feet[0]).min(up.dot(feet[1])) < p.max_wall_height;
+        if lf > p.min_leg_height && lean < c1 && toward && low {
+            // (the bend values are re-taken in state 2; RDR2 also draws a random bit here that nothing reads)
+            c.ch.random();
+        } else {
+            self.latched = false;
+        }
+    }
+
+    fn active(&mut self, c: &mut Ctx, dt: f32) {
+        let (p, up) = (self.p, c.up);
+        let sp = crate::nmshot::spine_parts();
+        c.ch.set_stiffness(p.body_stiffness, p.damping, "fb", None);
+        if c.m.b.dot(up) < 0.1 {
+            crate::nmcf::spin_reduction(c, p.spin);
+        }
+        if p.move_arms {
+            for (i, &(elbow, cl, sh)) in FOW_ARMS.iter().enumerate() {
+                let l = limb(i);
+                c.ch.eff[l.e[2]].desired[0] = elbow;
+                (c.ch.eff[l.e[0]].desired[0], c.ch.eff[l.e[0]].desired[1]) = (cl[0], cl[1]);
+                c.ch.eff[l.e[1]].desired = sh;
+            }
+        }
+        if p.bend_spine {
+            let pm = c.b.part(sp[0]).m;
+            let (s170, s174) = (-pm.c.dot(self.n), -pm.a.dot(self.n));
+            crate::extras_rdr2::spine_split(c, -2.0 * s170, s174);
+        }
+        if p.move_legs {
+            self.noise[2] += dt;
+            let (t, r, a, id) = (self.noise[2], FOW_LEG_RATE, p.leg_amp, c.ch.agent as f32);
+            let noise = crate::nmfl::noise01;
+            let n1 = noise(r * t, self.noise[0], id - 0.5);
+            let n2 = noise(self.noise[1], id + 0.5, r * t);
+            let n3 = noise(self.noise[0], r * t, id - 0.5);
+            let n4 = noise(id + 0.5, self.noise[1], r * t);
+            let u = self.upright.abs();
+            let chest = c.b.part(sp[4]).m;
+            let (r0, r1, r2) = (chest.a, chest.b, chest.c);
+            let tau = (1.0 - u) * p.leg_twist * 1.7 * up.dot(r1);
+            let lg = 1.016498 * (c.b.joint_pos((*KNEE())[0]) - c.b.joint_pos((*HIP())[0])).length();
+            let kl = -0.98377 * (0.6 + 0.3 * (u - tau)).clamp(0.6, 0.99);
+            let kr = -0.98377 * (0.6 + 0.3 * (u + tau)).clamp(0.6, 0.99);
+            let to = [
+                r0 * kl + r1 * (0.4 * n1 - 0.2) + r2 * (1.25 * (1.6 * a * n2 - 0.8 * a)),
+                r0 * kr - r1 * (0.4 * n3 - 0.2) + r2 * (1.6 * a * n4 - 0.8 * a),
+            ];
+            for (k, side) in [(0usize, 1.0f32), (1, -1.0)] {
+                let l = limb(k + 2);
+                let touching = c.b.doll.collided(&[l.p[3]]);
+                if !touching || !self.feet[k] {
+                    let target = c.b.joint_pos(l.e[1]) + to[k] * lg;
+                    crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], target, 0.0, 1.0, side, -1.0, Vec3::ZERO, None);
+                }
+                c.ch.eff[l.e[1]].desired[2] = 0.0;
+                if !touching {
+                    self.feet[k] = true;
+                }
+            }
+        }
+        if self.t2 < p.force_time_out {
+            let mass = c.b.doll.mass().max(1e-3);
+            for (k, wt) in [(sp[3], 0.8), (sp[4], 0.75), (sp[5], 0.5), (sp[6], 0.25), (sp[0], 1.0), (sp[1], 1.0), (sp[2], 0.9)] {
+                let pos = c.b.part(k).m.d;
+                let rel = pos - self.contact;
+                if rel.length() >= p.max_force_dist {
+                    continue;
+                }
+                let mut f = (60.0 * p.mag_of_force * c.b.doll.part_mass(k) / mass).clamp(-5.5, 5.5) * wt;
+                if p.adapt {
+                    f *= 0.2 + 0.5333 * (1.5 - self.to_segment(pos)).clamp(0.0, 1.5);
+                }
+                f *= 60.0;
+                if p.max_ang_vel <= 0.0 || self.l.dot(self.d).abs() < p.max_ang_vel {
+                    c.out.force(k, rel.normalize_or_zero().cross(self.d) * f);
+                }
+            }
+        }
+        if self.twist.abs() < p.max_twist {
+            let se = crate::nmshot::spine_joints();
+            let s = (c.b.joint_pos(se[3]) - c.b.joint_pos(se[0])).normalize_or_zero();
+            self.twist += c.angvel.dot(s) * dt;
+            let slow = |w: Vec3| w.dot(s).abs() < 4.0;
+            if c.b.doll.collided(&sp[1..5]) && self.twist.abs() < p.max_twist && s.dot(up).abs() < 0.5
+                && slow(c.b.part(sp[4]).w) && slow(c.b.part(sp[0]).w) && slow(c.angvel)
+            {
+                let sign = if self.twist > 0.0 { 1.0 } else if self.twist < 0.0 { -1.0 } else { 0.0 };
+                let t = s * ((p.twist.0 + c.ch.random() * (p.twist.1 - p.twist.0)) * sign);
+                for (k, g) in [(sp[3], 1.0), (sp[4], 1.0), (sp[1], 0.6), (sp[2], 0.6), (sp[0], -2.0)] {
+                    c.out.torque(k, t * g);
+                }
+            }
+        }
+    }
+}
+
+impl Extra for FallOverWall {
+    fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        let (p, up) = (self.p, c.up);
+        let pel = c.b.part(crate::nmshot::spine_parts()[0]).m.d;
+        (self.a, self.b) = (p.end_a, p.end_b);
+        if !self.started {
+            // activate: the noise offsets, the wall's direction and normal (towards the pelvis' side)
+            self.started = true;
+            self.noise = [4000.0 * c.ch.random(), 4000.0 * c.ch.random(), 4000.0 * c.ch.random()];
+            self.d = (self.a - self.b).normalize_or_zero();
+            self.n = up.cross(self.d).normalize_or_zero();
+            if (self.top(pel, up) - pel).dot(self.n) > 0.0 {
+                (self.n, self.d) = (-self.n, -self.d);
+            }
+            c.out.send(EVENT(), "fallOverWallState", 0.0);
+        }
+        // the analysis
+        self.w = self.top(pel, up);
+        self.wp = self.w - pel;
+        self.past = self.wp.dot(self.n) > 0.0;
+        self.speed = (c.vel.length() + c.angvel.length()) * 0.5;
+        if self.state == 2 {
+            self.t2 += dt;
+        }
+        self.over = self.past && (pel - self.contact).dot(up) < -0.1;
+        self.upright = up.dot(c.m.b);
+        self.l = (0..c.b.build.parts.len()).map(|k| {
+            let q = c.b.part(k);
+            (q.m.d - c.com).cross(q.v - c.vel) * c.b.doll.part_mass(k)
+        }).sum();
+        let along = self.d.dot(self.l);
+        self.rolling_back = along < 0.0 && along.abs() > p.rolling_back;
+        if !self.latched {
+            self.search(c, pel, up);
+        }
+        // the state
+        let was = self.state;
+        let back = (self.rolling_back || self.wp.length() > 0.5) && !self.past;
+        self.state = match self.state {
+            0 if self.latched => if self.approach.unwrap_or(0.0) > p.rolling_potential { 2 } else { 1 },
+            2 if self.over => 3,
+            2 if self.speed < 0.2 => 4,
+            2 if back => 5,
+            4 if self.over => 3,
+            4 if back => 5,
+            s => s,
+        };
+        if self.state != was {
+            c.out.send(EVENT(), "fallOverWallState", self.state as f32);
+        }
+        match self.state {
+            1 | 4 | 5 => c.out.send(FAILURE(), "fallOverWall", 0.0),
+            3 if p.success_dist < 0.0 || self.wp.length() > p.success_dist => c.out.send(SUCCESS(), "fallOverWall", 0.0),
+            _ => {}
+        }
+        if self.latched {
+            self.contact = self.w;
+            // the balancer's force balance, from the start (RDR2 sets it once; here it lasts while this runs)
+            c.out.dbm_force_balance |= p.move_legs;
+            if self.state == 2 {
+                self.active(c, dt);
+            }
+        }
     }
 }

@@ -214,6 +214,8 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "smartFall" => b(SmartFall::new(p)),
         // only the RDR2 core sends highFall to the extras (msg.rs)
         "highFall" => b(crate::extras_fall_rdr2::HighFall::new(p)),
+        // likewise fallOverWall
+        "fallOverWall" => b(crate::extras_fall_rdr2::FallOverWall::new(p)),
         "balancerCollisionsReaction" => b(Collide::new(p)),
         "injuredOnGround" => b(Injured::new(p)),
         "learnedCrawl" => b(Crawl::new(p)),
