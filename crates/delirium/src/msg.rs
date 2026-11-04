@@ -591,7 +591,7 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "torqueOnlyInAir", kind: Kind::Bool, used: true, doc: "RDR2 core: the torque only with no foot down (false)" },
         Param { name: "leanRelative", kind: Kind::Bool, used: true, doc: "RDR2 core: the torque's frame turned by his lean (false)" },
         Param { name: "torqueparts", kind: Kind::Bool, used: true, doc: "RDR2 core: the torque spread over every part by inertia (false)" },
-        Param { name: "turnTowardsBullets", kind: Kind::Bool, used: true, doc: "RDR2 core: carried, not applied (false)" },
+        Param { name: "turnTowardsBullets", kind: Kind::Bool, used: true, doc: "RDR2 core: a yaw torque on the trunk toward where the last bullet came from (false)" },
         Param { name: "switchSpeed", kind: Kind::Float, used: true, doc: "RDR2 core: the fast set's: at this horizontal speed it takes over (100)" },
         Param { name: "lastStandSinkRate", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0.3)" },
         Param { name: "lastStandHorizDamping", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0.4)" },

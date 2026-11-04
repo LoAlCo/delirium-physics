@@ -1956,6 +1956,24 @@ pub fn stabilise(b: &Body, k: f32, dt: f32) -> Vec<Vec3> {
     out
 }
 
+/// RDR2 core: turnTowardsBullets (0x2a5d774), each tick of StayUpright's applier while the balancer holds: `heading` is the
+/// last bullet record's impulse (+0x140); B = -heading and A = -s.m.c, both flat (world z off) and unit; R = B turned about
+/// +z by at most 10 dt, the way A would have to turn to reach B; 20 (L x R) N m on the pelvis and the two top spine parts,
+/// L = minus each part's third row.
+pub fn turn_towards_bullets(b: &Body, heading: Vec3, dt: f32, torque: &mut [Vec3]) {
+    let flat = |v: Vec3| v.with_z(0.0).normalize_or_zero();
+    let (aim, to) = (flat(-b.snap(b.ch.up).m.c), flat(-heading));
+    if aim == Vec3::ZERO || to == Vec3::ZERO {
+        return;
+    }
+    let angle = aim.dot(to).clamp(-1.0, 1.0).acos().min(10.0 * dt);
+    let turned = Quat::from_rotation_z(if aim.cross(to).z >= 0.0 { angle } else { -angle }) * to;
+    let spine = *SPINE();
+    for k in [b.ch.joints[(*HIP())[0]].parent, b.ch.joints[spine[2]].child, b.ch.joints[spine[3]].child] {
+        torque[k] += (-b.part(k).m.c).cross(turned) * 20.0;
+    }
+}
+
 /// RDR2 core: StayUpright's applier (0x2a58f10), while the balancer is active: its force (0x2a1e6c0), and with
 /// `righting` (the balancer balancing, no staggerFall) its righting torque (0x2a598c8). Part positions are their
 /// centres here, so the feet's force points carry no moment; the trunk's points aren't in the note (ours: their

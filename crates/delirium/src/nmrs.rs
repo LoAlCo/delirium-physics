@@ -591,11 +591,13 @@ pub struct CoreState {
     pub feet: [Option<bool>; 2],
     /// StayUpright's slow and fast sets (ctx+0x29a0, ctx+0x2a70)
     pub stay: [crate::nmdbm_rdr2::StayUpright; 2],
+    /// the last bullet record's impulse (ctx+0x1150 + idx 0x160, +0x140), for turnTowardsBullets
+    pub bullet: Option<bevy_math::Vec3>,
 }
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2], stay: Default::default() }
+        CoreState { foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None }
     }
 }
 
