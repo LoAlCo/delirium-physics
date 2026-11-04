@@ -175,6 +175,11 @@ pub struct Out {
     pub impulse: Vec<(usize, Vec3, Vec3)>,
     /// RDR2 core: the default arms' releaseWound, telling reachForWound to let that hand go this step
     pub rfw_release: [bool; 2],
+    /// RDR2 core: an extra (onFire) stops bodyBalance, then starts it with these (RDR2's children)
+    pub bb_stop: bool,
+    pub bb_start: Option<crate::nmbb::Params>,
+    /// RDR2 core: the balancer's leg stiffness from now on (onFire's bal+0x658/+0x65c)
+    pub dbm_leg_stiffness: Option<f32>,
 }
 
 impl Out {
@@ -335,6 +340,8 @@ pub struct Ctx<'a, 'b> {
     pub bb_on: bool,
     /// the extras running this step, by message name (RDR2's behaviours read whether staggerFall runs)
     pub extras_on: Vec<&'static str>,
+    /// RDR2 core: the shot's strength scale for the behaviours that read it (controlledFall); 1 without a shot
+    pub shot_scale: f32,
 }
 
 /// What the shot's default arms read of RDR2's reachForWound, per hand: in a reach with the hand placed, how long
@@ -368,7 +375,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
         Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed,
-              dbm: None, shot_on: false, rfw: None, bb_on: false, extras_on: vec![] }
+              dbm: None, shot_on: false, rfw: None, bb_on: false, extras_on: vec![], shot_scale: 1.0 }
     }
 
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.
@@ -513,6 +520,13 @@ impl Shot {
 
     pub fn failed(&self) -> bool {
         self.flags & 1 != 0
+    }
+
+    /// RDR2 core: the shot's strength scale as other behaviours read it (0x2a8c4b8): the weakness ramp once its core
+    /// strength module runs, else 1. RDR2 also multiplies in looseness4Fall while falling and looseness4Stagger
+    /// while staggerFall runs; Delirium's shot has neither parameter, so those factors are 1 here.
+    pub(crate) fn rdr2_scale(&self) -> f32 {
+        if self.rd.started { self.rd.k } else { 1.0 }
     }
 
     fn crouch_check(&self, _: &Ctx) -> bool {

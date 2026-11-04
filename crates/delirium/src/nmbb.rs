@@ -69,13 +69,18 @@ pub struct Rdr2Params {
     pub move_amount_still: f32,
     /// lean away only while bracing (no brace here: never)
     pub move_when_bracing: bool,
+    /// moving backwards (his velocity within 60 degrees of his back): turn him to one side, keeping the side the
+    /// first backward step chose (backwardsAutoTurn; RDR2's onFire sets it, no message here)
+    pub backwards_auto_turn: bool,
+    /// moving backwards: the elbows bent at least 1.5 and the spine's twist left alone (backwardsArms; likewise)
+    pub backwards_arms: bool,
 }
 
 impl Default for Rdr2Params {
     fn default() -> Rdr2Params {
         Rdr2Params { shoulder_l1: 0.0, shoulder_l2: 0.5, hip_l2_arm_l2: 0.3, shoulder_twist: -0.35, airborne_arms: 0.0,
                      axis_weights_simulation_blocked: true, move_radius: -1.0, move_amount: 0.3, move_amount_still: 0.3,
-                     move_when_bracing: false }
+                     move_when_bracing: false, backwards_auto_turn: false, backwards_arms: false }
     }
 }
 
@@ -142,6 +147,10 @@ struct Rdr2Bb {
     moved: f32,
     paused: bool,
     last_dt: f32,
+    /// the backwards turn's step counter (RDR2's reset 4, less one each backward step) and its side (true: the
+    /// left foot's, toward his left)
+    back_steps: i32,
+    back_left: bool,
 }
 
 impl BodyBalance {
@@ -462,7 +471,13 @@ impl BodyBalance {
         for i in (*CLAVICLE()) {
             ch.eff[i].blend_to_zero(1.0);
         }
-        let mut rd = Rdr2Bb { last_dt: 1.0 / 60.0, ..Default::default() };
+        let mut rd = Rdr2Bb { last_dt: 1.0 / 60.0, back_steps: 4, ..Default::default() };
+        // the backwards turn's first side: RDR2 draws it at every activation (bit 0 of a fresh generator state);
+        // here only when backwardsAutoTurn is on, so every other bodyBalance draws as before
+        if p.rdr2.backwards_auto_turn {
+            ch.random();
+            rd.back_left = ch.rng.0 & 1 != 0;
+        }
         for i in 0..2 {
             rd.arm_on[i] = 1.4 * ch.random() - 0.7;
             rd.arm_off[i] = 0.4 * ch.random() + 0.3;
@@ -499,9 +514,18 @@ impl BodyBalance {
             }
             return out;
         }
+        // moving backwards (only looked at with backwardsAutoTurn or backwardsArms)
+        let up = ch.up;
+        let snap = b.snap(Vec3::Z);
+        let flat = |v: Vec3| v - up * up.dot(v);
+        let back = (r.backwards_auto_turn || r.backwards_arms)
+            && flat(snap.vel).normalize_or_zero().dot(flat(snap.m.c).normalize_or_zero()) > 0.5;
         if stepping != 0 && self.stepping != stepping {
             self.stepping = stepping;
             self.cut = 0.8 * ch.random();
+            if back {
+                self.rd.back_steps -= 1;
+            }
         }
         // stiffness
         for i in (*SPINE()).into_iter().chain(*NECK()) {
@@ -516,8 +540,6 @@ impl BodyBalance {
             (ch.eff[i].strength, ch.eff[i].damping) = (k * k, 2.0 * k * 0.8 * p.damping);
         }
         let f = (b.doll.kinetic() * 2.0).sqrt().clamp(0.001, 1.0);
-        let snap = b.snap(Vec3::Z);
-        let up = ch.up;
         let (target, target_vel) = look_at(&p, b, obstacles);
         // the head look (headLook's priority 0xc); along the velocity for a while on some steps
         if p.use_head_look {
@@ -577,9 +599,23 @@ impl BodyBalance {
             self.rd.paused = true;
         }
         (self.rd.moved, self.rd.target, self.rd.last_dt) = (dv.length(), target, dt);
+        // the backwards turn (owner 2, over the body turn): the side from the stepping foot while the counter is 3 or
+        // more ([P]: the note's "otherwise 4" read as not moving backwards), a point 2 m to that side and 2 m ahead
+        // in his own frame
+        if back && r.backwards_auto_turn {
+            if self.rd.back_steps >= 3 && stepping != 0 {
+                (self.rd.back_left, self.rd.back_steps) = (stepping == 1, 3);
+            }
+            let x = if self.rd.back_left { -2.0 } else { 2.0 };
+            let d = flat(from_own(Vec3::new(x, 2.0, 0.0), b).0 - snap.com);
+            if f > RDR2_TURN_SPEED {
+                out.turn = Some(d.normalize_or_zero());
+            }
+        } else {
+            self.rd.back_steps = 4;
+        }
         // lean away from a target moving past (the force lean only: our balancer has one lean channel)
         let vt = self.rd.target_vel;
-        let flat = |v: Vec3| v - up * up.dot(v);
         let d = flat((snap.com - target) - vt * 0.05);
         if vt.length() > 0.2 && !r.move_when_bracing && d.length() < r.move_radius {
             let mut side = up.cross(vt);
@@ -603,8 +639,10 @@ impl BodyBalance {
         let act = |j: usize| b.ch.actual(j, b.frames);
         let (hl, hr) = ((*HIP())[0], (*HIP())[1]);
         let tw = ((act(hl)[0] - act(hr)[0]) + 0.15 * (ch.eff[hl].desired[0] - ch.eff[hr].desired[0])).clamp(-0.8, 0.8);
-        for (i, k) in (*SPINE()).into_iter().zip([0.35, 0.3, 0.2, 0.15]) {
-            ch.eff[i].desired[2] = k * tw;
+        if !back {
+            for (i, k) in (*SPINE()).into_iter().zip([0.35, 0.3, 0.2, 0.15]) {
+                ch.eff[i].desired[2] = k * tw;
+            }
         }
         // arms out: the torso's pitch and roll past their thresholds, and its spin
         let m: M34 = snap.m;
@@ -679,7 +717,8 @@ impl BodyBalance {
                     cut = self.cut;
                 }
             }
-            ch.eff[el].desired[0] = e.max(p.bend_elbows_gait).min(6.0);
+            let floor = if back && r.backwards_arms { 1.5 } else { p.bend_elbows_gait };
+            ch.eff[el].desired[0] = e.max(floor).min(6.0);
             let base = hs_act[1] * r.hip_l2_arm_l2 + r.shoulder_l2;
             let mut l2 = base;
             if pushing {

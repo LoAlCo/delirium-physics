@@ -3230,6 +3230,8 @@ impl Sim {
                                                          v3(chest + s.fwd * 0.12), v3(s.fwd))],
             // pointGun: a pistol in the right hand aimed 3 m ahead (RDR2's under the RDR2 core, pointArm without it)
             "pointGun" => vec![format!("pointGun start=true weapon=1 rightHandTarget={}", v3(chest + s.fwd * 3.0))],
+            // RDR2 core: controlledFall turns his chest's front toward the floor 2 m ahead (without the core it does nothing)
+            "controlledFall" => vec![format!("controlledFall start=true TARGET={}", v3((chest + s.fwd * 2.0).with_z(0.0)))],
             "STOP all" => vec!["stopAllBehaviours".into()],
             x if delirium::extras::messages().any(|m| m.name == x) => vec![format!("{x} start=true")],
             _ => vec![],
