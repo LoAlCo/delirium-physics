@@ -9464,7 +9464,7 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
                 Some(d) if d.starts_with("set ") => {
                     let mut w = d[4..].split_whitespace();
                     let (name, v) = (w.next().unwrap_or(""), w.next().unwrap_or(""));
-                    let ok = sim.horse.as_mut().is_some_and(|h| h.q.set(name, v));
+                    let ok = sim.horse.as_mut().is_some_and(|h| h.set(name, v));
                     sim.say(format!("room  horse: {name} {}", if ok { v } else { "? (no horse, no such setting, or not a value)" }));
                 }
                 d => {
@@ -9791,6 +9791,12 @@ impl Sim {
         if let Some(h) = self.horse.as_mut() {
             // ridden, Homer's body doesn't push on it (held in the seat, he'd act as if he weighed everything)
             let riding = self.riding && self.agent.extras.on.iter().any(|(n, _)| *n == "rdr2Sit");
+            // RDR2 core: RDR2's quadruped runs the horse; RDR2's sit (constrain 2) attaches the rider to it
+            // (defineAttachedObject: his pelvis and his mass)
+            h.rdr2 = self.rdr2_core;
+            // (his mass at the saddle: Delirium swings him up from beside the horse, and his ropes hang on world
+            // anchors, so he doesn't push on it himself)
+            h.rider = (self.rdr2_core && riding).then(|| (h.saddle().0, self.agent.doll.vel(0).0, self.agent.doll.mass()));
             let homer = if riding { vec![] } else { caps_of(&self.build, &self.agent.doll) };
             h.step(&self.world, 1.0 / 60.0, &car, &homer);
         }
@@ -9902,7 +9908,7 @@ fn headless(mut sim: Sim, n: usize) {
         sim.horse_frag = std::env::var("HORSE_FRAG").unwrap_or_default();
         sim.spawn_horse();
         for kv in std::env::var("HORSE_SET").unwrap_or_default().split(',').filter_map(|kv| kv.split_once('=')) {
-            if let Some(h) = sim.horse.as_mut() && !h.q.set(kv.0, kv.1) {
+            if let Some(h) = sim.horse.as_mut() && !h.set(kv.0, kv.1) {
                 eprintln!("horse: no setting {kv:?}");
             }
         }
@@ -11166,6 +11172,15 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                         }
                         if ui.button("RDR2's defaults").clicked() {
                             h.q = horse::Quadruped::default();
+                        }
+                    });
+                    ui.collapsing("RDR2 core: RDR2's quadruped (its balancer)", |ui| {
+                        info(ui, "With the RDR2 core on, RDR2's own quadruped behaviour runs the horse: it stands on its legs over a level body frame, steps when its centre of mass leaves its hooves, and goes down, scrabbles and writhes by RDR2's code. Its settings by RDR2's names (hashes where RDR2's strings don't name them), with RDR2's defaults; yes/no ones are 1/0.");
+                        for (i, (n, _, lo, hi)) in horse::TABLE.iter().enumerate() {
+                            ui.add(egui::Slider::new(&mut h.r.v[i], *lo..=hi.min(100.0)).text(*n));
+                        }
+                        if ui.button("RDR2's defaults").clicked() {
+                            h.r = Default::default();
                         }
                     });
                 }

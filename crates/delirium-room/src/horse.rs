@@ -5,7 +5,8 @@
 //! part; the three made of two capsules (the top of the neck, its middle and the head) get their second capsule as a
 //! part of its own, held to the first. While it's sound it's held in its pose, as RDR2 holds its horses on their
 //! animation; lamed or killed it falls as RDR2's ragdoll, and down and alive it does what RDR2's `quadrupedbase` does
-//! on the ground (see `Quadruped`).
+//! on the ground (see `Quadruped`). With the RDR2 core on, RDR2's own `quadruped` behaviour runs it instead, sound or
+//! not: it stands on its legs and balances, steps, falls and goes down by RDR2's code (horse_rdr2.rs).
 //!
 //! Where it isn't RDR2's: Delirium's parts hold their mass at their capsule's centre, so the 0.2 m RDR2 moves the
 //! pelvis's and the three spine links' centre of mass off theirs isn't there. The second capsules are held to their
@@ -16,6 +17,9 @@
 //! inside them (see `in_limits`). And the muscles' Euphoria stiffness (0.5, for the blend of a joint's drive) isn't
 //! used: Delirium's muscle takes RDR2's strength and damping.
 use crate::rdr2frag;
+#[path = "horse_rdr2.rs"]
+mod rdr2;
+pub use rdr2::TABLE;
 use bevy::prelude::*;
 use delirium::collision::Collision;
 use delirium::ragdoll::{Build, Capsule, Drive, Limit, Muscle, Obstacle, PartDef, Ragdoll, GRAVITY};
@@ -43,7 +47,7 @@ const PELVIS: usize = 0;
 /// RDR2's links for the root and the pelvis.
 const ROOT_LINK: usize = 0;
 const PELVIS_LINK: usize = 1;
-const MID: usize = 11;
+pub const MID: usize = 11;
 const SHOULDERS: usize = 12;
 /// A link's second capsule's joint to its first: its play, rad, and the muscle holding it, rad/s.
 const WELD_PLAY: f32 = 0.05;
@@ -72,7 +76,8 @@ fn group(k: usize) -> usize {
 }
 
 /// RDR2's `quadrupedbase` behaviour's settings, by its names and with its defaults (read from RDR2's own table); what
-/// each does here is read from its name, not from RDR2's code. Down and alive, the horse lifts its head, paddles its
+/// each does here is read from its name, not from RDR2's code. (RDR2's `quadruped` default block has alwayslifthead
+/// 0, Snap 0 and rollonground 1; the RDR2 core's horse uses those, `rdr2::TABLE`.) Down and alive, the horse lifts its head, paddles its
 /// legs on its side and writhes its neck, at a strength that fades from `legStiffness` toward `legStiffnessMin`; hit,
 /// it goes weak for a moment; tipped past `failangle` it goes down.
 #[derive(Clone, Debug)]
@@ -185,6 +190,13 @@ pub struct Horse {
     pose: Vec<Transform>,
     held: bool,
     pushes: Vec<(usize, Vec3, Vec3)>,
+    /// RDR2 core: on (set every step), RDR2's `quadruped` settings and its state once started (horse_rdr2.rs), the
+    /// hits for it, and the attached rider (defineAttachedObject): his pelvis, its velocity and his mass
+    pub rdr2: bool,
+    pub r: rdr2::Params,
+    core: Option<Box<rdr2::Core>>,
+    rdr2_hits: Vec<(usize, Vec3, Vec3)>,
+    pub rider: Option<(Vec3, Vec3, f32)>,
 }
 
 /// RAGE's margin inside a joint's limits, rad, as the fragment stores them.
@@ -387,7 +399,8 @@ impl Horse {
         let lefts = frames.iter().map(|f| f.rotation.inverse() * (turn * Vec3::Y)).collect();
         Ok(Horse { build, doll, targets, muscles, health: HEALTH, legs: [0.0; 4], dead: false, sunk: 0.0, kept: Default::default(),
                    stand, fwd, ups, lefts, q: Quadruped::default(), fell: false, since_hit: f32::MAX, down: 0.0,
-                   pose: frames.clone(), held: true, pushes: vec![] })
+                   pose: frames.clone(), held: true, pushes: vec![], rdr2: false, r: Default::default(), core: None,
+                   rdr2_hits: vec![], rider: None })
     }
 
     /// One physics step. While it's sound it's held in its pose, as RDR2 holds its horses on their animation (which
@@ -395,6 +408,9 @@ impl Horse {
     /// after the hit that lames or kills it it goes down: let go, it falls as RDR2's ragdoll with the hits' pushes, on
     /// RDR2's own muscles (horse.xml's). Dead, it lies limp; alive, it does `Quadruped`'s ground behaviours.
     pub fn step(&mut self, world: &Collision, dt: f32, obstacles: &[Obstacle], others: &[Capsule]) {
+        if self.rdr2 {
+            return self.step_rdr2(world, dt, obstacles, others);
+        }
         let (legs, dead) = (self.legs, self.dead);
         let level = self.stand;
         let fr: Vec<Transform> = self.doll.frames().collect();
@@ -545,7 +561,17 @@ impl Horse {
 
     /// Still on its feet.
     pub fn standing(&self) -> bool {
+        if self.rdr2 {
+            return self.standing_rdr2();
+        }
         self.sunk <= GIVE
+    }
+
+    /// Sets a setting by RDR2's name: `quadrupedbase`'s (`q`) and, for the RDR2 core, `quadruped`'s (`r`).
+    pub fn set(&mut self, name: &str, value: &str) -> bool {
+        let a = self.q.set(name, value);
+        let b = self.r.set(name, value);
+        a || b
     }
 
     /// Its saddle: where a rider's pelvis sits (over the barrel's middle), the barrel's up and which way it faces, and
@@ -562,6 +588,9 @@ impl Horse {
 
     /// What it's doing, for the panel.
     pub fn state(&self) -> String {
+        if self.rdr2 && !self.dead {
+            return self.state_rdr2();
+        }
         if self.dead {
             "dead".into()
         } else if self.sunk > GIVE {
@@ -599,7 +628,10 @@ impl Horse {
         if self.dead {
             return format!("{}: hit, dead already", self.build.parts[part].name);
         }
-        if damage > 0.0 {
+        if damage > 0.0 && self.rdr2 {
+            // RDR2 core: the quadruped's newHit (its own snap, off by default)
+            self.rdr2_hits.push((part, at, impulse));
+        } else if damage > 0.0 {
             self.since_hit = 0.0;
             if self.q.snap && impulse != Vec3::ZERO {
                 self.doll.impulse(0, at, impulse.normalize() * self.q.snap_mag * 60.0);
