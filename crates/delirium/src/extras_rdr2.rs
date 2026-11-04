@@ -3710,7 +3710,7 @@ impl Extra for BulletImpulse {
             c.out.impulse.push((*k, at, *imp * (h / BULLET_PERIOD)));
             *left -= h;
         }
-        self.recs.retain(|r| r.3 > 0.0);
+        self.recs.retain(|r| r.3 > 1e-6);
         self.modifier = (self.modifier + 0.38 * dt).min(1.0);
     }
 

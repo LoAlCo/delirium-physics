@@ -206,8 +206,11 @@ impl Extras {
 impl Extras {
     pub fn stop_all(&mut self) {
         let held: Vec<usize> = self.wanted.iter().copied().chain(self.hard.iter().flat_map(HardConstraint::parts)).collect();
+        // RDR2's bullet records live in NM's core, not in a behaviour: stopping the behaviours leaves them running
+        let bullets: Vec<_> = std::mem::take(&mut self.on).into_iter().filter(|(n, _)| *n == "applyBulletImpulse").collect();
         *self = Default::default();
         self.release = held;
+        self.on = bullets;
     }
 
     pub fn hard_step(&mut self, doll: &mut crate::ragdoll::Ragdoll, incoming: &[Transform], dt: f32) {
