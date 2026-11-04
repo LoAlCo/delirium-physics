@@ -248,7 +248,7 @@ impl OnFireRdr2 {
 
     /// Activate (§3): the children, the first lean target, bodyBalance reset and started with onFire's settings, and
     /// the balancer's leg stiffness 10 unless balancerCollisionsReaction holds them. (RDR2 also zeroes the balancer's
-    /// ankleEquilibrium, which Delirium's balancer hasn't.)
+    /// ankleEquilibrium, its default here.)
     fn activate(&mut self, c: &mut Ctx) {
         self.children(c);
         let p = self.p;

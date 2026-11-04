@@ -152,6 +152,14 @@ pub struct Params {
     pub hip_up: Vec3,
 }
 
+impl Params {
+    /// The leg scale the reach is measured in: his standing pelvis height over the feet, and with the RDR2 core
+    /// half the ankle's height above the sole on top (RDR2's bal+0x210, measured to the soles).
+    pub fn leg_scale(&self) -> f32 {
+        self.pelvis_height + if self.rdr2.is_some() { 0.5 * crate::nmdbm_rdr2::FOOT_HEIGHT } else { 0.0 }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Feet {
     pub pos: [Vec3; 2],
@@ -815,7 +823,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     // RDR2: the pelvis's height over the support centre, or on a slope over a point between the feet
     let mut base = f.centre;
     let rdr2_height = p.rdr2.map(|rd| {
-        let l = r * p.leg_length;
+        let l = p.leg_scale() * p.leg_length;
         let h = crate::nmdbm_rdr2::Rdr2::pelvis_height(l, (t[1] - t[0]).length());
         if !rd.on_slope {
             return h;
@@ -1275,6 +1283,11 @@ pub fn MARGE_LEGS() -> (f32, f32) { (delirium_data::kv!(268), delirium_data::kv!
 #[allow(non_snake_case)]
 #[inline]
 pub fn MARGE_YAW() -> (f32, f32) { (-delirium_data::kv!(270), -delirium_data::kv!(271)) }
+/// RDR2's own stance numbers for its male ped (its NM context's ctx+0x34d0..+0x34e0: leg straightness and minimum
+/// foot separation, the legs' splay and turn, the head's turn), as the game set them from the townsman's standing pose
+/// in the reference recordings (other peds on the same body: 0.982-0.987, 0.286-0.293, 0.178). Not computed from the
+/// body: RDR2 sets them per ped from its pose, as GTA IV's are Homer's (CHAR_LEGS, CHAR_YAW, CHAR_HEAD).
+pub const RDR2_MALE_STANCE: ((f32, f32), (f32, f32), f32) = ((0.9849, 0.2868), (0.1779, -0.0154), 0.0904);
 #[allow(non_snake_case)]
 #[inline]
 pub fn CHAR_HEAD() -> f32 { delirium_data::kv!(272) }
@@ -1344,6 +1357,8 @@ impl Dbm {
 
     /// Switches this balancer to the RDR2 core's (nmdbm_rdr2.rs). Its own step limit replaces GTA IV's countdown.
     pub fn rdr2(&mut self, r: crate::nmdbm_rdr2::Rdr2) {
+        // the pitch integrator around ankleEquilibrium, not GTA IV's standing lean bias
+        (self.p.lean_bias, self.pv.p52) = (r.p.ankle_equilibrium, r.p.ankle_equilibrium);
         self.p.rdr2 = Some(r);
         self.f.countdown = i32::MAX;
     }
@@ -1434,8 +1449,9 @@ impl Dbm {
             let hit = world.segment(start, start - up);
             self.p.contact[i] = hit.is_some();
             (self.p.target[i], self.p.normal[i]) = match hit {
-                Some((at, n)) => (at + up * delirium_data::kv!(131), n),
-                None => (start - up * (self.p.leg_length * self.p.pelvis_height), up),
+                // RDR2: the contact half the ankle's height above the hit
+                Some((at, n)) => (at + up * if self.p.rdr2.is_some() { 0.5 * crate::nmdbm_rdr2::FOOT_HEIGHT } else { delirium_data::kv!(131) }, n),
+                None => (start - up * (self.p.leg_length * self.p.leg_scale()), up),
             };
             let y = crate::estimate::vrefp(self.p.dt);
             self.p.gvel[i] = (self.p.target[i] - old) * (-y).mul_add(self.p.dt, 1.0).mul_add(y, y);
@@ -1472,11 +1488,12 @@ impl Dbm {
             let (u, l) = (self.p.up, self.hip_lean);
             self.p.hip_up = vnorm(u + l - u * l.dot(u));
         }
+        let leg_scale = self.p.leg_scale();
         if let Some(r) = self.p.rdr2.as_mut() {
             let low = up_low(self.p.up, b.foot(0), b.foot(1));
             let hip = (s.legs[0].hip.actual[0] + s.legs[1].hip.actual[0]) * 0.5;
             let (gup, legs) = (self.p.gup, &s.legs);
-            r.crouch_start(self.p.up.vd(s.com) - low, self.p.pelvis_height, hip, || {
+            r.crouch_start(self.p.up.vd(s.com) - low, leg_scale, c.legs.0, hip, || {
                 use crate::nmdbm_rdr2::Rdr2;
                 (Rdr2::legs_lying(gup, [0, 1].map(|i| (legs[i].knee.m.d, legs[i].ankle.m.d))),
                  Rdr2::turn_out(s.pelvis.m.a, s.pelvis.m.b, [0, 1].map(|i| (legs[i].thigh.m.b, legs[i].thigh.m.c))))

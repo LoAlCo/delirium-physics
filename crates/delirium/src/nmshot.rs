@@ -1536,6 +1536,9 @@ pub(crate) fn apply_strength(c: &mut Ctx, s: &Strength, dt: f32) {
             let base = knee.strength.sqrt();
             let sigma = (ml * base).powi(2);
             knee.strength = sigma;
+            // the hip takes the same multiplier on the balancer's stiffness, whatever the knee's taper
+            let hip = &mut c.ch.eff[(*HIP())[i]];
+            hip.strength = (ml * hip.strength.sqrt()).powi(2);
             if w < 1.0 {
                 let st = (base - 5.0) * w + 5.0;
                 let damp = (w + 1.0) * 0.5;

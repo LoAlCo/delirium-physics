@@ -474,9 +474,16 @@ impl Agent {
                 ch.stance_yaw = (crate::nmdbm::MARGE_YAW().1, crate::nmdbm::MARGE_HEAD());
             }
         }
-        // RDR2's own bodies stand as Homer (Marge) does, on their own legs: GTA IV's stance for them, its foot width
-        // in proportion to how far apart their feet are in their zero poses
-        let gta = match build.nm { crate::nmrs::RDR2_FRED => Some(crate::nmrs::HOMER), crate::nmrs::RDR2_WILMA => Some(crate::nmrs::MARGE), _ => None };
+        // RDR2's male body takes the stance RDR2 gave its male ped. Its female body stands as Marge does, on her own
+        // legs: Marge's stance, its foot width in proportion to how far apart the feet are in their zero poses
+        if build.nm == crate::nmrs::RDR2_FRED {
+            let (legs, yaw, head) = crate::nmdbm::RDR2_MALE_STANCE;
+            (a.legs, a.hip_yaw) = (legs, yaw);
+            if let Some(ch) = a.ch.as_mut() {
+                ch.stance_yaw = (yaw.1, head);
+            }
+        }
+        let gta = match build.nm { crate::nmrs::RDR2_WILMA => Some(crate::nmrs::MARGE), _ => None };
         if let Some(g) = gta {
             let [l, r] = [(*crate::nmrs::ANKLE())[0], (*crate::nmrs::ANKLE())[1]].map(|j| j + 1);
             let apart = |nm: usize| crate::nmrs::PARTS[nm].get().filter(|p| p.len() > l.max(r)).map(|p| (Vec3::from(p[l][3]) - Vec3::from(p[r][3])).with_z(0.0).length());
@@ -619,7 +626,9 @@ impl Agent {
     }
 
     fn body_balance_with(&mut self, build: &Build, world: &Collision, params: BodyBalance, full: Option<crate::nmbb::Params>) {
-        if let Some(b) = self.balance.as_mut().filter(|b| b.on()) {
+        // a balancer keeps the core it started with: while the core changes, this starts a new one
+        let core = self.rdr2_core.is_some();
+        if let Some(b) = self.balance.as_mut().filter(|b| b.on() && b.dbm.as_ref().is_none_or(|d| d.p.rdr2.is_some() == core)) {
             b.params = params;
             if let Some(bb) = b.bb.as_mut() {
                 match full {
