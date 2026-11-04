@@ -493,7 +493,7 @@ Vectors are `x,y,z`. "mask" is a body-part string (see
 | `bodyBalance` | Stand, step, recover from pushes. | `bodyStiffness`, `damping`, `elbow`, `armsOutOnPush`, `headLookPos`, `useHeadLook`, `useBodyTurn`, `maxSteps`, `somersaultAngle` |
 | `configureBalance` | Tune the balancer. | `legStiffness`, `stepHeight`, `stepClampScale`, `balanceAbortThreshold`, `taperKneeStrength` |
 | `configureBalanceReset` | Reset balancer tuning. | none |
-| `stayUpright` | Weak uprightness hold. | `stiffness` (3), `dampingScale` (0.5) |
+| `stayUpright` | Weak uprightness hold. | `stiffness` (3), `dampingScale` (0.5); under the RDR2 core also RDR2's own record (`useForces`, `velocityBased`, `antigrav`, ...) |
 | `setStiffness` | One-shot body stiffness. | `bodyStiffness` (12), `damping` (1), `mask` ("fb") |
 | `bodyRelax` | One-shot go limp. | `mask`, `holdPose`, `relaxation` (50), `damping` |
 | `shotRelax` | One-shot relax after a hit. | `relaxPeriod` (2) |
