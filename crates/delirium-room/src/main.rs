@@ -3993,8 +3993,10 @@ impl Sim {
             }
             return;
         }
+        // RDR2's own body takes the chest shot on its upper chest (RDR2's skel_spine4), where the game's lands
+        let chest = if self.build.nm >= delirium::nmrs::RDR2_FRED { 10 } else { CHEST };
         if b == "shot" {
-            self.fire(CHEST, None, false, &[]);
+            self.fire(chest, None, false, &[]);
             return;
         }
         if b == "shot leg" {
@@ -4003,7 +4005,7 @@ impl Sim {
         }
         if b == "shot back" {
             let s = self.ours();
-            self.fire(CHEST, Some((s.p(CHEST) - s.fwd * 0.1, s.fwd, -s.fwd)), false, &[]);
+            self.fire(chest, Some((s.p(chest) - s.fwd * 0.1, s.fwd, -s.fwd)), false, &[]);
             return;
         }
         if b == "replay" {
