@@ -39,6 +39,7 @@ mod sfx;
 mod jump;
 mod horse;
 mod rdr2frag;
+mod rdr2body;
 mod params;
 mod sever;
 mod skate;
@@ -435,6 +436,7 @@ rdr2_reactions {}
         + if sim.rdr2_core { "rdr2_core 1\n" } else { "" }
         + if sim.rig_rdr2 { "rig rdr2\n" } else { "" }
         + &if sim.rig_dir.is_empty() { String::new() } else { format!("rdr2_rig_dir {}\n", sim.rig_dir) }
+        + &if sim.rig_body.is_empty() { String::new() } else { format!("rdr2_body_dir {}\n", sim.rig_body) }
         + &if sim.horse_file.is_empty() { String::new() } else { format!("rdr2_horse {}\n", sim.horse_file) }
         + &if sim.horse_frag.is_empty() { String::new() } else { format!("rdr2_horse_frag {}\n", sim.horse_frag) }
 }
@@ -469,6 +471,38 @@ fn rig_choice(a: &[String]) -> (bool, String) {
     (rdr2, dir)
 }
 
+/// Where to look for RDR2's human ragdoll: `--rig-body <folder>` first, then the settings file (rdr2_body_dir), then
+/// RDR2_BODY_DIR (and then the rig folder: see `rdr2body::find`).
+fn rig_body_dir(a: &[String]) -> String {
+    let flag = a.iter().position(|x| x == "--rig-body").and_then(|i| a.get(i + 1)).cloned();
+    let saved = std::fs::read_to_string(getup::config_dir().join(SETTINGS)).unwrap_or_default();
+    let line = saved.lines().find_map(|l| l.split_once(' ').filter(|(x, _)| *x == "rdr2_body_dir").map(|(_, v)| v.trim().to_string()));
+    flag.or(line).or_else(|| std::env::var("RDR2_BODY_DIR").ok()).unwrap_or_default()
+}
+
+/// With the RDR2 rig chosen, RDR2's own body (`rdr2body`) instead of GTA IV's `base` (standing in `frames`), when the
+/// player's export of its ragdoll and its fred.xml / wilma.xml are found; otherwise `base`. Also says which, for the log.
+fn rig_body(a: &[String], base: Build, frames: Vec<Transform>) -> (Build, Vec<Transform>, Option<String>) {
+    let (rdr2, dir) = rig_choice(a);
+    if !rdr2 {
+        return (base, frames, None);
+    }
+    let body = rig_body_dir(a);
+    let female = base.nm == delirium::nmrs::MARGE;
+    let (slot, xml) = if female { (delirium::nmrs::RDR2_WILMA, "wilma.xml") } else { (delirium::nmrs::RDR2_FRED, "fred.xml") };
+    let Some(frag) = rdr2body::find(&[&body, &dir], female) else {
+        return (base, frames, Some(format!("room  rig: RDR2's ragdoll ({}.yft.sys) not found in {:?} or {:?}: on GTA IV's body",
+                                            if female { "meta_base_female" } else { "meta_base_male" }, body, dir)));
+    };
+    let got = std::fs::read_to_string(std::path::Path::new(&dir).join(xml)).map_err(|e| format!("{xml}: {e}")).and_then(|t| delirium::rig::parse(&t))
+        .and_then(|j| std::fs::read(&frag).map_err(|e| format!("{}: {e}", frag.display())).and_then(|d| rdr2frag::read(&d)).map(|f| (j, f)))
+        .and_then(|(j, f)| rdr2body::build(&f, &j, &base, &frames, slot));
+    match got {
+        Ok(b) => (b.build, b.frames, Some(format!("room  rig: {} ({})", b.note, frag.display()))),
+        Err(e) => (base, frames, Some(format!("room  rig: RDR2's body: {e}: on GTA IV's body"))),
+    }
+}
+
 /// Sets the rig for every character built from now on: RDR2's joints from fred.xml (Homer's slot) and wilma.xml
 /// (Marge's) in `dir`, or GTA IV's. Returns what happened, for the log.
 fn set_rig(rdr2: bool, dir: &str) -> String {
@@ -493,7 +527,7 @@ fn set_rig(rdr2: bool, dir: &str) -> String {
             }
         }
     }
-    format!("room  rig: RDR2 joints on GTA IV's body ({}; from {})", said.join(", "), if dir.is_empty() { "no folder set" } else { dir })
+    format!("room  rig: RDR2 joints ({}; from {})", said.join(", "), if dir.is_empty() { "no folder set" } else { dir })
 }
 
 fn load_settings(sim: &mut Sim) {
@@ -522,6 +556,10 @@ fn apply_settings(sim: &mut Sim, t: &str) {
         }
         if k == "rdr2_rig_dir" {
             sim.rig_dir = v.trim().into();
+            continue;
+        }
+        if k == "rdr2_body_dir" {
+            sim.rig_body = v.trim().into();
             continue;
         }
         if k == "rig" {
@@ -1155,6 +1193,8 @@ struct Sim {
     rdr2_core: bool,
     /// the rig's joints: RDR2's (from the player's RDR2 naturalmotion XML in rig_dir) instead of GTA IV's
     rig_rdr2: bool,
+    /// where the player's export of RDR2's human ragdoll is (see `rdr2body::find`)
+    rig_body: String,
     rig_dir: String,
     /// RDR2 reactions waiting for the shot task's first messages (which would stop them)
     rdr2_after: Vec<String>,
@@ -5284,6 +5324,10 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
         std::process::exit(if ok { 0 } else { 1 });
     }
     let body = a.iter().position(|x| x == "--body").and_then(|i| a.get(i + 1)).and_then(|n| BODIES.iter().position(|b| b.0 == n)).unwrap_or(1);
+    let (build, frames, rig_note) = rig_body(a, build, frames);
+    if let Some(n) = &rig_note {
+        eprintln!("{n}");
+    }
     let base = (build, frames);
     let (build, frames, grow) = body_of(&base.0, &base.1, body);
     let crowd_build = build.clone();
@@ -5314,7 +5358,7 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
     let mut sim = Sim { build, frames, world, tp, agent, msgs: msg::State::default(), paused: false, speed: 1.0, acc: 0.0, steps: 0, arrows: false,
                         shot_task: None, rand: Default::default(),
                         log: VecDeque::new(), console: String::new(), script, typing: false,
-                        weapons, weapon: 0, weak: false, sel: 0, over_ui: false, held: true,   show_ui: true, sens: 0.5, rec, health: 200.0, god: false, aim_gun: false, gun: Gun::default(), blast_task: None, burning: 0.0, shock: 0.0, charred: vec![], voxels: vec![], on_fire: None, hero_gun: false, passive: true, homer: None, homer_weapon: None, homer_wait: None, homer_wild: false, gun_ai: false, homer_combat: None, homer_guard: None, homer_rest: 0.0, ammo: 0, reloading: None, taxis: vec![], driving: false, pedals: (0.0, 0.0, false), car_tune: None, lean_stop: None, hurt: [0.0; 4], near_at: -9.0, near_last: -9.0, dived: false, no_dodge: false, dodge_gap: DODGE_GAP, look_stop: None, dodge_at: 0.0, dodging: false, look_after: None, fall: None, hold: None, airborne: false, wet: false, hero_alpha: 0.6, render_scale: 1.0, msaa: 4, msaa_max: 4, shadow_q: 3, frame_ms: 0.0, gpu: String::new(), gpu_now: String::new(), gpus: None, aa: AA_MSAA, smaa_q: 2, dlss_q: 0, fsr_q: 1, fsr_ok: false, xess_q: 1, xess_ok: false, sharpen: 0.0, sharp_by: [0.0; 9], ssao: 0, ao_strength: 1.0, bloom: 0.0, dof: 0.0, contact: 0.0, contact_k: 1.0, vignette: 0.0, lens: 0.0, chroma: 0.0, rt: 0, rt_ok: false, sky: 2, god_rays: false, restir: false, fire: 2, water_q: 1, real_fire: false, voxel_water: false, real_water: false, real_drain: false, pouring: false, real_surface: false, real_ripples: false, water_clear: true, wet_trail: true, water_impact: true, water_faucet: true, real_level: None, flow: vec![], hero_flow: vec![], water_caustics: false, water_spray: false, water_waves: false, water_pixels: false, water_haze: false, water_mirror: false, water_foam: false, water_mist: false, photons: false, water_fine: false, water_depth: true, water_relax: false, water_ghost: false, water_vort: false, water_spray_phys: false, safe: false, fire_light: true, fire_homer: false, shadow_filter: 0, water_wet: false, wet_film: false, wet_drips: false, sky_shade: false, water_traced: false, glass_tint: true, glass_shade: true, water_ripples: true, water_refract: false, flood: None, smoke: true, view_px: UVec2::ONE, defaults: String::new(), upscaler: UP_FSR1, dlss_ok: false, fps_limit: FPS_VSYNC, extra: false, rdr2: false, rdr2_core: false, rig_rdr2: false, rig_dir: String::new(), rdr2_after: vec![], rdr2_fire: false, horse: None, horse_file: String::new(), horse_frag: String::new(), riding: false, rdr2_pick: Default::default(), param_edits: Default::default(), param_search: String::new(), param_changed_only: false, extra_pick: 0xff, fire_react: true, dive: false, hang: None, was_fallen: false, curled: false, super_punch: false, even: false, crush: None, cab_gas: 0.0, cam: None, look_z: 0.8, film: 0.0, photo: false, soft: true, shadows: true, sun_color: [1.0; 3], fill_k: 1.0, gun_reach: 1.0, gun_up: 0.0, gun_off: Vec3::ZERO, gun_aim_off: Vec3::ZERO, crane: None, crane_to: None, shadow: 0.0, strict: false, stairs_rolled: false, cam_head: false, cam_rig: None, spawn_at: None, tear_k: 1.0, sky_k: 1.0, kept_gun: None, cam_floor: f32::MIN, pov: false, film_vel: Vec3::ZERO, photo_pending: false, on_cue: vec![], photo_follow: false, detached: false, cam_at: None, cam2: None, cam2_queue: vec![], cam2_b: None, meat: None, meat_on: true, meat_wipe: false, skate3_bails: false, meat_screen: None, shot_scene: String::new(), photo_note: String::new(), script_walk: Vec3::ZERO, throw_speed: None, homer_shot: 0.0, hero_physics: true, hero_doll: None, tackle: None, cuts: vec![], hat: None, dismember: false, jump: None, steam: (0, vec![]), #[cfg(feature = "portal")] portal: portal::Portals::new(), click_at: None,
+                        weapons, weapon: 0, weak: false, sel: 0, over_ui: false, held: true,   show_ui: true, sens: 0.5, rec, health: 200.0, god: false, aim_gun: false, gun: Gun::default(), blast_task: None, burning: 0.0, shock: 0.0, charred: vec![], voxels: vec![], on_fire: None, hero_gun: false, passive: true, homer: None, homer_weapon: None, homer_wait: None, homer_wild: false, gun_ai: false, homer_combat: None, homer_guard: None, homer_rest: 0.0, ammo: 0, reloading: None, taxis: vec![], driving: false, pedals: (0.0, 0.0, false), car_tune: None, lean_stop: None, hurt: [0.0; 4], near_at: -9.0, near_last: -9.0, dived: false, no_dodge: false, dodge_gap: DODGE_GAP, look_stop: None, dodge_at: 0.0, dodging: false, look_after: None, fall: None, hold: None, airborne: false, wet: false, hero_alpha: 0.6, render_scale: 1.0, msaa: 4, msaa_max: 4, shadow_q: 3, frame_ms: 0.0, gpu: String::new(), gpu_now: String::new(), gpus: None, aa: AA_MSAA, smaa_q: 2, dlss_q: 0, fsr_q: 1, fsr_ok: false, xess_q: 1, xess_ok: false, sharpen: 0.0, sharp_by: [0.0; 9], ssao: 0, ao_strength: 1.0, bloom: 0.0, dof: 0.0, contact: 0.0, contact_k: 1.0, vignette: 0.0, lens: 0.0, chroma: 0.0, rt: 0, rt_ok: false, sky: 2, god_rays: false, restir: false, fire: 2, water_q: 1, real_fire: false, voxel_water: false, real_water: false, real_drain: false, pouring: false, real_surface: false, real_ripples: false, water_clear: true, wet_trail: true, water_impact: true, water_faucet: true, real_level: None, flow: vec![], hero_flow: vec![], water_caustics: false, water_spray: false, water_waves: false, water_pixels: false, water_haze: false, water_mirror: false, water_foam: false, water_mist: false, photons: false, water_fine: false, water_depth: true, water_relax: false, water_ghost: false, water_vort: false, water_spray_phys: false, safe: false, fire_light: true, fire_homer: false, shadow_filter: 0, water_wet: false, wet_film: false, wet_drips: false, sky_shade: false, water_traced: false, glass_tint: true, glass_shade: true, water_ripples: true, water_refract: false, flood: None, smoke: true, view_px: UVec2::ONE, defaults: String::new(), upscaler: UP_FSR1, dlss_ok: false, fps_limit: FPS_VSYNC, extra: false, rdr2: false, rdr2_core: false, rig_rdr2: false, rig_dir: String::new(), rig_body: String::new(), rdr2_after: vec![], rdr2_fire: false, horse: None, horse_file: String::new(), horse_frag: String::new(), riding: false, rdr2_pick: Default::default(), param_edits: Default::default(), param_search: String::new(), param_changed_only: false, extra_pick: 0xff, fire_react: true, dive: false, hang: None, was_fallen: false, curled: false, super_punch: false, even: false, crush: None, cab_gas: 0.0, cam: None, look_z: 0.8, film: 0.0, photo: false, soft: true, shadows: true, sun_color: [1.0; 3], fill_k: 1.0, gun_reach: 1.0, gun_up: 0.0, gun_off: Vec3::ZERO, gun_aim_off: Vec3::ZERO, crane: None, crane_to: None, shadow: 0.0, strict: false, stairs_rolled: false, cam_head: false, cam_rig: None, spawn_at: None, tear_k: 1.0, sky_k: 1.0, kept_gun: None, cam_floor: f32::MIN, pov: false, film_vel: Vec3::ZERO, photo_pending: false, on_cue: vec![], photo_follow: false, detached: false, cam_at: None, cam2: None, cam2_queue: vec![], cam2_b: None, meat: None, meat_on: true, meat_wipe: false, skate3_bails: false, meat_screen: None, shot_scene: String::new(), photo_note: String::new(), script_walk: Vec3::ZERO, throw_speed: None, homer_shot: 0.0, hero_physics: true, hero_doll: None, tackle: None, cuts: vec![], hat: None, dismember: false, jump: None, steam: (0, vec![]), #[cfg(feature = "portal")] portal: portal::Portals::new(), click_at: None,
                         getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None,   click_shoots: false,
                         grab: None, glow: vec![], rings: vec![], ripples: vec![], ripple_wait: vec![], tape: Default::default(), replay: None, throw_at: None, pops: vec![], pop_screen: vec![], show_pops: true, tab: 1, sounds: vec![], sound: true, volume: [1.0, 1.0, 0.35], blood: vec![], pixel_blood: true, gore: false, layers: true, wounds: vec![], show_ripples: false, infinite: false, fx_seed: 1, pointer: None, crowd_hp: vec![], car_hit: vec![], car_reacts: vec![], help: !help_seen(), auto_balance: true, dead: false, hero: None, skate: None, skate_link: skate_files::Link::new(), agility,
                         scene: None, switch_to: None, poke: POKE, game_dir: game_dir.map(str::to_string), walk: true, relock: false, cam_locked: true, walk_dir: Vec3::ZERO, wander: Default::default(), getup_mode: 0, musc: None, learned: None, walk_learned: None, preview_on: false, preview: None, preview_wait: false, preview_keys: (false, false), script_jog: false, watch: None, bench: vec![], homer_id: 0, spawn_body: body, base, crowd_build, body, skin: saved_look(), ped_color: 0, body_alpha: BODY_ALPHA, eyes: true, brows: true, skel: true, skel_style: 0, clean: false, sun_dir: saved_sun() };
@@ -5419,7 +5463,7 @@ fn main() {
     }
     let mut sim = load(&a, &args, game_dir.as_deref(), script, rec);
     let (rig_rdr2, rig_dir) = rig_choice(&a);
-    (sim.rig_rdr2, sim.rig_dir) = (rig_rdr2, rig_dir.clone());
+    (sim.rig_rdr2, sim.rig_dir, sim.rig_body) = (rig_rdr2, rig_dir.clone(), rig_body_dir(&a));
     let note = set_rig(rig_rdr2, &rig_dir);
     sim.say(note);
     let scene_var = "DELIRIUM_SCENE";
@@ -6617,7 +6661,7 @@ fn switch(mut sim: NonSendMut<Sim>, mut commands: Commands, mut meshes: ResMut<A
     let Some((scene, marge)) = sim.switch_to.take() else { return };
     let t0 = std::time::Instant::now();
     let mut a: Vec<String> = std::env::args().collect();
-    for flag in ["--map", "--ground", "--stage", "--body", "--rig", "--rig-dir"] {
+    for flag in ["--map", "--ground", "--stage", "--body", "--rig", "--rig-dir", "--rig-body"] {
         if let Some(i) = a.iter().position(|x| x == flag) {
             a.drain(i..(i + 2).min(a.len()));
         }
@@ -6625,6 +6669,7 @@ fn switch(mut sim: NonSendMut<Sim>, mut commands: Commands, mut meshes: ResMut<A
     a.retain(|x| x != "--marge");
     a.extend(["--body".to_string(), BODIES[sim.body].0.to_string()]);
     a.extend(["--rig".to_string(), if sim.rig_rdr2 { "rdr2" } else { "gtaiv" }.to_string(), "--rig-dir".to_string(), sim.rig_dir.clone()]);
+    a.extend(["--rig-body".to_string(), sim.rig_body.clone()]);
     let (map, ground) = match scene.as_str() {
         "stairs" => ("818.94,-348.88", None),
         "wall" => ("738.83,-467", None),
@@ -6643,7 +6688,7 @@ fn switch(mut sim: NonSendMut<Sim>, mut commands: Commands, mut meshes: ResMut<A
         a.extend(["--stage".to_string(), scene.clone()]);
     }
     let mut new = load(&a, &a, sim.game_dir.as_deref(), VecDeque::new(), None);
-    (new.rig_rdr2, new.rig_dir) = (sim.rig_rdr2, sim.rig_dir.clone());
+    (new.rig_rdr2, new.rig_dir, new.rig_body) = (sim.rig_rdr2, sim.rig_dir.clone(), sim.rig_body.clone());
     (new.log, new.script, new.show_ui, new.sens, new.walk, new.getup_mode, new.poke, new.god, new.aim_gun) = (std::mem::take(&mut sim.log), std::mem::take(&mut sim.script), sim.show_ui, sim.sens, sim.walk, sim.getup_mode, sim.poke, sim.god, sim.aim_gun);
     (new.show_pops, new.help, new.tab, new.skin) = (sim.show_pops, sim.help, sim.tab, sim.skin);
     new.meat_on = sim.meat_on;
@@ -10782,8 +10827,8 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                 let was = sim.rig_rdr2;
                 ui.selectable_value(&mut sim.rig_rdr2, false, "GTA IV")
                     .on_hover_text("GTA IV's joints (Homer's, from your GTA IV).");
-                ui.selectable_value(&mut sim.rig_rdr2, true, "RDR2 joints")
-                    .on_hover_text("Red Dead Redemption 2's joints, from your own RDR2's naturalmotion fred.xml / wilma.xml in the folder below: their limits, motor flips, muscle values and force caps. RDR2 reads only these from that file; its body (pivots, masses, shapes) is in the ped's physics fragment, so this is RDR2's joints on GTA IV's body. Restarts the scene.");
+                ui.selectable_value(&mut sim.rig_rdr2, true, "RDR2")
+                    .on_hover_text("Red Dead Redemption 2's joints, from your own RDR2's naturalmotion fred.xml / wilma.xml in the folder below (their limits, motor flips, muscle values and force caps), and its body (masses, inertias, shapes, joint pivots and axes, self-collision) from your export of its ped ragdoll (meta_base_male.yft / meta_base_female.yft) in the body folder below. Without that export, RDR2's joints on GTA IV's body. Restarts the scene.");
                 if sim.rig_rdr2 != was {
                     let note = set_rig(sim.rig_rdr2, &sim.rig_dir);
                     sim.say(note);
@@ -10796,6 +10841,12 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                     if ui.text_edit_singleline(&mut sim.rig_dir).on_hover_text("The folder with fred.xml and wilma.xml from your RDR2 (common_0.rpf/data/naturalmotion). Press Enter to load.").lost_focus() {
                         let note = set_rig(true, &sim.rig_dir);
                         sim.say(note);
+                        sim.switch_to = Some((sim.scene.clone().unwrap_or_else(|| "room".into()), nm() == delirium::nmrs::MARGE));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("RDR2 body folder");
+                    if ui.text_edit_singleline(&mut sim.rig_body).on_hover_text("The folder with your OpenIV export of RDR2's ped ragdolls (packs_0.rpf/packs/base/models/metaped_fragments.rpf: meta_base_male.yft and meta_base_female.yft, \"Save content\"): the .yft.sys files, or OpenIV's meta_base_male_yft folders. Empty: looked for beside the rig folder. Read once per run. Press Enter to load.").lost_focus() {
                         sim.switch_to = Some((sim.scene.clone().unwrap_or_else(|| "room".into()), nm() == delirium::nmrs::MARGE));
                     }
                 });

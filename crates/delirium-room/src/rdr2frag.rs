@@ -11,7 +11,8 @@
 //! (u16 link indices, the count at +0x138), +0x128 each child's mass, +0x140 the group count, +0x146 the child count.
 //! A group: +0x06 its parent group (-1: none; the joints say the same), +0x08 its first child, +0x0a how many, +0x4f its name. The composite:
 //! +0x70 the child bounds, +0x78 their matrices (3 rows of axes, then the place; 0x40 each). A capsule bound: +0x10
-//! its type (1), +0x20 its box's far corner (x, y, z, then the radius), +0x50 its centre of mass. A joint: +0x18 its
+//! its type (1; 3 a box), +0x20 its box's far corner (x, y, z, then the radius; a box's half extents), +0x50 its centre
+//! of mass. A joint: +0x18 its
 //! parent and child link, +0x20 its axes in the parent link (rows), +0x50 its place there, +0x60 and +0x90 the same in
 //! the child link, +0xa0 its half-ranges (lean 1, lean 2, twist), already less RAGE's margin; its axes are the columns there, where a
 //! bound's matrix has them as rows. A link's frame is its
@@ -32,6 +33,8 @@ pub struct Capsule {
     pub at: Vec3,
     /// its centre of mass, in its own frame
     pub cg: Vec3,
+    /// a box instead (a human's feet and hands): its half extents along its own axes
+    pub boxed: Option<Vec3>,
 }
 
 pub struct Link {
@@ -91,13 +94,15 @@ pub fn read(bytes: &[u8]) -> Result<Frag, String> {
     let (bounds, mats) = (r.p(comp + 0x70)?, r.p(comp + 0x78)?);
     let capsule = |k: usize| -> Result<Capsule, String> {
         let b = r.p(bounds + 8 * k)?;
-        if r.u8(b + 0x10)? != 1 {
-            return Err(format!("part {k} isn't a capsule"));
-        }
+        let boxed = match r.u8(b + 0x10)? {
+            1 => false,
+            3 => true,
+            _ => return Err(format!("part {k} isn't a capsule or a box")),
+        };
         let (far, radius) = (r.v(b + 0x20)?, r.f(b + 0x2c)?);
         let m = mats + 0x40 * k;
         Ok(Capsule { mass: r.f(masses + 4 * k)?, inertia: r.v(inertias + 16 * k)?, radius, half: far.y, turn: r.rows(m)?,
-                     at: r.v(m + 48)?, cg: r.v(b + 0x50)? })
+                     at: r.v(m + 48)?, cg: r.v(b + 0x50)?, boxed: boxed.then_some(far) })
     };
     let group_at = r.p(lod + 0xc8)?;
     let mut links = vec![];
