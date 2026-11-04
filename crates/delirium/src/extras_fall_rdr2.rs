@@ -527,6 +527,7 @@ struct HfParams {
     arm_amplitude: f32,
     arm_phase: f32,
     forward_offset: f32,
+    side_d: f32,
     leg_strength: f32,
     balance: bool,
     orientate_to_fall: bool,
@@ -549,7 +550,7 @@ impl HfParams {
         let b = |p: &mut P, n: &str, d: bool| -> Result<bool, Error> { p.get(n).map_or(Ok(d), Value::b) };
         let i = |p: &mut P, n: &str, d: i32| -> Result<i32, Error> { p.get(n).map_or(Ok(d), |v| v.i().or_else(|_| v.b().map(i32::from))) };
         // read by RDR2's handler but not by highFall, or GTA IV's own
-        for n in ["aimAngleBase", "startplayerset", "footVelCompScale", "legL", "sideD", "armPeriod", "landCutOffVelocity", "fowardVelRotation",
+        for n in ["aimAngleBase", "startplayerset", "footVelCompScale", "legL", "armPeriod", "landCutOffVelocity", "fowardVelRotation",
                   "fowardVelCutOff"] {
             f(p, n, 0.0)?;
         }
@@ -564,7 +565,8 @@ impl HfParams {
             catch_fall_cut_off: f(p, "catchFallCutOff", 0.878)?, arms_up: f(p, "armsUp", -3.1)?, leg_radius: f(p, "legRadius", 0.4)?,
             leg_ang_speed: f(p, "legAngSpeed", 7.85)?, leg_asymmetry: f(p, "legAsymmetry", 4.0)?, arms2legs_phase: f(p, "arms2LegsPhase", 0.0)?,
             arms2legs_sync: i(p, "arms2LegsSync", 1)?, arm_ang_speed: f(p, "armAngSpeed", 7.85)?, arm_amplitude: f(p, "armAmplitude", 2.0)?,
-            arm_phase: f(p, "armPhase", 3.1)?, forward_offset: f(p, "forwardOffsetOfLegIK", offset)?, leg_strength: f(p, "legStrength", 12.0)?,
+            arm_phase: f(p, "armPhase", 3.1)?, forward_offset: f(p, "forwardOffsetOfLegIK", offset)?,
+            side_d: f(p, "sideD", 0.2)?, leg_strength: f(p, "legStrength", 12.0)?,
             balance: b(p, "balance", true)?, orientate_to_fall: b(p, "orientateBodyToFallDirection", false)?,
             alan_rickman: b(p, "alanRickman", false)?, orientate_twist: b(p, "orientateTwist", true)?, orientate_max: f(p, "orientateMax", 300.0)?,
             forward_roll: b(p, "forwardRoll", roll)?, zero_pose_roll: b(p, "zeroPoseRoll", false)?, ignore_world: b(p, "ignorWorldCollisions", false)?,
@@ -868,6 +870,8 @@ impl HighFall {
         let (up, v) = (c.up, c.vel);
         let look = c.com - c.m.c + up * c.m.c.dot(up) - up * 2.0;
         self.keep("headLook", format!("headLook start=true alwaysLook=true pos={} vel={} stiffness={b} damping={}", v3s(look), v3s(v), p.body_damping));
+        // pedalLegs' ellipse from the circling error (RDR2's pedalLegs default, 1, without adaptive circling)
+        let mut ellipse = 1.0;
         if p.adaptive_circling {
             let pitch = {
                 let a = c.m.c.z.clamp(-1.0, 1.0).asin();
@@ -881,6 +885,7 @@ impl HighFall {
             } else if e > 2.2 {
                 self.back_pedal = true;
             }
+            ellipse = (e.abs() / 2.2).min(1.0);
         }
         if p.hula {
             if c.m.c.z < -0.2 && self.hula < 0.0 && c.m.b.z < 0.0 && c.angvel.length() < 7.0 {
@@ -895,10 +900,10 @@ impl HighFall {
             self.hula = -0.1;
         }
         let pedal = if self.hula > 0.0 {
-            "radius=1 radiusVariance=0 angularSpeed=8 centreUp=-0.25 legAngleVariance=0 backPedal=true speedAsymmetry=0".to_string()
+            format!("hula=true radius=1 radiusVariance=0 angularSpeed=8 centreUp=-0.25 legAngleVariance=0 backPedal=true speedAsymmetry=0 ellipse={ellipse}")
         } else {
-            format!("radius={} angularSpeed={} centreUp=-0.1 radiusVariance=0.4 legAngleVariance=0.5 speedAsymmetry={} backPedal={}",
-                    p.leg_radius, p.leg_ang_speed, p.leg_asymmetry, self.back_pedal)
+            format!("hula=false radius={} angularSpeed={} centreUp=-0.1 radiusVariance=0.4 legAngleVariance=0.5 speedAsymmetry={} backPedal={} \
+                     ellipse={ellipse}", p.leg_radius, p.leg_ang_speed, p.leg_asymmetry, self.back_pedal)
         };
         self.keep("pedalLegs", format!("pedalLegs start=true pedalLeftLeg=true pedalRightLeg=true legStiffness={b} adaptivePedal4Dragging=false \
                                         pedalOffset=0 centreForwards=0 {pedal}"));
@@ -911,9 +916,11 @@ impl HighFall {
     fn crash(&mut self, c: &mut Ctx) {
         self.ensure("bodyFoetal", "bodyFoetal start=true stiffness=10 mask=ub".into());
         self.ensure("pedalLegs", "pedalLegs start=true pedalLeftLeg=true pedalRightLeg=true radius=0.2 angularSpeed=3 backPedal=false \
-                                  legStiffness=9 radiusVariance=0.2 adaptivePedal4Dragging=false speedAsymmetry=1 pedalOffset=0.05".into());
+                                  legStiffness=9 radiusVariance=0.2 adaptivePedal4Dragging=false speedAsymmetry=1 pedalOffset=0.05 \
+                                  centresideways=-0.2 ellipse=-0.1".into());
+        // set on the running pedalLegs (a start would reload its defaults under the core)
         let k = 0.95 - c.up.dot(c.m.b).clamp(0.85, 0.95);
-        self.out.push(format!("pedalLegs start=true centreForwards={} centreUp={}", 1.5 * k - 0.1, 3.0 * k + 0.05));
+        self.out.push(format!("pedalLegs centreForwards={} centreUp={}", 1.5 * k - 0.1, 3.0 * k + 0.05));
         if c.vel.length() < 0.05 {
             self.feedback(c, true);
         }
@@ -954,7 +961,7 @@ impl HighFall {
         }
         self.ensure("pedalLegs", format!("pedalLegs start=true pedalLeftLeg=true pedalRightLeg=true radius={} angularSpeed={} backPedal=false \
                                           legStiffness={b} adaptivePedal4Dragging=false speedAsymmetry=4 pedalOffset=0 centreForwards={} centreUp=0 \
-                                          radiusVariance=0.1", p.leg_radius, p.leg_ang_speed, p.forward_offset));
+                                          radiusVariance=0.1 centresideways={}", p.leg_radius, p.leg_ang_speed, p.forward_offset, p.side_d));
     }
 
     /// S4 and S6: catchFall, soft all over when not balancing.

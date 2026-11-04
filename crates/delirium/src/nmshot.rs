@@ -359,6 +359,8 @@ pub struct DbmView {
     pub hip_pitch: f32,
     /// the steps it has taken (RDR2's step counter)
     pub steps: u32,
+    /// his standing pelvis height, the leg length the balancer's crouch measures use
+    pub leg: f32,
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {

@@ -244,9 +244,19 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "blendTime", kind: Kind::Float, used: true, doc: "s over which the duck fades back out after duckTime (0.5)" },
         Param { name: "leanTwistStart", kind: Kind::Bool, used: true, doc: "also lean sideways and twist away (true)" },
         Param { name: "bendForward", kind: Kind::Bool, used: true, doc: "bend forwards (true) or back (false)" },
-        Param { name: "duckLeft", kind: Kind::Bool, used: true, doc: "lean and twist to the left (false: right)" },
-        Param { name: "crouch", kind: Kind::Float, used: true, doc: "how much the balancer bends the legs while ducking (0.05; 0: no crouch)" },
-        Param { name: "stiffness", kind: Kind::Float, used: true, doc: "spine and neck stiffness while ducking (10)" },
+        Param { name: "duckLeft", kind: Kind::Bool, used: true, doc: "lean and twist to the left (false: right; RDR2 core: true)" },
+        Param { name: "crouch", kind: Kind::Float, used: true, doc: "how much the balancer bends the legs while ducking (0.05; 0: no crouch; not the RDR2 core's)" },
+        Param { name: "stiffness", kind: Kind::Float, used: true, doc: "spine and neck stiffness while ducking (10; not the RDR2 core's, which sets none)" },
+        Param { name: "newHit", kind: Kind::Bool, used: true, doc: "RDR2 core only: duck now (a duck runs only on a new hit; one within duckTime of the last waits for it) (false)" },
+        Param { name: "legBendMin", kind: Kind::Float, used: true, doc: "RDR2 core only: the knees' dip, least (0.1)" },
+        Param { name: "legBendMax", kind: Kind::Float, used: true, doc: "RDR2 core only: the knees' dip; negative: random between legBendMin and its size (-0.25)" },
+        Param { name: "legBendRate", kind: Kind::Float, used: true, doc: "RDR2 core only: the knees' recovery rate (0.2)" },
+        Param { name: "hipPitchMin", kind: Kind::Float, used: true, doc: "RDR2 core only: the hips' dip, least (0)" },
+        Param { name: "hipPitchMax", kind: Kind::Float, used: true, doc: "RDR2 core only: the hips' dip; negative: random between hipPitchMin and its size (-0.25)" },
+        Param { name: "hipPitchRate", kind: Kind::Float, used: true, doc: "RDR2 core only: the hips' recovery rate (0.2)" },
+        Param { name: "dontLookTime", kind: Kind::Float, used: true, doc: "RDR2 core only: s the neck stays the duck's before headLook may have it (0)" },
+        Param { name: "pointGunType", kind: Kind::Int, used: true, doc: "RDR2 core only: 1, 2: tell pointGun a duck is on (Delirium has no pointGun behaviour) (0)" },
+        Param { name: "duckExag", kind: Kind::Bool, used: true, doc: "RDR2 core only: (RDR2 reads it nowhere) (false)" },
     ] },
     Message { name: "shotSnap", params: &[
         Param { name: "snapMag", kind: Kind::Float, used: true, doc: "the kick's size; negative kicks the other way (0.4)" },
@@ -416,6 +426,9 @@ struct Channel { joint: usize, axis: usize, rate: f32, start: f32, goal: f32, x:
 pub struct Duck {
     mag: [f32; 2], rates: [f32; 5], wait: f32, time: f32, blend: f32, twist: bool, forward: bool, left: bool,
     crouch: f32, stiffness: f32, t: f32, channels: Vec<Channel>,
+    /// RDR2 core: RDR2's duck (rdr2_duck.md), run instead while the core is on
+    r: DuckRdr2,
+    core: bool,
 }
 
 impl Duck {
@@ -426,7 +439,7 @@ impl Duck {
             wait: p.f("timeBeforeDuck", 0.0)?.max(0.0), time: p.f("duckTime", 0.5)?.max(0.0), blend: p.f("blendTime", 0.5)?.max(0.01),
             twist: p.b("leanTwistStart", true)?, forward: p.b("bendForward", true)?, left: p.b("duckLeft", false)?,
             crouch: p.f("crouch", 0.05)?.max(0.0), stiffness: p.f("stiffness", 10.0)?,
-            t: 0.0, channels: vec![],
+            t: 0.0, channels: vec![], r: DuckRdr2::default().parse(p)?, core: false,
         })
     }
 
@@ -462,6 +475,11 @@ impl Duck {
 
 impl Extra for Duck {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            self.core = true;
+            self.r.tick(c, dt);
+            return;
+        }
         self.t += dt;
         let t = self.t - self.wait;
         if t < 0.0 {
@@ -491,12 +509,253 @@ impl Extra for Duck {
     }
 
     fn done(&self) -> bool {
-        self.t > self.wait + self.time + self.blend
+        !self.core && self.t > self.wait + self.time + self.blend
+    }
+
+    /// RDR2 core: a start reloads the defaults and the state (no end routine for the old duck), then a newHit ducks.
+    fn hit(&mut self, p: &mut P) -> Option<Result<(), Error>> {
+        self.core.then(|| Duck::new(p).map(|d| *self = Duck { core: true, ..d }))
+    }
+
+    /// RDR2 core: values sent without start replace the running ones; a newHit ducks.
+    fn update(&mut self, p: &mut P) -> Result<(), Error> {
+        if self.core {
+            self.r = self.r.parse(p)?;
+        }
+        Ok(())
     }
 
     fn stop(&mut self, c: &mut Ctx) {
+        if self.core {
+            self.r.end(c);
+            return;
+        }
         if self.crouch > 0.0 {
             c.out.dbm_leg_offset = Some(0.0);
+        }
+    }
+}
+
+/// One of RDR2's duck ramps: a goal, where it is now and its rate.
+#[derive(Clone, Copy)]
+struct Ramp { goal: f32, current: f32, rate: f32 }
+
+/// The fixed ranges RDR2's duck measures each group's room against, in its ramp order: spine0+1 lean1, spine2+3
+/// lean1, spine lean2, spine twist, neck+head lean1, neck+head lean2, neck+head twist.
+const DUCK_RANGE: [f32; 7] = [0.7, 0.71, 0.688, 0.571, 0.87, 0.7, 1.135];
+
+/// RDR2's duck (rdr2_duck.md). Nothing happens until a newHit: then (after any earlier duck's duckTime) the spine and
+/// neck groups jump from where they are by a granted share of the room left in each (a random budget split three
+/// ways), the balancer's knees and hips dip at once and recover at their rates; after timeBeforeDuck the posture eases
+/// back towards (never past) where it was for duckTime, then to nothing while the duck's weight fades over blendTime.
+/// It never ends by itself. Ours: the requests' weight as a blend of each joint's desired angle towards the duck's;
+/// headLook isn't visible here, so the neck's flag after dontLookTime is not modelled and the end treats headLook as
+/// not running; pointGunType does nothing (Delirium has no pointGun behaviour); the knees' bend now is measured
+/// against the balancer's standing pelvis height (RDR2's leg scale less the sole); the balancer's ownership is per step,
+/// so the dip is asked this step and its recovery the next.
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+struct DuckRdr2 {
+    mag: [f32; 2], leg_bend: [f32; 2], leg_rate: f32, hip_pitch: [f32; 2], hip_rate: f32,
+    head_rate: f32, us_rate: f32, ls_rate: f32, neck_twist_rate: f32, spine_twist_rate: f32,
+    wait: f32, time: f32, blend: f32, dont_look: f32, point_gun: i32, twist: bool, forward: bool, exag: bool, new_hit: bool,
+    left: bool,
+    ramps: [Ramp; 7],
+    /// the pre-hit sums, in ramp order
+    pre: [f32; 7],
+    /// from -timeBeforeDuck at a hit; 100000 while no duck has run
+    timer: f32,
+    started: bool,
+    /// the balancer's dips are ours to release
+    owns: bool,
+    /// the knee and hip targets to recover to, asked the step after the dip
+    recover: Option<(f32, f32)>,
+}
+
+impl Default for DuckRdr2 {
+    fn default() -> DuckRdr2 {
+        DuckRdr2 { mag: [0.2, 1.0], leg_bend: [0.1, -0.25], leg_rate: 0.2, hip_pitch: [0.0, -0.25], hip_rate: 0.2, head_rate: 0.4, us_rate: 0.4,
+                   ls_rate: 0.4, neck_twist_rate: 0.5, spine_twist_rate: 0.5, wait: 0.0, time: 0.5, blend: 0.5, dont_look: 0.0, point_gun: 0,
+                   twist: true, forward: true, exag: false, new_hit: false, left: true,
+                   ramps: [Ramp { goal: 0.0, current: 0.0, rate: 100000.0 }; 7], pre: [0.0; 7], timer: 100000.0, started: false, owns: false,
+                   recover: None }
+    }
+}
+
+/// RDR2's random three-way split of a budget: None when the demands fit (each channel gets its full room), else each
+/// channel's base less its demand plus its random share of the budget.
+fn duck_split(c: &mut Ctx, budget: f32, base: [f32; 3], demand: [f32; 3], weight: [f32; 3]) -> Option<[f32; 3]> {
+    if budget <= 0.0 {
+        return Some(std::array::from_fn(|k| base[k] - demand[k]));
+    }
+    let phi: [f32; 3] = std::array::from_fn(|k| demand[k] * weight[k] / budget);
+    if phi.iter().sum::<f32>() <= 1.0 {
+        return None;
+    }
+    const ORDERS: [[usize; 3]; 6] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    let [f, s, t] = ORDERS[(c.ch.random_bits() % 6) as usize];
+    let mut p = [0.0; 3];
+    let (lo, hi) = ((1.0 - phi[s] - phi[t]).max(0.0), phi[f].min(1.0));
+    p[f] = lo + c.ch.random() * (hi - lo);
+    let left = 1.0 - p[f];
+    let (lo, hi) = ((left - phi[t]).max(0.0), phi[s].min(left));
+    p[s] = lo + c.ch.random() * (hi - lo);
+    p[t] = left - p[s];
+    Some(std::array::from_fn(|k| base[k] - demand[k] + p[k] * budget / weight[k]))
+}
+
+impl DuckRdr2 {
+    /// The message's values over these (RDR2's defaults, or the running ones for a message without start).
+    fn parse(mut self, p: &mut P) -> Result<DuckRdr2, Error> {
+        self.mag = [p.f("magMin", self.mag[0])?, p.f("magMax", self.mag[1])?];
+        self.leg_bend = [p.f("legBendMin", self.leg_bend[0])?, p.f("legBendMax", self.leg_bend[1])?];
+        self.hip_pitch = [p.f("hipPitchMin", self.hip_pitch[0])?, p.f("hipPitchMax", self.hip_pitch[1])?];
+        (self.leg_rate, self.hip_rate) = (p.f("legBendRate", self.leg_rate)?, p.f("hipPitchRate", self.hip_rate)?);
+        (self.head_rate, self.us_rate, self.ls_rate) = (p.f("headRate", self.head_rate)?, p.f("usRate", self.us_rate)?, p.f("lsRate", self.ls_rate)?);
+        self.neck_twist_rate = p.f("neckTwistRate", self.neck_twist_rate)?;
+        self.spine_twist_rate = p.f("spineTwistRate", self.spine_twist_rate)?;
+        (self.wait, self.time, self.blend) = (p.f("timeBeforeDuck", self.wait)?, p.f("duckTime", self.time)?, p.f("blendTime", self.blend)?);
+        (self.dont_look, self.point_gun) = (p.f("dontLookTime", self.dont_look)?, p.i("pointGunType", self.point_gun)?);
+        (self.twist, self.forward, self.exag) = (p.b("leanTwistStart", self.twist)?, p.b("bendForward", self.forward)?, p.b("duckExag", self.exag)?);
+        (self.new_hit, self.left) = (p.b("newHit", self.new_hit)?, p.b("duckLeft", self.left)?);
+        if self.blend <= 0.01 {
+            self.blend = 0.0999;
+        }
+        Ok(self)
+    }
+
+    /// A new hit (section 3), unless the last duck is still within its duckTime (then it waits).
+    fn hit(&mut self, c: &mut Ctx) {
+        if self.time >= self.timer {
+            return;
+        }
+        (self.timer, self.started, self.owns, self.new_hit) = (-self.wait, true, true, false);
+        let sigma = if self.left { 1.0 } else { -1.0 };
+        let mu = self.mag[0] + c.ch.random() * (self.mag[1] - self.mag[0]);
+        let (s, n) = (*SPINE(), *NECK());
+        let a = |j: usize| c.ch.actual(j, c.b.frames);
+        let (sp, nk) = (s.map(a), n.map(a));
+        let sum = |v: &[[f32; 3]], k: usize| v.iter().map(|x| x[k]).sum::<f32>();
+        self.pre = [sp[0][0] + sp[1][0], sp[2][0] + sp[3][0], sum(&sp, 1), sum(&sp, 2), sum(&nk, 0), sum(&nk, 1), sum(&nk, 2)];
+        let signed: [f32; 7] = std::array::from_fn(|k| if matches!(k, 2 | 3 | 5 | 6) { sigma * self.pre[k] } else { self.pre[k] });
+        let room: [f32; 7] = std::array::from_fn(|k| (DUCK_RANGE[k] - signed[k].max(0.0)) / DUCK_RANGE[k]);
+        let [ra, rb, rd, re, rc, rf, rg] = room;
+        let m = (mu * (ra + rb + rc + (rd + re + rf + rg) * 0.5)).max(0.5);
+        let mut factor = [1.0; 7];
+        if let Some(x) = duck_split(c, m, [3.0, 2.0, 2.0], [ra + rb + rc, rd + rf, re + rg], [1.0, 0.5, 0.5]) {
+            let one = [1.0; 3];
+            let f1 = duck_split(c, x[0], one, [ra, rb, rc], one).unwrap_or(one);
+            let f2 = duck_split(c, x[1], [1.0, 1.0, 0.0], [rd, rf, 0.0], one).unwrap_or(one);
+            let f3 = duck_split(c, x[2], [1.0, 1.0, 0.0], [re, rg, 0.0], one).unwrap_or(one);
+            factor = [f1[0], f1[1], f2[0], f3[0], f1[2], f2[1], f3[1]];
+        }
+        for k in 0..7 {
+            let grant = factor[k] - (1.0 - room[k]);
+            let x = if grant > 1e-4 && signed[k] <= 0.0 { 0.0 } else { signed[k] };
+            let r = &mut self.ramps[k];
+            r.current = if matches!(k, 2 | 3 | 5 | 6) { sigma * (x + grant) } else { x + grant };
+        }
+        // the knees: their bend now (from the pelvis's height over the lower foot), dipped and recovering to it
+        let zp = c.b.part(0).m.d.z;
+        let zf = [2, 3].map(|i| c.b.part(crate::nmshot::limb(i).p[3]).m.d.z);
+        let leg = c.dbm.map_or(0.0, |d| d.leg);
+        let k0 = if leg > 0.1 { (0.79235 * (0.99 - (zp - zf[0]).max(zp - zf[1]) / leg)).clamp(0.0, 0.35) } else { 0.0 };
+        let [lo, hi] = self.leg_bend;
+        let dip = if hi >= 0.0 { hi } else { lo + c.ch.random() * (hi.abs() - lo) };
+        let k = (dip + k0).clamp(0.0, 0.35);
+        // the hips: their pitch now from the pelvis (RDR2's sign; ours is the other way), dipped and recovering
+        let (pm, up) = (c.b.part(0).m, c.up);
+        let now = if pm.b.dot(up).abs() >= 0.8 { 0.0 } else {
+            (std::f32::consts::FRAC_PI_2 - (-pm.c.dot(up)).clamp(-1.0, 1.0).acos()).clamp(-1.2, 1.2)
+        };
+        let h0 = now.clamp(-1.5, 1.5);
+        let [lo, hi] = self.hip_pitch;
+        let eta = if hi >= 0.0 { hi } else { lo + c.ch.random() * (hi.abs() - lo) };
+        let pitch = (h0 - eta).clamp(-1.5, 1.5);
+        // owner 9 for the knees; the hips only when nobody owns them (owner 0 loses to any asker)
+        c.out.dbm_crouch.extend([Crouch::Knee(9, -k, f32::INFINITY), Crouch::Hip(0, -pitch.clamp(-3.5, 3.5), f32::INFINITY)]);
+        self.recover = Some((-k0, -h0.clamp(-2.0, 2.0)));
+    }
+
+    fn release(&mut self, c: &mut Ctx) {
+        self.owns = false;
+        c.out.dbm_crouch.extend([Crouch::ReleaseKnee(self.leg_rate), Crouch::ReleaseHip(self.hip_rate)]);
+    }
+
+    /// RDR2's tick (section 4).
+    fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if let Some((k, h)) = self.recover.take().filter(|_| self.owns) {
+            c.out.dbm_crouch.extend([Crouch::Knee(9, k, self.leg_rate), Crouch::Hip(0, h, self.hip_rate)]);
+        }
+        if self.new_hit {
+            self.hit(c);
+        }
+        let t = self.timer;
+        if t >= self.time + self.blend {
+            self.end(c);
+        } else {
+            if t > 0.0 {
+                let hold = t <= self.time;
+                let rates = [self.ls_rate, self.us_rate, self.spine_twist_rate, self.spine_twist_rate, self.head_rate, self.neck_twist_rate,
+                             self.neck_twist_rate];
+                for k in 0..7 {
+                    let lean1 = matches!(k, 0 | 1 | 4);
+                    let pre = self.pre[k];
+                    let r = &mut self.ramps[k];
+                    r.goal = if hold && (lean1 || self.twist) { pre } else { 0.0 };
+                    r.rate = rates[k];
+                    r.current += (r.goal - r.current).clamp(-r.rate * dt, r.rate * dt);
+                    if hold && lean1 {
+                        r.current = r.current.max(pre);
+                    } else if hold && self.twist {
+                        r.current = if self.left { r.current.max(pre) } else { r.current.min(pre) };
+                    }
+                }
+                let w = if hold { 1.0 } else { ((self.time + self.blend - t) / self.blend).max(0.0) };
+                let kappa = if self.forward { 0.5 } else { -0.5 };
+                if self.mag[0].abs() > 1.2e-7 && self.mag[1].abs() > 1.2e-7 {
+                    let x = self.ramps.map(|r| r.current);
+                    let mut put = |j: usize, k: usize, v: f32| {
+                        let d = &mut c.ch.eff[j].desired[k];
+                        *d += (v - *d) * w;
+                    };
+                    for (i, j) in SPINE().iter().copied().enumerate() {
+                        put(j, 0, kappa * if i < 2 { x[0] } else { x[1] });
+                        put(j, 1, 0.25 * x[2]);
+                        put(j, 2, 0.25 * x[3]);
+                    }
+                    for j in NECK().iter().copied() {
+                        put(j, 0, kappa * x[4]);
+                        put(j, 1, 0.5 * x[5]);
+                        put(j, 2, 0.5 * x[6]);
+                    }
+                }
+            }
+            if t > self.time && self.owns {
+                self.release(c);
+            }
+        }
+        self.timer += dt;
+    }
+
+    /// RDR2's end of a duck (section 5): the balancer let go; stopped mid-duck, the spine's angles zeroed; the neck's
+    /// too (headLook taken as not running).
+    fn end(&mut self, c: &mut Ctx) {
+        if !std::mem::replace(&mut self.started, false) {
+            return;
+        }
+        if self.timer > self.time && self.owns {
+            self.release(c);
+        }
+        if self.timer > 0.0 {
+            if self.timer < self.time + self.blend {
+                for j in SPINE().iter().copied() {
+                    c.ch.eff[j].desired = [0.0; 3];
+                }
+            }
+            for j in NECK().iter().copied() {
+                c.ch.eff[j].desired = [0.0; 3];
+            }
         }
     }
 }

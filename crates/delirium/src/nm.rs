@@ -215,6 +215,8 @@ pub struct PedalLegs {
     pub leg_angle_variance: f32,
     pub centre_forwards: f32,
     pub centre_up: f32,
+    /// RDR2's further parameters (read with the RDR2 core)
+    pub rdr2: crate::nmpd::Rdr2Params,
 }
 
 #[derive(Clone, Copy)]
@@ -250,7 +252,7 @@ impl Default for PedalLegs {
     fn default() -> PedalLegs {
         PedalLegs { leg_stiffness: delirium_data::kv!(31), radius: delirium_data::kv!(17), angular_speed: delirium_data::kv!(31), pedal_offset: delirium_data::kv!(9), speed_asymmetry: delirium_data::kv!(65), back_pedal: false,
                     adaptive: false, drag_multiplier: delirium_data::kv!(24), left: true, right: true, radius_variance: delirium_data::kv!(116), random_seed: delirium_data::kv!(197 int),
-                    leg_angle_variance: 0.5, centre_forwards: 0.0, centre_up: 0.0 }
+                    leg_angle_variance: 0.5, centre_forwards: 0.0, centre_up: 0.0, rdr2: Default::default() }
     }
 }
 
@@ -827,6 +829,7 @@ impl Agent {
                 }
             }
             "pointArm" => st.point_arm = match self.nm_pa_msg { Some(Some(p)) => p, _ => self.nm_pa.p },
+            "pedalLegs" if self.rdr2_core.is_some() && self.nm_pd.active => self.nm_pd.held(&mut st.pedal_legs),
             "bodyBalance" => {
                 if let Some(bb) = self.balance.as_ref().and_then(|b| b.bb.as_ref()) {
                     st.body_balance = bb.p;
@@ -879,11 +882,8 @@ impl Agent {
                 }
             }
             "braceForImpact" => { let p = &st.brace_for_impact; self.brace_at(p.pos, p.look, p.instance_index); }
-            // RDR2 core: a running pedalLegs takes new backPedal, variances and speed (injuredOnGround re-draws them)
-            "pedalLegs" if self.rdr2_core.is_some() => {
-                let (p, d) = (&st.pedal_legs, &mut self.nm_pd);
-                (d.back_pedal, d.radius_variance, d.leg_angle_variance, d.angular_speed) = (p.back_pedal, p.radius_variance, p.leg_angle_variance, p.angular_speed);
-            }
+            // RDR2 core: a running pedalLegs takes the message's values over its own (injuredOnGround re-draws some)
+            "pedalLegs" if self.rdr2_core.is_some() => self.nm_pd.take(&st.pedal_legs),
             _ => {}
         }
     }
@@ -1683,6 +1683,8 @@ impl Agent {
             }
         }
         if let Some(ch) = self.ch.as_mut().filter(|_| nm_tick) {
+            // RDR2 core: bodyFoetal's requests are its own slot's (0x30)
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&ch.eff, 0x20); }
             match self.nm_bf_msg.take() {
                 Some(Some(p)) => {
                     self.nm_bf = crate::nmbf::Foetal { active: self.nm_bf.active, ..p };
@@ -1692,6 +1694,7 @@ impl Agent {
                 None => {}
             }
             self.nm_bf.tick(ch);
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&ch.eff, 0x30); }
         }
         let hl_was = self.nm_head.active;
         let msgs = (self.nm_cf_msg.is_some() || self.nm_cf.as_ref().is_some_and(|f| f.active), self.nm_ru_msg.is_some() || self.nm_ru.active);
@@ -1734,7 +1737,7 @@ impl Agent {
             c.shot_on = self.nm_shot.is_some();
             c.dbm = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).filter(|_| !self.fallen).map(|d| crate::nmshot::DbmView {
                 stepping: d.f.stepping, planted: d.pv.planted, failing: d.p.rdr2.is_some_and(|r| r.failing.is_some()),
-                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps) });
+                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps), leg: d.p.pelvis_height });
             if let Some(p) = self.nm_cf_msg.take() {
                 let b = walk_actives!(self);
                 start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);
@@ -1827,11 +1830,11 @@ impl Agent {
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x58); }
             if let Some(m) = self.nm_pd_msg.take() {
                 let p = &mut self.nm_pd;
-                (p.leg_stiffness, p.radius, p.angular_speed) = (m.leg_stiffness, m.radius, m.angular_speed);
-                (p.pedal_offset, p.speed_asymmetry, p.back_pedal) = (m.pedal_offset, m.speed_asymmetry, m.back_pedal);
-                (p.adaptive, p.drag_multiplier) = (m.adaptive, m.drag_multiplier);
-                (p.left, p.right, p.radius_variance, p.random_seed) = (m.left, m.right, m.radius_variance, m.random_seed);
-                (p.leg_angle_variance, p.centre_forwards, p.centre_up) = (m.leg_angle_variance, m.centre_forwards, m.centre_up);
+                p.take(&m);
+                // RDR2 core: the message starts RDR2's pedalLegs (braceForImpact's own pedalling stays GTA IV's)
+                if !p.active {
+                    p.r2 = c.ch.rdr2;
+                }
                 p.activate(&mut c);
             }
             if self.pedal.is_none() && !self.nm_br.active && !self.nm_hf.active() {
@@ -2705,7 +2708,7 @@ impl PointGun {
             let twist = lo + (hi - lo) * a.random.next();
             let arm_straightness = delirium_data::kv!(18) + delirium_data::kv!(60) * a.random.next();
             let p = crate::nmpa::PointArmParams { target, twist, arm_straightness, instance_index: -1, point_swing_limit: 1.0,
-                                                  use_zero_pose_when_not_pointing: true, ..a.nm_pa.p };
+                                                  use_zero_pose_when_not_pointing: true, rdr2: None, ..a.nm_pa.p };
             a.point_arm(Some(p));
             self.started = true;
         } else {
