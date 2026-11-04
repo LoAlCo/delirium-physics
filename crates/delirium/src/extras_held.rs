@@ -62,6 +62,61 @@ pub static MESSAGES: [Message; 15] = [
         Param { name: "headLookPos", kind: Kind::Vec3, used: true, doc: "(zero: the pull point)" },
         Param { name: "headLookInstanceIndex", kind: Kind::Int, used: true, doc: "(-1)" },
         Param { name: "headLookAtVelProb", kind: Kind::Float, used: false, doc: "(not done)" },
+        Param { name: "ropePos", kind: Kind::Vec3, used: true, doc: "RDR2 core: the rope's anchor, world (zero: point; both zero: 2 m in front of his chest)" },
+        Param { name: "ropePart", kind: Kind::Int, used: true, doc: "RDR2 core: the part the rope is on (part)" },
+        Param { name: "loosetimetorso", kind: Kind::Float, used: true, doc: "RDR2 core: s after the yank his upper body is loose (0.3)" },
+        Param { name: "loosetimelegs", kind: Kind::Float, used: true, doc: "RDR2 core: and his legs (0.1)" },
+        Param { name: "loosestrength", kind: Kind::Float, used: true, doc: "RDR2 core: the damping and muscle scale while loose (0.1)" },
+        Param { name: "spinelean1limit", kind: Kind::Float, used: true, doc: "RDR2 core: (taken, not done: the spine's lean limits aren't raised here) (0.5)" },
+        Param { name: "spinelean2limit", kind: Kind::Float, used: true, doc: "RDR2 core: (taken, not done) (0.3)" },
+        Param { name: "torqueexaggeratejumplimit", kind: Kind::Float, used: true, doc: "RDR2 core: (taken, not done) (0.2)" },
+        Param { name: "leanhipsmin", kind: Kind::Float, used: true, doc: "RDR2 core: the hips' lean toward the rope, least (-0.4)" },
+        Param { name: "leanhipsmax", kind: Kind::Float, used: true, doc: "RDR2 core: most (0.2)" },
+        Param { name: "leanmin", kind: Kind::Float, used: true, doc: "RDR2 core: the body's lean toward the rope, least (-0.1)" },
+        Param { name: "leanmax", kind: Kind::Float, used: true, doc: "RDR2 core: most (-0.3)" },
+        Param { name: "restartUpness", kind: Kind::Float, used: true, doc: "RDR2 core: down, his uprightness above which he's back on his feet (1.1: never)" },
+        Param { name: "headlookprob", kind: Kind::Vec3, used: true, doc: "RDR2 core: the head's chances of headLookPos, along his motion, still (0.3,0.3,0.3)" },
+        Param { name: "legAmplitude", kind: Kind::Float, used: true, doc: "RDR2 core: down, the legs' kicks (0.4)" },
+        Param { name: "grabspinefreq", kind: Kind::Float, used: true, doc: "RDR2 core: down, the spine's least writhe rate while grabbing (0.5)" },
+        Param { name: "spinefreq", kind: Kind::Float, used: true, doc: "RDR2 core: down, the spine's writhe rate (2.5)" },
+        Param { name: "spsidefreq", kind: Kind::Float, used: true, doc: "RDR2 core: down, the side writhe's rate (2)" },
+        Param { name: "spsideamp", kind: Kind::Float, used: true, doc: "RDR2 core: and size (1)" },
+        Param { name: "rollhelpback", kind: Kind::Float, used: true, doc: "RDR2 core: down, the roll torque on his back (0)" },
+        Param { name: "rollhelpmoving", kind: Kind::Float, used: true, doc: "RDR2 core: moving (0)" },
+        Param { name: "rollhelpbackmoving", kind: Kind::Float, used: true, doc: "RDR2 core: on his back, moving (0)" },
+        Param { name: "movingthresh", kind: Kind::Float, used: true, doc: "RDR2 core: m/s above which he's moving (1)" },
+        Param { name: "rollType", kind: Kind::Int, used: true, doc: "RDR2 core: 1: no roll help on his back (0)" },
+        Param { name: "groundneckstiffness", kind: Kind::Float, used: true, doc: "RDR2 core: down, the stable neck (11)" },
+        Param { name: "ropeendfriction", kind: Kind::Float, used: true, doc: "RDR2 core: (taken, not done: no per-part friction here) (0.5)" },
+        Param { name: "otherendfriction", kind: Kind::Float, used: true, doc: "RDR2 core: (taken, not done) (2)" },
+        Param { name: "lassoedtype", kind: Kind::Int, used: true, doc: "RDR2 core: 0 round the neck, 1 the chest and arms, 2 the feet (1)" },
+        Param { name: "grabPart", kind: Kind::Int, used: true, doc: "RDR2 core: the part whose frame the rope grabs are in (10)" },
+        Param { name: "grabposl", kind: Kind::Vec3, used: true, doc: "RDR2 core: the left hand's grab in that frame (0.07,0.05,-0.051)" },
+        Param { name: "grabnormall", kind: Kind::Vec3, used: true, doc: "RDR2 core: (taken: the wrists aren't turned) (0,0,-1)" },
+        Param { name: "grabposr", kind: Kind::Vec3, used: true, doc: "RDR2 core: the right hand's (0.09,-0.05,-0.051)" },
+        Param { name: "grabnormalr", kind: Kind::Vec3, used: true, doc: "RDR2 core: (taken) (0,0,-1)" },
+        Param { name: "grabpointamp", kind: Kind::Vec3, used: true, doc: "RDR2 core: the grabs clawing about it, m (zero)" },
+        Param { name: "grabpointfreq", kind: Kind::Vec3, used: true, doc: "RDR2 core: its rates (4,5,3)" },
+        Param { name: "grabhandsoffset", kind: Kind::Vec3, used: true, doc: "RDR2 core: the hands apart when both grab (zero)" },
+        Param { name: "feetprob", kind: Kind::Vec3, used: true, doc: "RDR2 core: down, round the neck: the arms' chances of reach, windmill (0.5,0.5,0)" },
+        Param { name: "spineprob", kind: Kind::Vec3, used: true, doc: "RDR2 core: down: the spine's chances of still, writhe, big writhe (0.6,0.4,0.05)" },
+        Param { name: "minstatetime", kind: Kind::Float, used: true, doc: "RDR2 core: s a pick lasts, least (1)" },
+        Param { name: "maxstatetime", kind: Kind::Float, used: true, doc: "RDR2 core: most (1.2)" },
+        Param { name: "timetodie", kind: Kind::Float, used: true, doc: "RDR2 core: s down before he goes limp, with the feedback yanked (15)" },
+        Param { name: "frictionsim", kind: Kind::Float, used: true, doc: "RDR2 core: down, the sliding drag on the roped end, N (70)" },
+        Param { name: "frictionsimairborne", kind: Kind::Float, used: true, doc: "RDR2 core: off the ground over 0.5 s (70)" },
+        Param { name: "bumpsim", kind: Kind::Float, used: true, doc: "RDR2 core: down, a bump off the ground (400)" },
+        Param { name: "bumpsimprob", kind: Kind::Float, used: true, doc: "RDR2 core: its chance a step at 60 Hz (0.08)" },
+        Param { name: "draggedbystirrup", kind: Kind::Bool, used: true, doc: "RDR2 core: (false)" },
+        Param { name: "draggedbyanimal", kind: Kind::Bool, used: true, doc: "RDR2 core: the head looks at the rope (false)" },
+        Param { name: "DraggedByCart", kind: Kind::Int, used: true, doc: "RDR2 core: (taken, not done) (0)" },
+        Param { name: "stableneck", kind: Kind::Bool, used: true, doc: "RDR2 core: the neck held steady (false)" },
+        Param { name: "stunnedtime", kind: Kind::Float, used: true, doc: "RDR2 core: s limp once down (0)" },
+        Param { name: "stunnedblendout", kind: Kind::Float, used: true, doc: "RDR2 core: s coming out of it (0)" },
+        Param { name: "bolas", kind: Kind::Bool, used: true, doc: "RDR2 core: a bolas (false)" },
+        Param { name: "bolasForces", kind: Kind::Bool, used: true, doc: "RDR2 core: its spinning impulses (false)" },
+        Param { name: "bolasTime", kind: Kind::Float, used: true, doc: "RDR2 core: s they last (0.35)" },
+        Param { name: "bolasDir", kind: Kind::Vec3, used: true, doc: "RDR2 core: the spin's axis source (1,0,0)" },
     ] },
     Message { name: "dragged", params: &[
         Param { name: "armStiffness", kind: Kind::Float, used: true, doc: "(11)" },
@@ -386,6 +441,8 @@ pub struct Yanked {
     still: f32,
     finished: bool,
     out: Vec<String>,
+    /// RDR2 core: RDR2's yanked, run in this one's place
+    r2: Box<crate::extras_ysk_rdr2::YankedRdr2>,
 }
 
 impl Yanked {
@@ -393,7 +450,9 @@ impl Yanked {
         let _ = (p.i("stepsTillStartEnd", 0)?, p.f("perStepReduction", 0.0)?, p.f("footFriction", 1.0)?);
         let _ = (p.f("turnThresholdMin", 0.0)?, p.f("turnThresholdMax", 0.0)?, p.f("groundFriction", 1.0)?);
         let _ = p.f("headLookAtVelProb", 0.0)?;
+        let r2 = Box::new(crate::extras_ysk_rdr2::YankedRdr2::new(crate::extras_ysk_rdr2::YankedParams::new(p)?));
         Ok(Yanked {
+            r2,
             point: p.v("point", Vec3::ZERO)?,
             part: p.i("part", CHEST() as i32)?.clamp(0, delirium_data::kv!(127 int)) as usize,
             force: p.f("force", 1.0)?,
@@ -441,6 +500,16 @@ fn ramp(a: f32, b: f32, t: f32, t0: f32, time: f32) -> f32 {
 
 impl Extra for Yanked {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            self.r2.tick(c, dt);
+            // ours: the room's stand-in rope pulls as it does without the core (RDR2's rope is the game's)
+            if self.t < self.pull && self.force > 0.0 {
+                let w = weight(c);
+                spring(c, self.part, self.r2.p.rope, w * delirium_data::kv!(5), w, w * self.force);
+            }
+            self.t += dt;
+            return;
+        }
         if self.t == 0.0 {
             if self.point == Vec3::ZERO {
                 self.point = pos(c, CHEST()) + facing(c) * 2.0;
@@ -514,11 +583,17 @@ impl Extra for Yanked {
     }
 
     fn lines(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.out)
+        let mut v = std::mem::take(&mut self.out);
+        v.extend(self.r2.lines());
+        v
     }
 
     fn done(&self) -> bool {
         self.finished
+    }
+
+    fn stop(&mut self, c: &mut Ctx) {
+        self.r2.stop(c);
     }
 }
 
@@ -917,6 +992,7 @@ struct AnimPoseRdr2 {
     grav: [f32; 5],
     connected: [i32; 4],
     source: i32,
+    zmp: bool,
 }
 
 /// RDR2's animPose limb masks, in its parameter order (the spine's stiffness mask takes the neck and head, its
@@ -974,9 +1050,10 @@ impl AnimPose {
         for (g, name) in grav.iter_mut().zip(["LeftArm", "RightArm", "Spine", "LeftLeg", "RightLeg"]) {
             *g = p.f(&format!("gravComp{name}"), -1.0)?;
         }
-        let _ = (p.b("useZMPGravityCompensation", true)?, p.i("dampenSideMotionInstanceHandle", 0)?);
+        let zmp = p.b("useZMPGravityCompensation", true)?;
+        let _ = p.i("dampenSideMotionInstanceHandle", 0)?;
         Ok(AnimPoseRdr2 {
-            global, mask, limbs, grav,
+            global, mask, limbs, grav, zmp,
             over: [p.b("overideHeadlook", false)?, p.b("overidePointArm", false)?, p.b("overidePointGun", false)?],
             connected: [p.i("connectedLeftHand", 0)?, p.i("connectedRightHand", 0)?, p.i("connectedLeftFoot", -2)?, p.i("connectedRightFoot", -2)?],
             source: p.i("animSource", 0)?,
@@ -990,8 +1067,8 @@ impl AnimPose {
     /// own gravity opposition. The overrides make headLook and pointArm yield (nm.rs); animPose drives those joints.
     /// Ours or left out: Delirium has one incoming pose, so every animSource below 3 reads it, and without one the
     /// limbs go to the pose he was in when he went ragdoll (the effectors' zero); no instances, so no side-motion
-    /// damping (dampenSideMotionInstanceHandle); the ZMP gravity-compensation flag and the connected-joint flags have
-    /// no reader in Delirium.
+    /// damping (dampenSideMotionInstanceHandle). The ZMP gravity-compensation flag and the connected hands and feet
+    /// go to the core's gravity opposition (nmdbm.rs `oppose_gravity`).
     fn tick_rdr2(&mut self, c: &mut Ctx) {
         self.r2_on = true;
         let r = &self.rdr2;
@@ -1017,6 +1094,7 @@ impl AnimPose {
             }
         }
         if g >= -1e-5 {
+            c.ch.core.zmp = r.zmp;
             for &j in &mine {
                 c.ch.eff[j].oppose_gravity = g;
             }
@@ -1036,6 +1114,19 @@ impl AnimPose {
                 c.ch.eff[l.e[3]].set_stiffness(16.0, 1.0, Some(12.0));
             }
         }
+        if r.grav.iter().any(|&g| g >= -1e-4) {
+            c.ch.core.zmp = r.zmp;
+        }
+        // the connected flags: -1 takes the hand or foot from contact at the next gravity pass, 0 / 1 set it
+        // (a hand stays so after), anything else leaves it (a foot is from contact every step anyway)
+        for (i, &v) in r.connected.iter().enumerate() {
+            match (i, v) {
+                (0 | 1, -1) => c.ch.core.hands_auto[i] = true,
+                (0 | 1, 0 | 1) => (c.ch.core.hands[i], c.ch.core.hands_auto[i]) = (v == 1, false),
+                (_, 0 | 1) => c.ch.core.feet[i - 2] = Some(v == 1),
+                _ => {}
+            }
+        }
         for (i, m) in ["ul", "ur", "us", "ll", "lr"].into_iter().enumerate() {
             if r.grav[i] >= -1e-5 {
                 for j in Character::mask(m) {
@@ -1048,11 +1139,12 @@ impl AnimPose {
 
 impl Extra for AnimPose {
     fn stop(&mut self, c: &mut Ctx) {
-        // RDR2's deactivate: gravity opposition off on effectorMask (and the ZMP flag back on, which has no reader)
+        // RDR2's deactivate: gravity opposition off on effectorMask, and the ZMP flag back on
         if self.r2_on {
             for j in Character::mask(&self.rdr2.mask) {
                 c.ch.eff[j].oppose_gravity = 0.0;
             }
+            c.ch.core.zmp = true;
         }
     }
 
@@ -1394,19 +1486,26 @@ impl Extra for Breathe {
     }
 }
 
-pub struct SoftKeyframe { follow: f32, most: f32, slower: bool, yaw: f32, target: Vec3, parts: Vec<usize>, pose: Vec<Vec3> }
+pub struct SoftKeyframe { follow: f32, most: f32, slower: bool, yaw: f32, target: Vec3, parts: Vec<usize>, pose: Vec<Vec3>,
+                          r2: Option<Box<crate::extras_ysk_rdr2::KeyframeRdr2>> }
 
 impl SoftKeyframe {
     fn new(p: &mut P) -> Result<SoftKeyframe, Error> {
         let (follow, most, slower, yaw, target) = (p.f("followMultiplier", delirium_data::kv!(31))?, p.f("maxAcceleration", delirium_data::kv!(25))?,
                                                    p.b("goSlowerWhenWeaker", true)?, p.f("yawOffset", 0.0)?, p.v("targetPosition", Vec3::ZERO)?);
-        let parts = Character::mask(&p.s("mask", "fb")?).into_iter().map(|j| j + 1).collect();
-        Ok(SoftKeyframe { follow, most, slower, yaw, target, parts, pose: vec![] })
+        let mask = p.s("mask", "fb")?;
+        let parts = Character::mask(&mask).into_iter().map(|j| j + 1).collect();
+        // RDR2 core: RDR2's keyframe soft keying of the mask, maxAcceleration its clamp when given
+        let r2 = Some(Box::new(crate::extras_ysk_rdr2::KeyframeRdr2::soft(&mask, p.get("maxAcceleration").is_some().then_some(most))));
+        Ok(SoftKeyframe { follow, most, slower, yaw, target, parts, pose: vec![], r2 })
     }
 }
 
 impl Extra for SoftKeyframe {
     fn tick(&mut self, c: &mut Ctx, _dt: f32) {
+        if c.ch.rdr2 && let Some(k) = self.r2.as_mut() {
+            return k.tick(c, _dt);
+        }
         let pelvis = pos(c, 0);
         if self.pose.is_empty() {
             self.pose = self.parts.iter().map(|&k| pos(c, k) - pelvis).collect();
@@ -1487,7 +1586,7 @@ impl SplitBody {
         let recoil_g = (p.f("recoilRelaxAmount", 0.5)?, p.f("recoilRelaxTime", delirium_data::kv!(24))?);
         let breathe = Breathe { s: s.0, joints: Character::mask("us"), scale: p.f("breathingScale", 1.0)?, t: 0.0, last: 0.0, wrote: vec![] };
         let _ = p.b("fireWeapon", false)?;
-        Ok(SplitBody { aim, pose_mask, hard, soft: SoftKeyframe { follow: delirium_data::kv!(31), most: delirium_data::kv!(25), slower: true, yaw: 0.0, target: Vec3::ZERO, parts: soft_parts, pose: vec![] },
+        Ok(SplitBody { aim, pose_mask, hard, soft: SoftKeyframe { follow: delirium_data::kv!(31), most: delirium_data::kv!(25), slower: true, yaw: 0.0, target: Vec3::ZERO, parts: soft_parts, pose: vec![], r2: None },
                        grav, s, ctrl, gun, support, constrain, orient, limits, stable: stable.map(|_| stable_g), recoil: recoil.then_some(recoil_g),
                        breathe, pose: vec![], hold: vec![], turn: Quat::IDENTITY, relax: 0.0, kick: false, cons: vec![], start: vec![], t: 0.0 })
     }

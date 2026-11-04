@@ -5,7 +5,7 @@ use crate::Vx;
 use crate::prelude::*;
 
 use crate::collision::Collision;
-use crate::nmrs::{Character, ANKLE, HIP, KNEE, SPINE};
+use crate::nmrs::{Character, ANKLE, HIP, KNEE, SPINE, WRIST};
 use crate::ragdoll::{Build, Ragdoll};
 use crate::rigid::qrot;
 
@@ -896,36 +896,44 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     let mut bal = [0.0f32; 2];
     // RDR2's ankle balance twist: the twist laying the foot on the ground / on the tilted normal
     let mut twist_flat = [None; 2];
-    // RDR2 (rdr2_balancer3.md §3): moving backward along the back axis; the stance ankle's knee predicted from the
-    // hip's desired angles only then and off the ankle balance (whose pitch takes the actual knee and foot); in
-    // stagger mode moving backward (more than 0.3 of the speed), the swing ankle's shin term adds its damping part
-    let (back, balancing) = match p.rdr2 {
-        Some(r) => {
-            let v = horizontal(s.vel, up);
-            let dir = v.normalize_or_zero().dot(horizontal(s.m.c, up).normalize_or_zero());
-            ((dir > 0.0, r.stagger && dir > 0.3), aim.is_some() && s.vel.length() < 1.0)
-        }
-        None => ((false, false), false),
+    // RDR2 (0x2aae0b4, rdr2_balancer3.md §3.2 and §9): off the ankle balance, the stance ankle aims from the knee
+    // predicted from the hip's desired angles to the foot target while the velocity has a part along -s.m.c (the COM
+    // frame's third row, snapshot +0x4d0, whose negative is forward: moving forward); otherwise from the actual knee
+    // to the actual foot. In stagger mode a swing foot moving against its own third axis (velocity relative to the
+    // ground, both horizontal and unit: dot < -0.3) has its shin term add the damping part instead of taking it off.
+    let (ahead, balancing) = match p.rdr2 {
+        Some(_) => (s.vel.vd(horizontal(s.m.c, up)) < 0.0, aim.is_some() && s.vel.length() < 1.0),
+        None => (false, false),
     };
     for (i, planted) in [lp, rp].into_iter().enumerate() {
         let side = if i == 0 { 1.0 } else { -1.0 };
         let leg = &mut s.legs[i];
         let a = if !planted {
             let sh = &leg.shin;
-            let a = if back.1 {
+            let back = p.rdr2.is_some_and(|r| r.stagger)
+                && horizontal(leg.foot.v - p.gvel[i], up).normalize_or_zero().vd(horizontal(leg.foot.m.c, up).normalize_or_zero()) < -0.3;
+            let a = if back {
                 sdot(sh.w, sh.m.a, b"yzx").fma(leg.ankle.damping / leg.ankle.strength.max(1e-10), sdot(sh.m.c, normal[i], b"yzx"))
             } else {
                 (-sdot(sh.w, sh.m.a, b"yzx")).fma(leg.ankle.damping / leg.ankle.strength, sdot(sh.m.c, normal[i], b"yzx"))
             };
-            let mut a = sdot(p.normal[i], vnorm(leg.foot.m.a.vx(up)), b"zyx").fma(delirium_data::kv!(20), a * delirium_data::kv!(60));
+            // RDR2 (rdr2_balancer3.md 9): the blend with the foot's side only while the foot (relative to the ground)
+            // moves at most 0.4 of its way along s.m.c; beyond, the shin term alone
+            let blend = p.rdr2.is_none() || (leg.foot.v - p.gvel[i]).normalize_or_zero().vd(s.m.c) <= 0.4;
+            let mut a = if blend { sdot(p.normal[i], vnorm(leg.foot.m.a.vx(up)), b"zyx").fma(delirium_data::kv!(20), a * delirium_data::kv!(60)) } else { a };
             if sdot(leg.foot.v, s.m.c, b"yzx") < 0.0 {
                 a -= delirium_data::kv!(60);
             }
             a + acos(p.leg_length.clamp(delirium_data::kv!(72), delirium_data::kv!(263)))
         } else {
+            // RDR2 (rdr2_balancer3.md 9): flatterStaticFeet, standing: the actual knee and foot on the renormalised
+            // normal; off it, moving forward, the pitch is negated above 5 m/s or moving sideways (its caller's flag
+            // and the stagger legs' states are left out)
+            let flat = p.rdr2.is_some_and(|r| r.p.flatter_static_feet && !r.stagger && s.vel.length() < 1.0);
+            let flip = !flat && !balancing && ahead && p.rdr2.is_some_and(|r| s.vel.length() > 5.0 || r.sideways);
             let (k, foot) = match p.rdr2 {
-                Some(_) if balancing || !back.0 => (leg.knee.m.d, leg.foot.m.d),
-                Some(_) => (predict_knee(&leg.hip, &leg.knee, side), leg.foot.m.d),
+                Some(_) if flat || balancing || !ahead => (leg.knee.m.d, leg.foot.m.d),
+                Some(_) => (predict_knee(&leg.hip, &leg.knee, side), target[i]),
                 None => (predict_knee(&leg.hip, &leg.knee, side), target[i]),
             };
             if let Some((_, tilt)) = aim {
@@ -935,7 +943,9 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
                 let tw = |n: Vec3| asin(vnorm(n.vx(leg.knee.m.c)).vd(d.vx(n)));
                 twist_flat[i] = Some((tw(normal[i]), tw(n)));
             }
-            asin(sdot(leg.knee.m.c, vnorm(k - foot).vx(normal[i]), b"xyz"))
+            let n = if flat { normal[i].normalize_or_zero() } else { normal[i] };
+            let a = asin(sdot(leg.knee.m.c, vnorm(k - foot).vx(n), b"xyz"));
+            if flip { -a } else { a }
         };
         leg.ankle.desired[0] = a;
     }
@@ -1649,6 +1659,17 @@ impl Dbm {
     }
 }
 
+/// RDR2 core (rdr2_core2.md 1.1): the left hand, right hand, left foot and right foot connected for the gravity
+/// opposition this step. A foot is its contact this step, whatever the balancer's stance (unless animPose set it);
+/// a hand is what was last set, or its contact when animPose asked for that.
+pub fn connected(b: &Body) -> [bool; 4] {
+    let (ch, k) = (b.ch, &b.ch.core);
+    let touch = |part: usize| b.doll.touch[part] & delirium_data::kv!(7 int) != 0;
+    let hand = |i: usize| if k.hands_auto[i] { touch(ch.joints[(*WRIST())[i]].child) } else { k.hands[i] };
+    let foot = |i: usize| k.feet[i].unwrap_or_else(|| touch(ch.joints[(*ANKLE())[i]].child));
+    [hand(0), hand(1), foot(0), foot(1)]
+}
+
 pub fn oppose_gravity(b: &Body, attached: Option<(usize, Vec3, f32)>, out: &mut [Vec3]) {
     #[allow(non_snake_case)]
     #[inline]
@@ -1658,19 +1679,38 @@ pub fn oppose_gravity(b: &Body, attached: Option<(usize, Vec3, f32)>, out: &mut 
     fn SCALE() -> f32 { delirium_data::kv!(60) }
     let (ch, n) = (b.ch, b.build.parts.len());
     let up = ch.up;
-    let down: Vec<usize> = (0..2).filter_map(|i| match ch.support[i] {
-        -2 => Some(ch.joints[(*ANKLE())[i]].child).filter(|&f| b.doll.touch[f] & delirium_data::kv!(7 int) != 0),
-        k => usize::try_from(k).ok(),
-    }).collect();
+    // RDR2 core: the connected limbs from contact every step (GTA IV: the balancer's stance feet)
+    let conn = ch.rdr2.then(|| connected(b));
+    let down: Vec<usize> = match conn {
+        Some(c) => (0..2).filter(|&i| c[2 + i]).map(|i| ch.joints[(*ANKLE())[i]].child).collect(),
+        None => (0..2).filter_map(|i| match ch.support[i] {
+            -2 => Some(ch.joints[(*ANKLE())[i]].child).filter(|&f| b.doll.touch[f] & delirium_data::kv!(7 int) != 0),
+            k => usize::try_from(k).ok(),
+        }).collect(),
+    };
+    // RDR2 core, ZMP mode: no foot connected, no gravity opposition (hands or not)
+    if ch.rdr2 && ch.core.zmp && down.is_empty() {
+        return;
+    }
     let lo = down.iter().map(|f| f - delirium_data::kv!(0 int)).min().unwrap_or(delirium_data::kv!(276 int)).min(delirium_data::kv!(276 int)) as i32;
     let hi = down.iter().map(|f| f - 1).max().map_or(-delirium_data::kv!(276 int), |h| h as i32).max(-delirium_data::kv!(276 int));
     let chain = |i: usize| (lo..=hi).contains(&(i as i32));
     let pair = hi > lo + delirium_data::kv!(0 int);
+    // RDR2 core: a connected hand locks its arm's joints, and either hand the spine's; every connected limb's chain
+    // carries what is above it, the torques shared between them
+    let hands = conn.map_or([false; 2], |c| [c[0], c[1]]);
+    let held: Vec<bool> = (0..ch.joints.len()).map(|i| {
+        (0..2).any(|h| hands[h] && crate::nmshot::limb(h).e.contains(&i)) || (hands.contains(&true) && (*SPINE()).contains(&i))
+    }).collect();
+    let locked = |i: usize| chain(i) || held[i];
+    let limbs = conn.map_or(1, |c| c.iter().filter(|&&x| x).count().max(1)) as f32;
     let place = b.doll.rigid.as_ref().map_or(Vec3::ZERO, |r| r.0[0].d + r.1 - b.doll.centre(0));
     let com = b.doll.com().0 + place;
     let feet: Vec<M34> = down.iter().map(|&f| b.part(f).m).collect();
     let mut g = (Vec3::ZERO - up) * crate::ragdoll::GRAVITY();
-    if let (Some(l), Some(r)) = (feet.first(), feet.last()) {
+    if ch.rdr2 && !ch.core.zmp {
+        // RDR2 core, ZMP off: the whole gravity, whatever the feet
+    } else if let (Some(l), Some(r)) = (feet.first(), feet.last()) {
         let sp = support_at(com, l, r, delirium_data::kv!(68), delirium_data::kv!(9), up).1;
         let d = vnorm(sp - com);
         g = d * sdot(g, d, b"yxz");
@@ -1691,10 +1731,10 @@ pub fn oppose_gravity(b: &Body, attached: Option<(usize, Vec3, f32)>, out: &mut 
         let f = m[from];
         m[to] = (m[to].0 + f.0, m[to].1 + f.1, m[to].2 + f.2);
     };
-    for i in (0..ch.joints.len()).rev().filter(|&i| !chain(i)) {
+    for i in (0..ch.joints.len()).rev().filter(|&i| !locked(i)) {
         add(&mut m, ch.joints[i].parent, ch.joints[i].child);
     }
-    for i in (0..ch.joints.len()).filter(|&i| chain(i)) {
+    for i in (0..ch.joints.len()).filter(|&i| locked(i)) {
         add(&mut m, ch.joints[i].child, ch.joints[i].parent);
     }
     let ahead = |s: &(f32, Vec3, Vec3)| s.2.mul_add(Vec3::splat(AHEAD()), s.1) * crate::gjk::recip(s.0);
@@ -1725,11 +1765,16 @@ pub fn oppose_gravity(b: &Body, attached: Option<(usize, Vec3, f32)>, out: &mut 
             let f = g * half;
             (d.mul_add(Vec3::splat(s), pa) - c, f - dn * sdot(f, dn, b"zyx"))
         } else {
-            let k = if chain(i) { j.parent } else { j.child };
+            let k = if locked(i) { j.parent } else { j.child };
             (at(i, k) - ahead(&m[k]), g * m[k].0)
         };
         let t = fneg(force.yzx().mul_add(lever.zxy(), -(force.zxy() * lever.yzx())));
-        let t = if chain(i) { Vec3::ZERO - t } else { t };
+        let t = if locked(i) { Vec3::ZERO - t } else { t };
+        // RDR2 core: a locked joint's share is 1/n of the connected limbs (a stance pair's force is twice the mean's)
+        let t = match (ch.rdr2, locked(i)) {
+            (true, true) => t * ((if chain(i) && pair { 2.0 } else { 1.0 }) / limbs),
+            _ => t,
+        };
         let max = e.oppose_gravity * e.strength * SCALE();
         let t = if j.three {
             let mut t = clamp_length(t, 0.0, max);
@@ -1744,10 +1789,19 @@ pub fn oppose_gravity(b: &Body, attached: Option<(usize, Vec3, f32)>, out: &mut 
                 let s = if z > h { z - h } else if z < max * -0.5 { z + h } else { 0.0 };
                 t = fneg(f.c.mul_add(Vec3::splat(s), -t));
             }
+            // RDR2 core: its applier drops (not clamps) a torque over 1e4
+            if ch.rdr2 && t.length_squared() > 1e8 {
+                continue;
+            }
             t
         } else {
             let axis = b.rigid(i).map_or_else(|| b.frames[j.parent].rotation * j.in_parent * Vec3::Z, |(c, _, l, _)| crate::rigid::hinge_axis(c, l));
-            axis * sdot(axis, t, b"zyx").clamp(-max, max)
+            let h = sdot(axis, t, b"zyx").clamp(-max, max);
+            // RDR2 core: its hinge applier drops a torque over 5000
+            if ch.rdr2 && h.abs() > 5000.0 {
+                continue;
+            }
+            axis * h
         };
         out[j.child] += t;
         out[j.parent] += Vec3::ZERO - t;
@@ -1780,6 +1834,17 @@ pub fn foot_yaw(b: &Body, yaw: &mut [f32; 2], dt: f32) -> Vec<Vec3> {
             d += std::f32::consts::TAU;
         }
         let w = sdot(b.doll.motion(k).1, up, b"zyx");
+        if b.ch.rdr2 {
+            // RDR2 core (rdr2_core2.md 4): its gains are footSlipStiffness once the balancer has run (60 before) and 10,
+            // over clamp(60 dt, 1, 60); its applier drops a torque over 1e4. Its foot-grip scale (the shot's
+            // shockSpin footGripMult) is 1 here: nothing in Delirium sets it.
+            let (kp, kd) = b.ch.core.foot_slip;
+            let t = up * (d.mul_add(kp, -(w * kd)) * upright) / (60.0 * dt).clamp(1.0, 60.0);
+            if t.length_squared() <= 1e8 {
+                out[k] = t;
+            }
+            continue;
+        }
         out[k] = (up * (d.mul_add(delirium_data::kv!(103), -(w * delirium_data::kv!(31))) * upright)) * crate::gjk::recip(dt * delirium_data::kv!(103));
     }
     out

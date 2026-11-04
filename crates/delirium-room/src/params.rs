@@ -101,7 +101,8 @@ const ABOUT: &[(&str, &str)] = &[
 • His ankles (and knees) are held together.
 • After fallTime his balance gives and he topples.
 • Down, he struggles, both legs kicking together, for struggleTime, then he's free."),
-    ("keyframe", "Before handing him back to animation.\n• Straightens his spine and neck and brings his hands to his sides over blendTime.\n• Holds it for holdTime, so the animation picks up from a close pose.\n• His legs stay on his balance."),
+    ("keyframe", "Before handing him back to animation.\n• Straightens his spine and neck and brings his hands to his sides over blendTime.\n• Holds it for holdTime, so the animation picks up from a close pose.\n• His legs stay on his balance.\nRDR2 core: RDR2's keyframe instead, the pose he's in (or the incoming animation) held on hardKeyMask, tracked on softKeyMask."),
+    ("swim", "RDR2 core: RDR2's swim, from the water's surface (the pool sends it).\n• Sinking fast: curled and writhing.\n• Swimming: alternating arm strokes, spine along swimDirection, looking up.\n• Wading: legs pedalling, arms windmilling."),
 ];
 
 /// When Red Dead Redemption 2 style starts a behaviour by itself.

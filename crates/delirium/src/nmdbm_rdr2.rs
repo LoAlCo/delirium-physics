@@ -58,9 +58,9 @@
 //!   (more than acos 0.2 off up) veto it, and the thighs' turn-out (up to 0.35) becomes the legs' twist rest offset;
 //! - both feet down and further apart than legsApartMax (2) + their minimum spread + extraFeetApart, the feet are
 //!   drawn in toward the COM predicted ahead, the one nearer it moving most;
-//! - the stance ankle's pitch and twist from the actual knee and foot (the knee predicted from the hip's desired
-//!   angles only moving backward off the ankle balance); in stagger mode moving backward, the swing ankle's shin term
-//!   adds its damping part instead of taking it off;
+//! - the stance ankle's pitch and twist from the actual knee and foot (off the ankle balance and moving forward: from
+//!   the knee predicted from the hip's desired angles to the foot target); in stagger mode, a swing foot moving
+//!   against its own third axis has its ankle's shin term add its damping part instead of taking it off;
 //! - braceForImpact's car: the predicted COM clipped to the car's box widened by 0.05 m (in place of an exclusion
 //!   plane);
 //! Not here: extra foot friction on slopes (where RDR2 reads it isn't known, and Delirium's friction is fixed per
@@ -149,6 +149,12 @@ pub struct Params {
     pub start_flat_twist: f32,
     pub end_flat_twist: f32,
     pub ankle_twist_mult: f32,
+    /// the planted feet's yaw hold gain while the balancer runs (the core's 60 before): RDR2 writes it every step,
+    /// and its running value (+0x758, default unread) in run mode; here this one in both
+    pub foot_slip_stiffness: f32,
+    /// standing (below 1 m/s, not staggering), the stance ankle aims from the actual knee to the actual foot on the
+    /// renormalised contact normal (RDR2's +0x9c state test is left out)
+    pub flatter_static_feet: bool,
 }
 
 impl Default for Params {
@@ -166,7 +172,8 @@ impl Default for Params {
                  step_if_in_support: true, ankle_offset: -0.12, ankle_mult: 25.0, min_knee_angle: -0.5,
                  fall_reduce_gravity_comp: false, min_leg_twist: -1.9, max_leg_twist: 0.2, ankle_keep_pelvis: false,
                  crouch: false, crouch_bend_thresh: 0.3, crouch_bend_max: 0.55, crouch_time: 0.5, crouch_stand_rate: 0.4,
-                 crouch_hip_rate: 0.25, start_flat_twist: 0.05, end_flat_twist: 0.15, ankle_twist_mult: 20.0 }
+                 crouch_hip_rate: 0.25, start_flat_twist: 0.05, end_flat_twist: 0.15, ankle_twist_mult: 20.0,
+                 foot_slip_stiffness: 7.7, flatter_static_feet: false }
     }
 }
 
@@ -237,6 +244,8 @@ impl Params {
             "startFlatTwist" => self.start_flat_twist = v,
             "endFlatTwist" => self.end_flat_twist = v,
             "ankleTwistMult" => self.ankle_twist_mult = v,
+            "footSlipStiffness" => self.foot_slip_stiffness = v,
+            "flatterStaticFeet" => self.flatter_static_feet = v != 0.0,
             _ => return false,
         }
         true

@@ -555,6 +555,31 @@ pub struct Character {
     /// RDR2 core: balancerCollisionsReaction while it runs, for the behaviours that read it: its state, whether the
     /// impact has happened, and the leg stiffness reduction it publishes for staggerFall (RDR2's bal+0x568)
     pub bcr: Option<(u8, bool, f32)>,
+    /// RDR2 core: what its core helpers keep on the character (read only with the core on)
+    pub core: CoreState,
+}
+
+/// RDR2 core: per-character values RDR2's core helpers read (rdr2_core2.md sections 1 and 4).
+#[derive(Clone, Copy, Debug)]
+pub struct CoreState {
+    /// the foot yaw hold's gains (RDR2's ctx+0x1034 / +0x1038): 60 and 10 until the balancer writes
+    /// footSlipStiffness into the first
+    pub foot_slip: (f32, f32),
+    /// useZMPGravityCompensation (ctx+0x2b54): gravity opposition aimed at the support point, and none with no foot
+    /// connected; off (keyframe, animPose), the full gravity even airborne
+    pub zmp: bool,
+    /// the hands connected for the gravity opposition (ctx+0x2b4c / +0x2b4d): kept until set again
+    pub hands: [bool; 2],
+    /// hands the next gravity pass takes from contact (ctx+0x2b50 / +0x2b51), cleared by it
+    pub hands_auto: [bool; 2],
+    /// feet animPose set this step (their auto bytes cleared); None: from contact, as every step
+    pub feet: [Option<bool>; 2],
+}
+
+impl Default for CoreState {
+    fn default() -> CoreState {
+        CoreState { foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2] }
+    }
 }
 
 /// RDR2 core's joint drive (experimental): what Red Dead Redemption 2's muscle drive changes, from a study of how it
@@ -595,7 +620,7 @@ fn targets(j: &JointDef, e: &Effector) -> [f32; 3] {
 
 impl Character {
     pub fn new(joints: Vec<JointDef>, frames: &[Transform]) -> Character {
-        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None };
+        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, core: CoreState::default() };
         c.seed(0);
         c.eff = (0..c.joints.len()).map(|i| Effector::new(&c.joints[i], c.angle(i, frames))).collect();
         static ONCE: std::sync::Once = std::sync::Once::new();

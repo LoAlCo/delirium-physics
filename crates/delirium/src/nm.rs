@@ -1579,6 +1579,10 @@ impl Agent {
                 let failed = match tick {
                     Some(s) => {
                         dbm.apply(&s, ch);
+                        // RDR2 core: the balancer sets the foot yaw hold's gain every step it runs (it stays after)
+                        if let Some(r) = dbm.p.rdr2 {
+                            ch.core.foot_slip.0 = r.p.foot_slip_stiffness;
+                        }
                         if let Some(r) = self.limb_reqs.as_mut() {
                             // its lean of the lowest spine joint and its ankles are defaults the others override (limbreq.rs)
                             r.mark_joints(&ch.eff, crate::limbreq::CORE, &[(*crate::nmrs::SPINE())[0]]);
@@ -2009,6 +2013,10 @@ impl Agent {
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xe8); }
             self.extras.tick_marked(&mut c, Some(world), obstacles, dt, self.limb_reqs.as_mut());
+            // RDR2 core: yanked's pedalLegs reverse flags for this tick
+            if let Some(r) = c.out.pedal_reverse.take() {
+                self.nm_pd.set_reverse(r);
+            }
             if !waits(walk_actives!(self), W_PD()) {
                 self.nm_pd.tick(&mut c, dt);
             }
@@ -2177,6 +2185,16 @@ impl Agent {
                 *x += y;
             }
             crate::nmdbm::oppose_gravity(&body, snap.attached, &mut torque);
+            // RDR2 core: the gravity pass takes the hands asked for from contact and re-arms the feet
+            if ch.rdr2 {
+                let c = crate::nmdbm::connected(&body);
+                for h in 0..2 {
+                    if ch.core.hands_auto[h] {
+                        ch.core.hands[h] = c[h];
+                    }
+                }
+                (ch.core.hands_auto, ch.core.feet) = ([false; 2], [None; 2]);
+            }
             if let Some((k, _)) = ch.stabilise {
                 push = crate::nmdbm::stabilise(&body, k, dt);
             }
