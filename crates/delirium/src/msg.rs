@@ -274,6 +274,29 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "magOfForce", kind: Kind::Float, used: true, doc: "" },
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "" },
         Param { name: "damping", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "fallOverWallEndA", kind: Kind::Vec3, used: false, doc: "RDR2 core only: one end of the wall's top edge, world (zero)" },
+        Param { name: "fallOverWallEndB", kind: Kind::Vec3, used: false, doc: "RDR2 core only: its other end (zero)" },
+        Param { name: "wallhandle", kind: Kind::Int, used: false, doc: "RDR2 core only: the wall's instance (0, the world; not read: the ends are in the world here)" },
+        Param { name: "forceTimeOut", kind: Kind::Float, used: false, doc: "RDR2 core only: s of going over that the forces push (2)" },
+        Param { name: "forceAngleAbort", kind: Kind::Float, used: false, doc: "RDR2 core only: (-0.2; not read by RDR2)" },
+        Param { name: "minLegHeight", kind: Kind::Float, used: false, doc: "RDR2 core only: to start, a foot this far from the pelvis, across (0.4)" },
+        Param { name: "maxForceDist", kind: Kind::Float, used: false, doc: "RDR2 core only: parts this close to the wall's top are pushed (0.8)" },
+        Param { name: "stepExclusionZone", kind: Kind::Float, used: false, doc: "RDR2 core only: balancerCollisionsReaction's (0.5; not modelled)" },
+        Param { name: "maxTwist", kind: Kind::Float, used: false, doc: "RDR2 core only: the twist torque stops once he has twisted this far, rad (pi)" },
+        Param { name: "moveArms", kind: Kind::Bool, used: false, doc: "RDR2 core only: the arm pose (true)" },
+        Param { name: "moveLegs", kind: Kind::Bool, used: false, doc: "RDR2 core only: the legs swing up; no new steps (true)" },
+        Param { name: "bendSpine", kind: Kind::Bool, used: false, doc: "RDR2 core only: the spine bends over the wall (true)" },
+        Param { name: "leaningAngleThreshold", kind: Kind::Float, used: false, doc: "RDR2 core only: to start, leaning sideways at most this, degrees (180: any)" },
+        Param { name: "legtwist", kind: Kind::Float, used: false, doc: "RDR2 core only: the legs' swing apart with his roll (1)" },
+        Param { name: "legamp", kind: Kind::Float, used: false, doc: "RDR2 core only: the legs' swing size (1)" },
+        Param { name: "zAxisSpinReduction", kind: Kind::Float, used: false, doc: "RDR2 core only: (0)" },
+        Param { name: "angleDirWithWallNormal", kind: Kind::Float, used: false, doc: "RDR2 core only: to start, moving at least this close to the wall's way, degrees (180: any)" },
+        Param { name: "maxAngVel", kind: Kind::Float, used: false, doc: "RDR2 core only: the forces stop while he turns along the wall faster than this (2; 0: never)" },
+        Param { name: "adaptForcesToLowWall", kind: Kind::Bool, used: false, doc: "RDR2 core only: forces weaker away from the wall (false)" },
+        Param { name: "maxWallHeight", kind: Kind::Float, used: false, doc: "RDR2 core only: to start, the wall at most this above his feet, m (-1: any)" },
+        Param { name: "distanceToSendSuccessMessage", kind: Kind::Float, used: false, doc: "RDR2 core only: success once this far from the wall's top (-1: at once)" },
+        Param { name: "rollingBackThr", kind: Kind::Float, used: false, doc: "RDR2 core only: (0.5)" },
+        Param { name: "rollingPotential", kind: Kind::Float, used: false, doc: "RDR2 core only: the approach speed to go over, m/s (0.3)" },
     ] },
     Message { name: "grab", params: &[
         Param { name: "instanceIndex", kind: Kind::Int, used: true, doc: "the obstacle (a step's car box, by its id) the points, normals and grips are in the frame of; -1 the world" },
@@ -538,6 +561,11 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "useLeftArm", kind: Kind::Bool, used: true, doc: "+61 / +60: the arms that flinch." },
         Param { name: "pos", kind: Kind::Vec3, used: true, doc: "" },
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "protectHeadToggle", kind: Kind::Bool, used: true, doc: "RDR2 core only: always turned away, covering the head (false)" },
+        Param { name: "applyStiffness", kind: Kind::Bool, used: true, doc: "RDR2 core only: set the upper body's stiffness (true)" },
+        Param { name: "dontBraceHead", kind: Kind::Bool, used: true, doc: "RDR2 core only: no head cover when turned away, no fixed first pose (false)" },
+        Param { name: "headLookAwayFromTarget", kind: Kind::Bool, used: true, doc: "RDR2 core only: now and then look away to the side (false)" },
+        Param { name: "useHeadLook", kind: Kind::Bool, used: true, doc: "RDR2 core only: run headLook (true)" },
     ] },
 ];
 
@@ -727,6 +755,10 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
     if msg == "highFall" && a.rdr2_core.is_some() {
         return a.extras.send_named("highFall", params);
     }
+    // and its fallOverWall
+    if msg == "fallOverWall" && a.rdr2_core.is_some() {
+        return a.extras.send_named("fallOverWall", params);
+    }
     let m = find(msg).ok_or(Error::Message)?;
     let start = params.iter().find(|(n, _)| *n == "start").map(|(_, v)| v.b()).transpose()?;
     let one_shot = matches!(msg, "activePose" | "applyImpulse" | "bodyRelax" | "defineAttachedObject" | "leanInDirection"
@@ -784,7 +816,10 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
         "bodyWrithe" => if on { a.body_writhe(st.body_writhe.clone()) } else if a.rdr2_core.is_some() { a.stop_writhe() },
         "braceForImpact" => if on { a.brace_for_impact(build, st.brace_for_impact.clone()) },
         "catchFall" => if on { a.catch_fall_full(build, st.catch_fall.clone()) } else { a.stop_catch_fall() },
-        "fallOverWall" => if on { a.fall_over_wall(st.fall_over_wall.clone()) },
+        "fallOverWall" => if on {
+            a.fall_over_wall(st.fall_over_wall.clone());
+            a.fow_rdr2 = Some(params.iter().map(|(n, v)| (n.to_string(), v.clone())).collect());
+        },
         "grab" => a.grab(build, on.then(|| st.grab.clone())),
         "headLook" => { let p = &st.head_look; a.head_look(build, on.then_some((p.pos, p.vel)), p.stiffness, p.damping, p.always_look, p.always_eyes_horizontal); }
         "highFall" => if on {
@@ -1205,6 +1240,11 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("upperBodyFlinch", "useLeftArm") => { let p = &mut st.upper_body_flinch; p.use_left_arm = v.b()?; }
         ("upperBodyFlinch", "pos") => { let p = &mut st.upper_body_flinch; p.pos = v.v()?; }
         ("upperBodyFlinch", "bodyStiffness") => { let p = &mut st.upper_body_flinch; p.body_stiffness = v.f()?; }
+        ("upperBodyFlinch", "protectHeadToggle") => { let p = &mut st.upper_body_flinch; p.protect_head_toggle = v.b()?; }
+        ("upperBodyFlinch", "applyStiffness") => { let p = &mut st.upper_body_flinch; p.apply_stiffness = v.b()?; }
+        ("upperBodyFlinch", "dontBraceHead") => { let p = &mut st.upper_body_flinch; p.dont_brace_head = v.b()?; }
+        ("upperBodyFlinch", "headLookAwayFromTarget") => { let p = &mut st.upper_body_flinch; p.head_look_away = v.b()?; }
+        ("upperBodyFlinch", "useHeadLook") => { let p = &mut st.upper_body_flinch; p.use_head_look = v.b()?; }
         _ => return Err(Error::Param),
     }
     Ok(())
@@ -1496,6 +1536,11 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("upperBodyFlinch", "useLeftArm") => { let p = &st.upper_body_flinch; Value::Bool(p.use_left_arm) }
         ("upperBodyFlinch", "pos") => { let p = &st.upper_body_flinch; Value::Vec3(p.pos) }
         ("upperBodyFlinch", "bodyStiffness") => { let p = &st.upper_body_flinch; Value::Float(p.body_stiffness) }
+        ("upperBodyFlinch", "protectHeadToggle") => { let p = &st.upper_body_flinch; Value::Bool(p.protect_head_toggle) }
+        ("upperBodyFlinch", "applyStiffness") => { let p = &st.upper_body_flinch; Value::Bool(p.apply_stiffness) }
+        ("upperBodyFlinch", "dontBraceHead") => { let p = &st.upper_body_flinch; Value::Bool(p.dont_brace_head) }
+        ("upperBodyFlinch", "headLookAwayFromTarget") => { let p = &st.upper_body_flinch; Value::Bool(p.head_look_away) }
+        ("upperBodyFlinch", "useHeadLook") => { let p = &st.upper_body_flinch; Value::Bool(p.use_head_look) }
         _ => return None,
     })
 }

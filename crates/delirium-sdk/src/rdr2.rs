@@ -264,6 +264,7 @@ pub unsafe extern "C" fn nm_agent_rdr2_melee(a: *mut NmAgent, w: *const NmWorld,
     if at.is_null() || dir.is_null() || !(0..g.build.parts.len().min(21) as i32).contains(&part) {
         return fail(NM_E_ARG, "bad hit");
     }
-    let o = reactions().on_melee(&mut RAND.lock().unwrap_or_else(|e| e.into_inner()), part as usize, unsafe { v3(at) }, unsafe { v3(dir) });
+    let o = reactions().on_melee(&mut RAND.lock().unwrap_or_else(|e| e.into_inner()), part as usize, unsafe { v3(at) }, unsafe { v3(dir) },
+                                 g.agent.rdr2_core.is_some());
     unsafe { start_all(a, w, o) }
 }

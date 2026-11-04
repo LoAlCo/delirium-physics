@@ -148,6 +148,12 @@ pub struct UpperBodyFlinch {
     pub hand_distance_front_back: f32,
     pub noise_scale: f32,
     pub turn_towards: i32,
+    /// RDR2 core only: protectHeadToggle, applyStiffness, dontBraceHead, headLookAwayFromTarget, useHeadLook
+    pub protect_head_toggle: bool,
+    pub apply_stiffness: bool,
+    pub dont_brace_head: bool,
+    pub head_look_away: bool,
+    pub use_head_look: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -228,7 +234,8 @@ impl Default for UpperBodyFlinch {
     fn default() -> UpperBodyFlinch {
         UpperBodyFlinch { pos: Vec3::ZERO, body_stiffness: delirium_data::kv!(117), body_damping: 1.0, back_bend_amount: -delirium_data::kv!(132), left_handed: false, right_handed: false,
                           use_left_arm: true, use_right_arm: true, new_hit: None,
-                          hand_distance_vertical: delirium_data::kv!(78), hand_distance_left_right: delirium_data::kv!(78), hand_distance_front_back: delirium_data::kv!(146), noise_scale: delirium_data::kv!(78), turn_towards: 1 }
+                          hand_distance_vertical: delirium_data::kv!(78), hand_distance_left_right: delirium_data::kv!(78), hand_distance_front_back: delirium_data::kv!(146), noise_scale: delirium_data::kv!(78), turn_towards: 1,
+                          protect_head_toggle: false, apply_stiffness: true, dont_brace_head: false, head_look_away: false, use_head_look: true }
     }
 }
 
@@ -377,6 +384,8 @@ pub struct Agent {
     nm_hf_msg: Option<Option<HighFall>>,
     /// a highFall message's own parameters, for the RDR2 core's highFall should the core be on when it starts
     pub(crate) hf_rdr2: Option<Vec<(String, crate::msg::Value)>>,
+    /// likewise a fallOverWall message's
+    pub(crate) fow_rdr2: Option<Vec<(String, crate::msg::Value)>>,
     nm_gr_msg: Option<Option<crate::nmgr::GrabParams>>,
     nm_pa_msg: Option<Option<crate::nmpa::PointArmParams>>,
     catch_fall: Option<CatchFall>,
@@ -449,7 +458,7 @@ impl Agent {
         let pelvis_up = facing.inverse() * frames[roles.pelvis].rotation;
         let mut a = Agent { locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
                 stiffness: (delirium_data::kv!(31), 1.0), relax: None, config: ConfigureBalance::default(), feedback: vec![], balance: None, lean: None,
-                shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
+                shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, fow_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
                 brace: None, head_look: vec![], shot_look: false, eff_override: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(200), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0 * build.parts[0].grown, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
                 ch: crate::nmrs::ASSET[build.nm].get().and_then(|a| crate::nmrs::joints(build, a)).map(|j| {
                     let mut c = crate::nmrs::Character::new(j, &frames);
@@ -469,6 +478,10 @@ impl Agent {
     pub fn stop_all_behaviours(&mut self) {
         self.locomotion_drive=None;self.locomotion_tracking=false;self.locomotion_terms=None;
         self.extras.stop_all();
+        // RDR2 core: balancerCollisionsReaction stopped with them
+        if let Some(ch) = self.ch.as_mut() {
+            ch.bcr = None;
+        }
         if let Some(ch) = self.ch.as_mut().filter(|_| self.bb_on) {
             crate::nmbb::BodyBalance::deactivate(ch);
         }
@@ -1743,7 +1756,7 @@ impl Agent {
             c.shot_on = self.nm_shot.is_some();
             c.dbm = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).filter(|_| !self.fallen).map(|d| crate::nmshot::DbmView {
                 stepping: d.f.stepping, planted: d.pv.planted, failing: d.p.rdr2.is_some_and(|r| r.failing.is_some()),
-                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value) });
+                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps) });
             if let Some(p) = self.nm_cf_msg.take() {
                 let b = walk_actives!(self);
                 start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);
@@ -1761,9 +1774,15 @@ impl Agent {
                 start_flinch(m, &mut self.nm_fl, &mut c, &mut self.nm_head, &mut self.nm_twist);
             }
             if self.flinch.is_none() {
-                self.nm_fl.deactivate(c.ch, &mut self.nm_head, &mut self.nm_twist);
+                self.nm_fl.deactivate(&mut c, &mut self.nm_head, &mut self.nm_twist);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x90); }
+            // RDR2 core: a fallOverWall sent before the core was on is RDR2's (an extra, from its own parameters)
+            if let Some(ps) = self.fow_rdr2.take().filter(|_| c.ch.rdr2 && matches!(self.nm_fow_msg, Some(Some(_)))) {
+                self.nm_fow_msg = None;
+                let ps: Vec<(&str, crate::msg::Value)> = ps.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
+                let _ = self.extras.send_named("fallOverWall", &ps);
+            }
             match self.nm_fow_msg.take() {
                 Some(Some(p)) => {
                     self.nm_fow.p = p;
@@ -2479,6 +2498,8 @@ fn flinch_params(m: UpperBodyFlinch, f: &mut crate::nmfl::Flinch) {
     (f.hand_distance_vertical, f.hand_distance_left_right, f.hand_distance_front_back, f.noise_scale) =
         (m.hand_distance_vertical, m.hand_distance_left_right, m.hand_distance_front_back, m.noise_scale);
     (f.use_left_arm, f.use_right_arm, f.turn_towards) = (m.use_left_arm, m.use_right_arm, m.turn_towards);
+    (f.protect_head_toggle, f.apply_stiffness, f.dont_brace_head, f.head_look_away, f.use_head_look) =
+        (m.protect_head_toggle, m.apply_stiffness, m.dont_brace_head, m.head_look_away, m.use_head_look);
     if let Some(n) = m.new_hit {
         f.new_hit = n;
     }

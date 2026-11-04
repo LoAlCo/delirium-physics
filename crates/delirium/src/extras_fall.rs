@@ -155,7 +155,7 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "objectBehindVictimNormal", kind: Kind::Vec3, used: true, doc: "its normal, toward him (zero: from the contact)" },
         Param { name: "numStepsTillSlump", kind: Kind::Int, used: true, doc: "steps allowed before forcing a slump, 0.3 s each (3)" },
         Param { name: "stable2SlumpTime", kind: Kind::Float, used: true, doc: "still this long after impact: slump anyway, s (1.0)" },
-        Param { name: "exclusionZone", kind: Kind::Float, used: false, doc: "(not done: 0)" },
+        Param { name: "exclusionZone", kind: Kind::Float, used: true, doc: "RDR2 core: the balancer keeps his predicted COM this far off the wall, m (0.2); not done without it" },
         Param { name: "footFrictionMultStart", kind: Kind::Float, used: false, doc: "(not done: 1)" },
         Param { name: "footFrictionMultRate", kind: Kind::Float, used: false, doc: "(not done: 0)" },
         Param { name: "backFrictionMultStart", kind: Kind::Float, used: false, doc: "(not done: 1)" },
@@ -168,6 +168,14 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "glanceSpinTime", kind: Kind::Float, used: true, doc: "glance-spin lasts, s (0.5)" },
         Param { name: "glanceSpinMag", kind: Kind::Float, used: true, doc: "glance-spin torque, of weight x metre / 2 (0.3)" },
         Param { name: "glanceSpinDecayMult", kind: Kind::Float, used: true, doc: "its decay per 0.1 s (0.8)" },
+        Param { name: "objectBehindVictim", kind: Kind::Bool, used: true, doc: "RDR2 core only: the wall is objectBehindVictimPos/Normal from the start, not found by probing ahead (false)" },
+        Param { name: "ignoreColMassBelow", kind: Kind::Float, used: true, doc: "RDR2 core only: a moving object lighter than this (kg) and smaller than ignoreColVolumeBelow is no wall (20)" },
+        Param { name: "ignoreColVolumeBelow", kind: Kind::Float, used: true, doc: "RDR2 core only: m^3 (0.1)" },
+        Param { name: "reboundMode", kind: Kind::Int, used: true, doc: "RDR2 core only: coming off the wall, 0 slump unless shot, 1 keep going, 2 slump, 3 start over (0)" },
+        Param { name: "forwardMode", kind: Kind::Int, used: true, doc: "RDR2 core only: 1: no slump on a forward impact while shot (0)" },
+        Param { name: "timeToForward", kind: Kind::Float, used: true, doc: "RDR2 core only: s after a forward impact before he slumps (0.5)" },
+        Param { name: "reboundForce", kind: Kind::Float, used: true, doc: "RDR2 core only: push off the wall on a forward impact, on the chest (upper arms -1/4) each tick (0)" },
+        Param { name: "braceWall", kind: Kind::Bool, used: true, doc: "RDR2 core only: look at the wall coming up to it (false)" },
     ] },
     Message { name: "injuredOnGround", params: &[
         Param { name: "numInjuries", kind: Kind::Int, used: true, doc: "wounds to reach for, 0 to 2 (0: one on the left of the belly); RDR2 core: one, 0 the belly" },
@@ -214,6 +222,8 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "smartFall" => b(SmartFall::new(p)),
         // only the RDR2 core sends highFall to the extras (msg.rs)
         "highFall" => b(crate::extras_fall_rdr2::HighFall::new(p)),
+        // likewise fallOverWall
+        "fallOverWall" => b(crate::extras_fall_rdr2::FallOverWall::new(p)),
         "balancerCollisionsReaction" => b(Collide::new(p)),
         "injuredOnGround" => b(Injured::new(p)),
         "learnedCrawl" => b(Crawl::new(p)),
@@ -917,7 +927,9 @@ impl StgRdr2 {
         for i in 0..2 {
             let stance = bal.stepping as usize != i + 1;
             let m = if w < 1.0 && stance { w } else { 1.0 };
-            let (s, sa) = ((p.legs * m).max(STG_FLOOR[0]), (p.legs * m).max(STG_FLOOR[1]));
+            // less balancerCollisionsReaction's impactLegStiffReduction (bal+0x568) while it runs
+            let red = c.ch.bcr.map_or(0.0, |b| b.2);
+            let (s, sa) = ((p.legs * m - red).max(STG_FLOOR[0]), (p.legs * m - red).max(STG_FLOOR[1]));
             c.ch.eff[(*KNEE())[i]].set_stiffness(s, 0.9, Some(STG_LEG_MUSCLE));
             c.ch.eff[(*ANKLE())[i]].set_stiffness(sa, 1.0, None);
             c.ch.eff[(*HIP())[i]].set_stiffness(s, 1.0, Some(STG_LEG_MUSCLE));
@@ -1168,6 +1180,8 @@ pub struct Collide {
     react: f32, exag: f32, spin_t: f32, spin_mag: f32, spin_decay: f32,
     given: bool, virt: bool, first: bool, state: u8, t: f32, calm: f32, hit_t: f32,
     ub_n: Vec3, lb_n: Vec3, ub: bool, lb: bool, glance: f32, fall: bool, out: Vec<String>,
+    /// the RDR2 core's balancerCollisionsReaction (extras_fall_rdr2.rs)
+    rd: crate::extras_fall_rdr2::BcrRdr2,
 }
 const BAL_NORMAL: u8 = 0;
 const BAL_IMPACT: u8 = 1;
@@ -1184,6 +1198,7 @@ impl Collide {
     fn new(p: &mut P) -> Result<Collide, Error> {
         p.f("exclusionZone", 0.0)?; p.f("footFrictionMultStart", 1.0)?; p.f("footFrictionMultRate", 0.0)?;
         p.f("backFrictionMultStart", 1.0)?; p.f("backFrictionMultRate", 0.0)?;
+        let rd = crate::extras_fall_rdr2::BcrRdr2::new(p)?;
         Ok(Collide { pos: p.v("objectBehindVictimPos", Vec3::ZERO)?, normal: p.v("objectBehindVictimNormal", Vec3::ZERO)?,
                      steps: p.i("numStepsTillSlump", delirium_data::kv!(0 int))?, stable: p.f("stable2SlumpTime", 1.0)?,
                      leg_red: p.f("impactLegStiffReduction", delirium_data::kv!(24))?, slump_red: p.f("slumpLegStiffReduction", delirium_data::kv!(20))?,
@@ -1191,7 +1206,7 @@ impl Collide {
                      exag: p.f("impactExagTime", delirium_data::kv!(60))?, spin_t: p.f("glanceSpinTime", 0.5)?,
                      spin_mag: p.f("glanceSpinMag", delirium_data::kv!(24))?, spin_decay: p.f("glanceSpinDecayMult", delirium_data::kv!(20))?,
                      given: false, virt: false, first: true, state: BAL_NORMAL, t: 0.0, calm: 0.0, hit_t: 0.0,
-                     ub_n: Vec3::ZERO, lb_n: Vec3::ZERO, ub: false, lb: false, glance: 0.0, fall: false, out: vec![] })
+                     ub_n: Vec3::ZERO, lb_n: Vec3::ZERO, ub: false, lb: false, glance: 0.0, fall: false, out: vec![], rd })
     }
 
     fn to(&mut self, state: u8) {
@@ -1208,7 +1223,16 @@ impl Collide {
     }
 }
 impl Extra for Collide {
+    fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
+        if c.ch.rdr2 {
+            self.rd.probe(c, world, obs);
+        }
+    }
+
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            return self.rd.tick(c, dt, &mut self.out);
+        }
         let w = weight(c);
         let (com, vel) = (c.com, c.vel);
         let cl = (*crate::nmrs::CLAVICLE());
@@ -1349,7 +1373,10 @@ impl Extra for Collide {
         self.state == BAL_END
     }
 
-    fn stop(&mut self, _c: &mut Ctx) {
+    fn stop(&mut self, c: &mut Ctx) {
+        if c.ch.rdr2 {
+            return self.rd.stop(c);
+        }
         if !matches!(self.state, BAL_NORMAL | BAL_END) {
             self.catch_fall();
         }

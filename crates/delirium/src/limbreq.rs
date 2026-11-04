@@ -63,6 +63,7 @@ pub fn slot(message: &str) -> u32 {
         "handsAndKnees" => 0x70,
         "injuredOnGround" => 0x78,
         "rdr2Lasso" | "rdr2Bolas" => 0x88,
+        "fallOverWall" => 0x98,
         "highFall" => 0xa0,
         "reachForWound" => 0xa8,
         "duck" => 0xb0,

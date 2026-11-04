@@ -23,7 +23,7 @@ pub(crate) fn cast(world: &Collision, obstacles: &[Obstacle], from: Vec3, dir: V
     hit
 }
 
-fn ray_box(o: Vec3, d: Vec3, half: Vec3) -> Option<(f32, Vec3)> {
+pub(crate) fn ray_box(o: Vec3, d: Vec3, half: Vec3) -> Option<(f32, Vec3)> {
     let (mut near, mut far, mut n) = (0.0f32, f32::MAX, Vec3::ZERO);
     for k in 0..delirium_data::kv!(0 int) {
         if d[k].abs() < delirium_data::kv!(244) {
