@@ -64,7 +64,7 @@ pub fn slot(message: &str) -> u32 {
         "armsWindmill" => 0x58,
         "handsAndKnees" => 0x70,
         "injuredOnGround" => 0x78,
-        "rdr2Lasso" | "rdr2Bolas" => 0x88,
+        "rdr2Lasso" | "rdr2Bolas" | "yanked" => 0x88,
         "fallOverWall" => 0x98,
         "highFall" => 0xa0,
         "reachForWound" => 0xa8,
@@ -75,7 +75,8 @@ pub fn slot(message: &str) -> u32 {
         "controlledFall" => 0xc8,
         "onFire" => 0xe0,
         "wallCollision" => 0x118,
-        "keyframe" => 0x120,
+        "keyframe" | "softKeyframe" => 0x120,
+        "swim" => 0x128,
         _ => CORE,
     }
 }

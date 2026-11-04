@@ -63,6 +63,31 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "holdTime", kind: Kind::Float, used: true, doc: "s it then holds it (0.5)" },
         Param { name: "settle", kind: Kind::Float, used: true, doc: "how hard the upper body's motion is damped meanwhile, 1/s (3)" },
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "spine and neck stiffness; the arms 0.8 of it (11)" },
+        Param { name: "animSourceCurrent", kind: Kind::Int, used: true, doc: "RDR2 core: the incoming animation buffer (Delirium has one: the agent's incoming pose, or the pose at the start) (0)" },
+        Param { name: "animSourcePrevious", kind: Kind::Int, used: true, doc: "RDR2 core: the previous buffer (here last step's pose) (1)" },
+        Param { name: "activePoseMask", kind: Kind::Str, used: true, doc: "RDR2 core: joints given the pose's angles (na)" },
+        Param { name: "muscleKeyMask", kind: Kind::Str, used: true, doc: "RDR2 core, RDR2's uncracked 00751d32: joints held at the pose's angles, 15 stiff (na)" },
+        Param { name: "hardKeyMask", kind: Kind::Str, used: true, doc: "RDR2 core: parts the game keyframes; here held on the pose by hard constraints (fb)" },
+        Param { name: "softKeyMask", kind: Kind::Str, used: true, doc: "RDR2 core: parts velocity-tracked to the pose at softweight (na)" },
+        Param { name: "softKeyMaskAlt", kind: Kind::Str, used: true, doc: "RDR2 core: at softweightalt (na)" },
+        Param { name: "softweight", kind: Kind::Float, used: true, doc: "RDR2 core: 0..1 (1)" },
+        Param { name: "softweightalt", kind: Kind::Float, used: true, doc: "RDR2 core: 0..1 (1)" },
+        Param { name: "softweightrate", kind: Kind::Float, used: true, doc: "RDR2 core, RDR2's uncracked 3387d79d: softweight's blend-in rate, 1/s (1)" },
+        Param { name: "softweightaltrate", kind: Kind::Float, used: true, doc: "RDR2 core, RDR2's uncracked 3a9e42b6 (1)" },
+        Param { name: "softweightinitial", kind: Kind::Float, used: true, doc: "RDR2 core: the blend-in's start (0)" },
+        Param { name: "softweightaltinitial", kind: Kind::Float, used: true, doc: "RDR2 core (0)" },
+        Param { name: "blendinsoftweight", kind: Kind::Bool, used: true, doc: "RDR2 core: blend softweight in (false)" },
+        Param { name: "blendinsoftweightalt", kind: Kind::Bool, used: true, doc: "RDR2 core (false)" },
+        Param { name: "softmaxaccel", kind: Kind::Vec3, used: true, doc: "RDR2 core: the tracking's acceleration clamp per axis, m/s^2 at weight 1 (50,50,50)" },
+        Param { name: "softmaxangaccel", kind: Kind::Vec3, used: true, doc: "RDR2 core: the angular one, in the COM frame (50,50,50)" },
+        Param { name: "softgravity", kind: Kind::Float, used: true, doc: "RDR2 core, RDR2's uncracked cae6fd66: the share of gravity the tracking takes up (0)" },
+        Param { name: "softbreakthreshold", kind: Kind::Float, used: true, doc: "RDR2 core: mean tracking error, m, past which soft keying stops with keyframe failure (-1: never)" },
+        Param { name: "softpreservemomentum", kind: Kind::Bool, used: true, doc: "RDR2 core (false)" },
+        Param { name: "useForces", kind: Kind::Bool, used: true, doc: "RDR2 core: forces, with the pose's own velocity (false)" },
+        Param { name: "usetargetvel", kind: Kind::Bool, used: true, doc: "RDR2 core: add the pose's own velocity (false)" },
+        Param { name: "spikes", kind: Kind::Int, used: true, doc: "RDR2 core: steps of large angular acceleration allowed (0)" },
+        Param { name: "spikecooldown", kind: Kind::Int, used: true, doc: "RDR2 core, RDR2's uncracked e87ea3df: steps after them (3)" },
+        Param { name: "spikeangaccel", kind: Kind::Vec3, used: true, doc: "RDR2 core: the clamp during a spike (1000,1000,1000)" },
     ] },
     Message { name: "rdr2Balance", params: &[
         Param { name: "runningThresh", kind: Kind::Float, used: true, doc: "his speed along the ground above which he balances as running, m/s (0.65)" },
@@ -308,6 +333,8 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "groundFriction", kind: Kind::Float, used: false, doc: "the ground's grip on him (1)" },
         Param { name: "ropeendfriction", kind: Kind::Float, used: false, doc: "the roped part's grip (0.5)" },
         Param { name: "otherendfriction", kind: Kind::Float, used: false, doc: "the other end's grip (2)" },
+        Param { name: "ropePos", kind: Kind::Vec3, used: true, doc: "RDR2 core: the rope's anchor, world; send again without start as it moves (zero: 2 m in front of his chest)" },
+        Param { name: "ropePart", kind: Kind::Int, used: true, doc: "RDR2 core: the part the rope is on (10)" },
     ] },
     Message { name: "rdr2Bolas", params: &[
         Param { name: "bindStrength", kind: Kind::Float, used: true, doc: "how hard the bolas holds his ankles together, N per m (900)" },
@@ -3077,6 +3104,8 @@ impl Extra for BalanceRdr2 {
 pub struct Keyframe {
     blend: f32, hold: f32, settle: f32, stiffness: f32,
     t: f32, start: Option<Vec<(usize, [f32; 3])>>, arm: [Option<[f32; 6]>; 2],
+    /// RDR2 core: RDR2's keyframe (the parameters' RDR2 half), run in this one's place
+    r2: Box<crate::extras_ysk_rdr2::KeyframeRdr2>,
 }
 
 impl Keyframe {
@@ -3084,12 +3113,24 @@ impl Keyframe {
         Ok(Keyframe {
             blend: p.f("blendTime", 0.3)?.max(0.02), hold: p.f("holdTime", 0.5)?.max(0.0), settle: p.f("settle", 3.0)?.max(0.0),
             stiffness: p.f("stiffness", 11.0)?, t: 0.0, start: None, arm: [None; 2],
+            r2: Box::new(crate::extras_ysk_rdr2::KeyframeRdr2::new(p)?),
         })
     }
 }
 
 impl Extra for Keyframe {
+    fn constraints(&self) -> Vec<(usize, Option<Vec3>, Option<bevy_math::Quat>)> {
+        self.r2.constraints()
+    }
+
+    fn stop(&mut self, _c: &mut Ctx) {
+        self.r2.stop();
+    }
+
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            return self.r2.tick(c, dt);
+        }
         self.t += dt;
         let x = (self.t / self.blend).min(1.0);
         let w = x * x * (3.0 - 2.0 * x);
@@ -3556,13 +3597,22 @@ impl Extra for OnFire {
 pub struct Lasso {
     kind: i32, part: i32, grab: [Vec3; 2], claw: Vec3, claw_freq: Vec3, legs: f32, spine: [f32; 4], stiff: [(f32, f32); 4],
     bump: (f32, f32), stunned: (f32, f32), t: f32, down: Option<f32>, bump_t: f32,
+    /// RDR2 core: RDR2's yanked from this message's values, run in this one's place
+    r2: Box<crate::extras_ysk_rdr2::YankedRdr2>,
 }
 
 impl Lasso {
     fn new(p: &mut P) -> Result<Lasso, Error> {
         let _ = (p.f("groundFriction", 1.0)?, p.f("ropeendfriction", 0.5)?, p.f("otherendfriction", 2.0)?);
         let (leg_d, arm_d, spine_d) = (p.f("groundLegDamping", 0.5)?, p.f("groundArmDamping", 0.5)?, p.f("groundSpineDamping", 0.5)?);
+        let mut y = crate::extras_ysk_rdr2::YankedParams::new(p)?;
+        y.lassoed = p.i("lassoedtype", 0)?.clamp(0, 2);
+        if p.i("grabPart", 11)? >= 0 {
+            y.grab_part = p.i("grabPart", 11)?.clamp(0, 20) as usize;
+        }
+        y.rope_part = p.i("ropePart", 10)?.clamp(0, 20) as usize;
         Ok(Lasso {
+            r2: Box::new(crate::extras_ysk_rdr2::YankedRdr2::new(y)),
             kind: p.i("lassoedtype", 0)?.clamp(0, 2),
             part: p.i("grabPart", 11)?.clamp(-1, 20),
             grab: [p.v("grabposl", Vec3::new(0.07, 0.05, -0.051))?, p.v("grabposr", Vec3::new(0.09, -0.05, -0.051))?],
@@ -3579,8 +3629,27 @@ impl Lasso {
 }
 
 impl Extra for Lasso {
+    fn lines(&mut self) -> Vec<String> {
+        self.r2.lines()
+    }
+
+    fn update(&mut self, p: &mut P) -> Result<(), Error> {
+        let at = p.v("ropePos", Vec3::ZERO)?;
+        if at != Vec3::ZERO {
+            self.r2.rope_to(at);
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self, c: &mut Ctx) {
+        self.r2.stop(c);
+    }
+
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
         use std::f32::consts::TAU;
+        if c.ch.rdr2 {
+            return self.r2.tick(c, dt);
+        }
         self.t += dt;
         let up = c.up;
         let pelvis = c.b.part(0).m.d;

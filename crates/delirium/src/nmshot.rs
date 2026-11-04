@@ -180,6 +180,8 @@ pub struct Out {
     pub bb_start: Option<crate::nmbb::Params>,
     /// RDR2 core: the balancer's leg stiffness from now on (onFire's bal+0x658/+0x65c)
     pub dbm_leg_stiffness: Option<f32>,
+    /// RDR2 core: pedalLegs' one-tick reverse flags (left, right) for its next tick, as RDR2's yanked writes them
+    pub pedal_reverse: Option<[bool; 2]>,
 }
 
 impl Out {

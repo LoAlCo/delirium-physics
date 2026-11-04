@@ -5,6 +5,7 @@ use bevy_transform::components::Transform;
 pub fn messages() -> impl Iterator<Item = &'static Message> {
     MESSAGES.iter().chain(&crate::extras_fall::MESSAGES).chain(&crate::extras_held::MESSAGES).chain(&crate::extras_rdr2::MESSAGES)
         .chain(&crate::extras_pg_rdr2::MESSAGES).chain(&crate::extras_cf_rdr2::MESSAGES)
+        .chain(&crate::extras_ysk_rdr2::MESSAGES)
 }
 
 pub static MESSAGES: [Message; 3] = [
@@ -176,7 +177,10 @@ impl Extras {
                 Some(e) => e,
                 None => match crate::extras_rdr2::build(name, &mut p) {
                     Some(e) => e,
-                    None => crate::extras_held::build(name, &mut p).expect("every extra's message builds"),
+                    None => match crate::extras_ysk_rdr2::build(name, &mut p) {
+                        Some(e) => e,
+                        None => crate::extras_held::build(name, &mut p).expect("every extra's message builds"),
+                    },
                 },
             },
         };
@@ -334,6 +338,13 @@ impl HardConstraint {
 pub struct P<'a, 'b> {
     params: &'a [(&'b str, Value)],
     used: Vec<&'b str>,
+}
+
+impl P<'static, 'static> {
+    /// No parameters: every default.
+    pub fn empty() -> Self {
+        P { params: &[], used: vec![] }
+    }
 }
 
 impl<'b> P<'_, 'b> {

@@ -200,6 +200,11 @@ impl Pedal {
         }
     }
 
+    /// RDR2's one-tick reverse flags (+0xb5/+0xb6), as yanked writes them before this tick.
+    pub fn set_reverse(&mut self, r: [bool; 2]) {
+        self.reverse = r;
+    }
+
     /// RDR2's speeds: each leg's angular speed noised by speedAsymmetry, a negative one floored at 0.2 rad/s.
     fn speeds_rdr2(&mut self, w: f32, agent: f32) {
         let n = [2.0 * noise01(self.t, agent, self.t2) - 1.0, 2.0 * noise01(self.t2, agent, self.t) - 1.0];
@@ -224,8 +229,8 @@ impl Pedal {
     }
 
     /// RDR2's tick (section 4): leg stiffness, the radius noise, adaptive pedalling against the drag, each leg's phase
-    /// and its foot target, and with hula the upper body's counter-motion. Nothing sets the one-tick reverse flags
-    /// (RDR2's writer wasn't found), so they stay off.
+    /// and its foot target, and with hula the upper body's counter-motion. The one-tick reverse flags are yanked's
+    /// (its back-pedalling legs, `set_reverse`), cleared after each tick.
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
         let p = self.rdr2;
         if p.hula != self.hula {

@@ -1987,6 +1987,10 @@ impl Agent {
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xe8); }
             self.extras.tick_marked(&mut c, Some(world), obstacles, dt, self.limb_reqs.as_mut());
+            // RDR2 core: yanked's pedalLegs reverse flags for this tick
+            if let Some(r) = c.out.pedal_reverse.take() {
+                self.nm_pd.set_reverse(r);
+            }
             if !waits(walk_actives!(self), W_PD()) {
                 self.nm_pd.tick(&mut c, dt);
             }

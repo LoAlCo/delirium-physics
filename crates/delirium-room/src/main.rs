@@ -3700,6 +3700,10 @@ impl Sim {
             self.say(format!("ours  {} the pool at {}", if wet { "into" } else { "out of" }, v3(me)));
             let real = if self.real_water { " buoyancy=0 damping=0" } else { "" };
             self.send(&if wet { format!("buoyancy start=true surfacePoint={}{real}", v3(Vec3::Z * world::WATER())) } else { "buoyancy start=false".into() });
+            // RDR2 core: RDR2's swim, on the pool's surface
+            if self.rdr2_core {
+                self.send(&if wet { format!("swim start=true surfacePoint={}", v3(Vec3::Z * world::WATER())) } else { "swim start=false".into() });
+            }
         }
         if self.hold.is_some_and(|t| now >= t) {
             self.hold = None;
@@ -4303,6 +4307,10 @@ impl Sim {
             match self.gun.rope {
                 Some(to) => {
                     self.gun.lasso = Some((part, LASSO_HOLD));
+                    // RDR2 core: RDR2's yanked reads the rope's anchor as it moves
+                    if self.rdr2_core && self.gun.rope_end.distance(to) > 0.2 {
+                        self.send(&format!("rdr2Lasso ropePos={}", v3(to)));
+                    }
                     self.gun.rope_end = to;
                     self.gun.rope_t += dt;
                     let ramp = (self.gun.rope_t / ROPE_RAMP).min(1.0);
@@ -4384,7 +4392,9 @@ impl Sim {
                     let (aimed, from) = self.gun.lasso_aim;
                     let (rope, how) = lasso_on(aimed.unwrap_or(part));
                     self.held = false;
-                    self.send(&format!("rdr2Lasso start=true lassoedtype={how}"));
+                    // RDR2 core: rdr2Lasso runs RDR2's yanked, which reads the rope (its anchor and the part it is on)
+                    let rope_at = if self.rdr2_core { format!(" ropePos={} ropePart={rope}", v3(from)) } else { String::new() };
+                    self.send(&format!("rdr2Lasso start=true lassoedtype={how}{rope_at}"));
                     (self.gun.lasso, self.gun.rope_end) = (Some((rope, LASSO_HOLD)), from);
                     self.say(format!("room  lasso round his {}: hold the left button to pull", ["neck", "chest and arms", "feet"][how as usize]));
                 }
@@ -5036,6 +5046,9 @@ impl Sim {
         }
         if line.starts_with("stopAllBehaviours") && self.wet {
             self.send_to(0, &format!("buoyancy start=true surfacePoint={}", v3(Vec3::Z * world::WATER())));
+            if self.rdr2_core {
+                self.send_to(0, &format!("swim start=true surfacePoint={}", v3(Vec3::Z * world::WATER())));
+            }
         }
     }
 
