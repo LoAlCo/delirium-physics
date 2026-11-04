@@ -1,6 +1,7 @@
-//! RDR2's teeter and highFall, with the RDR2 core, from clean-room studies of RDR2's behaviours
-//! (rdr2-decomp/study/rdr2_teeter.md, rdr2_highfall.md). Teeter is the RDR2 path of the teeter extra; highFall runs as
-//! an extra only with the RDR2 core (msg.rs sends it here), GTA IV's highFall (nmhf.rs) otherwise.
+//! RDR2's teeter, highFall and balancerCollisionsReaction, with the RDR2 core, from clean-room studies of RDR2's
+//! behaviours (rdr2-decomp/study/rdr2_teeter.md, rdr2_highfall.md, rdr2_bcr.md). Teeter and balancerCollisionsReaction
+//! are the RDR2 paths of their extras; highFall runs as an extra only with the RDR2 core (msg.rs sends it here), GTA
+//! IV's highFall (nmhf.rs) otherwise.
 use crate::extras::{Extra, P};
 use crate::extras_fall::{attitude, orient_pd, unit, v3s, CHEST};
 use crate::msg::{Error, Value};
@@ -1077,5 +1078,328 @@ impl Extra for HighFall {
 
     fn lines(&mut self) -> Vec<String> {
         std::mem::take(&mut self.out)
+    }
+}
+
+// ---- balancerCollisionsReaction ----
+
+/// How far ahead the wall probes look, in seconds of his horizontal speed (RDR2's unnamed 0.5), and the speed they
+/// need to run.
+const BCR_PROBE_TIME: f32 = 0.5;
+const BCR_PROBE_SPEED: f32 = 0.5;
+/// An impact this far (rad) off head-on is a glance.
+const BCR_GLANCE: f32 = 0.6;
+/// Ours [G] (RDR2's part contact probes aren't read): a part's contact is on the wall within this of its plane and
+/// with its normal this close to the wall's.
+const BCR_ON_WALL: f32 = 0.1;
+const BCR_NORMAL: f32 = 0.7;
+
+#[derive(Clone, Copy, Debug)]
+struct BcrParams {
+    /// objectBehindVictim: the wall given (point, normal)
+    behind: Option<(Vec3, Vec3)>,
+    steps: i32,
+    zone: f32,
+    leg_red: f32,
+    slump_red: f32,
+    slump_rate: f32,
+    spin_time: f32,
+    mass: f32,
+    volume: f32,
+    rebound_mode: i32,
+    forward_mode: i32,
+    to_forward: f32,
+    rebound: f32,
+    brace: bool,
+}
+
+/// A probe's hit: the point, the wall's normal there (out of it), the distance along the probe and the object's
+/// velocity at the point.
+#[derive(Clone, Copy, Debug)]
+struct BcrHit {
+    at: Vec3,
+    n: Vec3,
+    dist: f32,
+    vel: Vec3,
+}
+
+/// RDR2's balancerCollisionsReaction (with the RDR2 core), from a partial study of RDR2's code
+/// (rdr2-decomp/study/rdr2_bcr.md): while nothing is met, two sphere probes look half a second ahead along his
+/// horizontal velocity for a wall (moving objects both light and small don't count); the wall becomes a plane the
+/// balancer keeps his predicted COM off (exclusionZone, more once he has hit it); a part touching it is the impact,
+/// which publishes impactLegStiffReduction for staggerFall, bends the knees through the balancer (owner 8) and turns
+/// the head to the wall. RDR2's states: 0 looking, 1 impact, 2 moving off it, 4 slump, 5 glance (side-on, back to 1
+/// after glanceSpinTime), 6 come off the wall (reboundMode decides), 12 finished; he slumps after
+/// numStepsTillSlump steps from the impact, timeToForward after a forward impact, or once the balancer gives up.
+pub struct BcrRdr2 {
+    p: BcrParams,
+    state: u8,
+    hits: [Option<BcrHit>; 2],
+    speed: f32,
+    /// the wall: a point on it and its horizontal normal toward him; the object's velocity; time to reach it
+    wall: Option<(Vec3, Vec3)>,
+    wall_vel: Vec3,
+    tte: f32,
+    /// the impact latched (+0x27b) and this phase's (+0x27c), the time since, the balancer's steps then
+    impacted: bool,
+    phase: bool,
+    t_hit: f32,
+    steps_at: u32,
+    /// still balancing (+0x62c), and how long something other than his feet has touched since it stopped
+    balancing: bool,
+    nonfoot: Option<f32>,
+    slump_t: f32,
+    started: bool,
+    look: Option<Vec3>,
+}
+
+impl BcrRdr2 {
+    pub fn new(p: &mut P) -> Result<BcrRdr2, Error> {
+        let f = |p: &mut P, n: &str, d: f32| -> Result<f32, Error> { p.get(n).map_or(Ok(d), Value::f) };
+        let b = |p: &mut P, n: &str, d: bool| -> Result<bool, Error> { p.get(n).map_or(Ok(d), Value::b) };
+        let i = |p: &mut P, n: &str, d: i32| -> Result<i32, Error> { p.get(n).map_or(Ok(d), Value::i) };
+        let v = |p: &mut P, n: &str| -> Result<Vec3, Error> { p.get(n).map_or(Ok(Vec3::ZERO), Value::v) };
+        let (at, n) = (v(p, "objectBehindVictimPos")?, v(p, "objectBehindVictimNormal")?);
+        let p = BcrParams {
+            behind: b(p, "objectBehindVictim", false)?.then_some((at, n)),
+            steps: i(p, "numStepsTillSlump", 3)?, zone: f(p, "exclusionZone", 0.2)?, leg_red: f(p, "impactLegStiffReduction", 3.0)?,
+            slump_red: f(p, "slumpLegStiffReduction", 1.0)?, slump_rate: f(p, "slumpLegStiffRate", 8.0)?,
+            spin_time: f(p, "glanceSpinTime", 0.5)?, mass: f(p, "ignoreColMassBelow", 20.0)?, volume: f(p, "ignoreColVolumeBelow", 0.1)?,
+            rebound_mode: i(p, "reboundMode", 0)?, forward_mode: i(p, "forwardMode", 0)?, to_forward: f(p, "timeToForward", 0.5)?,
+            rebound: f(p, "reboundForce", 0.0)?, brace: b(p, "braceWall", false)?,
+        };
+        Ok(BcrRdr2 { p, state: 0, hits: [None; 2], speed: 0.0, wall: None, wall_vel: Vec3::ZERO, tte: 0.0, impacted: false, phase: false,
+                     t_hit: 0.0, steps_at: 0, balancing: true, nonfoot: None, slump_t: 0.0, started: false, look: None })
+    }
+
+    /// The probes (state 0, moving faster than 0.5 m/s): spheres of 0.25 m from the pelvis and 0.1 m from the chest
+    /// along his horizontal velocity for half a second of it.
+    pub fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
+        self.hits = [None; 2];
+        if self.state != 0 {
+            return;
+        }
+        let vh = c.vel - c.up * c.up.dot(c.vel);
+        self.speed = vh.length();
+        if self.speed <= BCR_PROBE_SPEED {
+            return;
+        }
+        let (d, len) = (vh / self.speed, BCR_PROBE_TIME * self.speed);
+        for (i, (k, r)) in [(0, 0.25), (crate::nmshot::chest_part(), 0.1)].into_iter().enumerate() {
+            self.hits[i] = self.sweep(world, obs, c.b.at(k), d, r, len);
+        }
+    }
+
+    /// The nearest hit of a sphere swept from `from` along `d`: the world, and the objects but those both lighter
+    /// than ignoreColMassBelow and smaller than ignoreColVolumeBelow (fixed ones always count; ours: an object's box
+    /// grown by the radius stands for the sphere).
+    fn sweep(&self, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle], from: Vec3, d: Vec3, r: f32, len: f32) -> Option<BcrHit> {
+        let (to, pad) = (from + d * len, Vec3::splat(r));
+        let tris: Vec<[Vec3; 3]> = world.tris_near(from.min(to) - pad, from.max(to) + pad).into_iter().map(|t| t.0).collect();
+        let mut best = crate::collision::sphere_sweep(&tris, from, d, r, len)
+            .map(|(t, q)| BcrHit { at: q, n: unit(from + d * t - q), dist: t, vel: Vec3::ZERO });
+        for ob in obs {
+            if ob.inv_mass > 0.0 && 1.0 / ob.inv_mass < self.p.mass && 8.0 * ob.half.x * ob.half.y * ob.half.z < self.p.volume {
+                continue;
+            }
+            let inv = ob.rot.inverse();
+            if let Some((t, nl)) = crate::nmcf::ray_box(inv * (from - ob.centre), inv * d, ob.half + pad) {
+                if t <= len && best.is_none_or(|b| t < b.dist) {
+                    let n = ob.rot * nl;
+                    let q = from + d * t - n * r;
+                    best = Some(BcrHit { at: q, n, dist: t, vel: ob.vel_at(q) });
+                }
+            }
+        }
+        best
+    }
+
+    pub fn tick(&mut self, c: &mut Ctx, dt: f32, out: &mut Vec<String>) {
+        let up = c.up;
+        let flat = |v: Vec3| unit(v - up * up.dot(v));
+        if !self.started {
+            self.started = true;
+            // ours: RDR2 has objectBehindVictimPos/Normal, but where it reads them isn't found
+            if let Some((at, n)) = self.p.behind {
+                let n = flat(if n == Vec3::ZERO { c.com - at } else { n });
+                self.wall = (n != Vec3::ZERO).then_some((at, n));
+            }
+        }
+        let was = self.state;
+        if self.impacted {
+            self.t_hit += dt;
+        }
+        // balancing while the balancer hasn't given up; after that, how long anything but his feet has touched
+        self.balancing &= c.upright;
+        if !self.balancing {
+            let feet = [limb(2).p[3], limb(3).p[3]];
+            let parts: Vec<usize> = all_parts(c).into_iter().filter(|k| !feet.contains(k)).collect();
+            if self.nonfoot.is_some() || c.b.doll.collided(&parts) {
+                self.nonfoot = Some(self.nonfoot.unwrap_or(0.0) + dt);
+            }
+        }
+        // the wall from the probes: the chest's hit if it has one, else the pelvis's, its normal made horizontal
+        if self.state == 0 {
+            if let Some(h0) = self.hits[0] {
+                let h = self.hits[1].unwrap_or(h0);
+                let n = flat(h.n);
+                if n != Vec3::ZERO {
+                    (self.wall, self.wall_vel, self.tte) = (Some((h.at, n)), h.vel, h.dist / self.speed.max(1e-6));
+                }
+            }
+        }
+        self.machine(c, out);
+        let speed = (c.vel - up * up.dot(c.vel)).length();
+        if let Some((at, n)) = self.wall {
+            // the balancer's exclusion plane (BCR's wins over teeter's once he has hit it)
+            let off = match self.state {
+                5 | 10 => 0.4,
+                6 => 0.1,
+                _ => self.p.zone + if self.impacted { (0.2 * speed).min(0.5) } else { 0.0 },
+            };
+            if self.impacted || c.out.dbm_plane.is_none() {
+                c.out.dbm_plane = Some((at, n, -1.0, off));
+            }
+            // coming up to it with braceWall: look at it while it is more than half a second away
+            let bracing = self.p.brace && self.balancing && (self.p.rebound_mode != 2 || self.state == 0);
+            if !self.impacted && self.state != 12 && bracing && self.tte > 0.5 {
+                self.look_at(at, out);
+            }
+            if self.impacted {
+                // the head to the wall at chest height, while he stands (ours: RDR2 waits for catchFall and
+                // bodyRollUp to be idle)
+                if c.upright {
+                    let chest = c.b.at(crate::nmshot::chest_part());
+                    self.look_at(at + up * up.dot(chest - at), out);
+                }
+                // the knee bend: the spine root's height over the lower foot less 0.1, at most 0.35, at 4/s
+                if self.phase && c.dbm.is_some() {
+                    let low = [2, 3].map(|i| up.dot(c.b.at(limb(i).p[3]))).into_iter().fold(f32::MAX, f32::min);
+                    let k = (up.dot(c.b.joint_pos((*SPINE())[0])) - low - 0.1).clamp(0.0, 0.35);
+                    c.out.dbm_crouch.push(Crouch::Knee(8, -k, 4.0));
+                }
+            }
+        }
+        // the slump once the balancer has given up (unless he has been down on something more than 0.3 s)
+        if !self.balancing && !matches!(self.state, 0 | 12) && self.nonfoot.unwrap_or(0.0) <= 0.3 {
+            self.state = 4;
+        }
+        if self.state == 4 {
+            self.slump_t += dt;
+            if c.dbm.is_some() {
+                self.slump(c);
+            }
+        }
+        c.ch.bcr = Some((self.state, self.impacted, if self.impacted { self.p.leg_red } else { 0.0 }));
+        if self.state != was {
+            out.push(format!("#say bcr state {}", self.state));
+        }
+    }
+
+    /// RDR2's state machine (0x2aeaa50), as far as it is read.
+    fn machine(&mut self, c: &mut Ctx, out: &mut Vec<String>) {
+        let steps = c.dbm.map_or(0, |d| d.steps);
+        // the slump by steps since the impact (ours [P]: counted only after it)
+        if self.impacted && steps.saturating_sub(self.steps_at) as i64 >= self.p.steps as i64 {
+            self.state = 4;
+            if (self.p.rebound_mode == 0 && !c.shot_on) || self.p.rebound_mode == 2 {
+                return;
+            }
+        }
+        if !self.impacted && !self.balancing {
+            self.state = 12;
+            return;
+        }
+        if matches!(self.state, 6 | 12) {
+            return;
+        }
+        let Some((at, n)) = self.wall else { return };
+        let w = -n;
+        if !self.impacted {
+            let hit = (0..c.b.doll.hit.len()).filter_map(|k| c.b.doll.hit[k])
+                .find(|&(q, cn, _)| (q - at).dot(n).abs() < BCR_ON_WALL && cn.dot(n).abs() > BCR_NORMAL);
+            if let Some((q, _, _)) = hit {
+                (self.impacted, self.phase, self.state, self.t_hit, self.steps_at) = (true, true, 1, 0.0, steps);
+                // the impact angle: his velocity against the wall's inward direction (ours [P] on the vectors)
+                let v = unit((c.vel - self.wall_vel) - c.up * c.up.dot(c.vel - self.wall_vel));
+                if v != Vec3::ZERO && w.dot(v).clamp(-1.0, 1.0).acos() > BCR_GLANCE {
+                    self.state = 5;
+                }
+                self.wall = Some((q, n));
+            }
+        }
+        if matches!(self.state, 5 | 10) && self.t_hit > self.p.spin_time {
+            self.state = 1;
+        }
+        let at = self.wall.map_or(at, |w| w.0);
+        if self.state == 1 {
+            // facing the wall (ours: his forward axis is the trunk's back axis negated)
+            if (-c.m.c).dot(w) >= 0.0 {
+                let chest = crate::nmshot::chest_part();
+                let e = (c.b.at(chest) - at).dot(n);
+                if self.p.rebound > 0.0 && e > 0.0 && e < 0.4 {
+                    c.out.impulse.push((chest, c.b.at(chest), n * self.p.rebound));
+                    for i in 0..2 {
+                        let k = limb(i).p[1];
+                        c.out.impulse.push((k, c.b.at(k), n * (-0.25 * self.p.rebound)));
+                    }
+                }
+                // forwardMode 1 while shot: RDR2's fall-to-knees preset instead ([G], left out: he stays)
+                if self.t_hit > 0.1 && self.t_hit > self.p.to_forward && !(self.p.forward_mode == 1 && c.shot_on) {
+                    self.state = 4;
+                }
+            } else {
+                self.state = 2;
+            }
+        }
+        // coming off the wall: moving away from it faster than 0.2 m/s with the COM 0.4 m out
+        if self.impacted && !matches!(self.state, 5 | 10) && (c.vel - self.wall_vel).dot(n) > 0.2 && (c.com - at).dot(n) > 0.4 {
+            self.state = 6;
+            match self.p.rebound_mode {
+                0 if !c.shot_on => self.state = 4,
+                2 => self.state = 4,
+                3 => self.restart(c, out),
+                _ => {}
+            }
+        }
+    }
+
+    /// reboundMode 3: back to looking for a wall; catchFall and bodyRollUp stopped if he is still balancing; the
+    /// knee bend let go.
+    fn restart(&mut self, c: &mut Ctx, out: &mut Vec<String>) {
+        (self.state, self.impacted, self.phase, self.t_hit, self.wall, self.tte, self.slump_t) = (0, false, false, 0.0, None, 0.0, 0.0);
+        c.out.dbm_crouch.push(Crouch::ReleaseKnee(1.0));
+        if self.balancing {
+            out.extend(["catchFall start=false".to_string(), "bodyRollUp start=false".to_string()]);
+        }
+    }
+
+    /// The slump's leg weakening (ours [G]: RDR2's slump core isn't read): the legs' stiffness from the balancer
+    /// less slumpLegStiffReduction, reached at slumpLegStiffRate a second.
+    fn slump(&self, c: &mut Ctx) {
+        let r = (self.p.slump_rate * self.slump_t).min(self.p.slump_red).max(0.0);
+        for i in 0..2 {
+            for j in [(*HIP())[i], (*KNEE())[i], (*ANKLE())[i]] {
+                let e = &mut c.ch.eff[j];
+                let s = e.strength.max(0.0).sqrt();
+                if s > 1e-6 {
+                    let k = (s - r).max(0.0) / s;
+                    (e.strength, e.damping) = (e.strength * k * k, e.damping * k);
+                }
+            }
+        }
+    }
+
+    fn look_at(&mut self, at: Vec3, out: &mut Vec<String>) {
+        if self.look.is_none_or(|l| l.distance(at) > 0.05) {
+            self.look = Some(at);
+            out.push(format!("headLook start=true alwaysLook=true pos={}", v3s(at)));
+        }
+    }
+
+    /// Deactivate: impactLegStiffReduction withdrawn, the knee bend let go.
+    pub fn stop(&mut self, c: &mut Ctx) {
+        c.ch.bcr = None;
+        c.out.dbm_crouch.push(Crouch::ReleaseKnee(1.0));
     }
 }

@@ -538,6 +538,11 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "useLeftArm", kind: Kind::Bool, used: true, doc: "+61 / +60: the arms that flinch." },
         Param { name: "pos", kind: Kind::Vec3, used: true, doc: "" },
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "protectHeadToggle", kind: Kind::Bool, used: true, doc: "RDR2 core only: always turned away, covering the head (false)" },
+        Param { name: "applyStiffness", kind: Kind::Bool, used: true, doc: "RDR2 core only: set the upper body's stiffness (true)" },
+        Param { name: "dontBraceHead", kind: Kind::Bool, used: true, doc: "RDR2 core only: no head cover when turned away, no fixed first pose (false)" },
+        Param { name: "headLookAwayFromTarget", kind: Kind::Bool, used: true, doc: "RDR2 core only: now and then look away to the side (false)" },
+        Param { name: "useHeadLook", kind: Kind::Bool, used: true, doc: "RDR2 core only: run headLook (true)" },
     ] },
 ];
 
@@ -1205,6 +1210,11 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("upperBodyFlinch", "useLeftArm") => { let p = &mut st.upper_body_flinch; p.use_left_arm = v.b()?; }
         ("upperBodyFlinch", "pos") => { let p = &mut st.upper_body_flinch; p.pos = v.v()?; }
         ("upperBodyFlinch", "bodyStiffness") => { let p = &mut st.upper_body_flinch; p.body_stiffness = v.f()?; }
+        ("upperBodyFlinch", "protectHeadToggle") => { let p = &mut st.upper_body_flinch; p.protect_head_toggle = v.b()?; }
+        ("upperBodyFlinch", "applyStiffness") => { let p = &mut st.upper_body_flinch; p.apply_stiffness = v.b()?; }
+        ("upperBodyFlinch", "dontBraceHead") => { let p = &mut st.upper_body_flinch; p.dont_brace_head = v.b()?; }
+        ("upperBodyFlinch", "headLookAwayFromTarget") => { let p = &mut st.upper_body_flinch; p.head_look_away = v.b()?; }
+        ("upperBodyFlinch", "useHeadLook") => { let p = &mut st.upper_body_flinch; p.use_head_look = v.b()?; }
         _ => return Err(Error::Param),
     }
     Ok(())
@@ -1496,6 +1506,11 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("upperBodyFlinch", "useLeftArm") => { let p = &st.upper_body_flinch; Value::Bool(p.use_left_arm) }
         ("upperBodyFlinch", "pos") => { let p = &st.upper_body_flinch; Value::Vec3(p.pos) }
         ("upperBodyFlinch", "bodyStiffness") => { let p = &st.upper_body_flinch; Value::Float(p.body_stiffness) }
+        ("upperBodyFlinch", "protectHeadToggle") => { let p = &st.upper_body_flinch; Value::Bool(p.protect_head_toggle) }
+        ("upperBodyFlinch", "applyStiffness") => { let p = &st.upper_body_flinch; Value::Bool(p.apply_stiffness) }
+        ("upperBodyFlinch", "dontBraceHead") => { let p = &st.upper_body_flinch; Value::Bool(p.dont_brace_head) }
+        ("upperBodyFlinch", "headLookAwayFromTarget") => { let p = &st.upper_body_flinch; Value::Bool(p.head_look_away) }
+        ("upperBodyFlinch", "useHeadLook") => { let p = &st.upper_body_flinch; Value::Bool(p.use_head_look) }
         _ => return None,
     })
 }

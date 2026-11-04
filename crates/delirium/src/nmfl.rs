@@ -41,6 +41,18 @@ pub struct Flinch {
     pub hands_off: bool,
     behind: bool,
     right: bool,
+    /// RDR2 core only: protectHeadToggle, applyStiffness, dontBraceHead, headLookAwayFromTarget, useHeadLook
+    pub protect_head_toggle: bool,
+    pub apply_stiffness: bool,
+    pub dont_brace_head: bool,
+    pub head_look_away: bool,
+    pub use_head_look: bool,
+    /// RDR2 core: the target-right-below latches (behind, in front), the arms posed this tick, both hands at the head,
+    /// and the look-away timer
+    below: (bool, bool),
+    posed: [bool; 2],
+    at_head: bool,
+    look_t: f32,
 }
 
 impl Default for Flinch {
@@ -49,7 +61,8 @@ impl Default for Flinch {
                  body_stiffness: delirium_data::kv!(117), body_damping: 1.0, back_bend_amount: -delirium_data::kv!(132), use_right_arm: true, use_left_arm: true,
                  noise_scale: delirium_data::kv!(78), new_hit: true, turn_towards: 1, turn: true, dir: Vec3::ZERO, t_behind: 0.0, t_front: 0.0,
                  leg_offset: 0.0, bearing: 0.0, noise_at: 0.0, t_hands: 0.0, t_ramp: 0.0, ramp: delirium_data::kv!(116), ms: delirium_data::kv!(51), active: false,
-                 hands_off: false, behind: false, right: false }
+                 hands_off: false, behind: false, right: false, protect_head_toggle: false, apply_stiffness: true, dont_brace_head: false,
+                 head_look_away: false, use_head_look: true, below: (false, false), posed: [false; 2], at_head: false, look_t: 0.0 }
     }
 }
 
@@ -105,6 +118,9 @@ impl Flinch {
         if self.active {
             return;
         }
+        if c.ch.rdr2 {
+            return self.activate_rdr2(c, head, st);
+        }
         (self.active, self.right) = (true, true);
         let ch = &mut *c.ch;
         self.leg_offset = delirium_data::kv!(78) * ch.random() - delirium_data::kv!(78);
@@ -121,10 +137,14 @@ impl Flinch {
         self.stiffen(c.ch);
     }
 
-    pub fn deactivate(&mut self, ch: &mut Character, head: &mut HeadLook, st: &mut SpineTwist) {
+    pub fn deactivate(&mut self, c: &mut Ctx, head: &mut HeadLook, st: &mut SpineTwist) {
         if !self.active {
             return;
         }
+        if c.ch.rdr2 {
+            return self.deactivate_rdr2(c, head, st);
+        }
+        let ch = &mut *c.ch;
         for j in Character::mask("ub") {
             ch.eff[j].reset(&ch.joints[j]);
         }
@@ -136,6 +156,9 @@ impl Flinch {
     pub fn tick(&mut self, c: &mut Ctx, head: &mut HeadLook, st: &mut SpineTwist, dbm: Option<&mut Dbm>, dbm_failed: bool, dt: f32) {
         if !self.active {
             return;
+        }
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c, head, st, dbm.is_some(), dbm_failed, dt);
         }
         if self.hands_off {
             self.t_hands -= dt;
@@ -331,6 +354,300 @@ impl Flinch {
                 ch.eff[(*KNEE())[i]].desired[0] = -2.0;
             }
         }
+    }
+}
+
+/// RDR2's upperBodyFlinch (with the RDR2 core), from a study of RDR2's code (rdr2-decomp/study/rdr2_flinch.md). The
+/// structure is GTA IV's; RDR2 adds the target-right-below latches and protectHeadToggle, couples to the balancer
+/// through its heading request (3-D, at pos) and knee-bend request (owner 4), covers the head with one fixed pose for
+/// both arms, poses an arm only if it is free and stiffens only the posed arms, and can look away from the target.
+impl Flinch {
+    fn activate_rdr2(&mut self, c: &mut Ctx, head: &mut HeadLook, st: &mut SpineTwist) {
+        (self.active, self.right, self.posed) = (true, true, [false; 2]);
+        let ch = &mut *c.ch;
+        self.leg_offset = 0.1 * ch.random() - 0.1;
+        self.noise_at = 4000.0 * ch.random();
+        self.turn = ch.random_bits() & 1 != 0;
+        for j in Character::mask("ub") {
+            ch.eff[j].oppose_gravity = 1.0;
+        }
+        st.vel = Vec3::ZERO;
+        st.activate(ch);
+        if self.use_head_look {
+            *head = HeadLook::default();
+            head.activate(ch, c.b);
+        }
+        self.state_rdr2(c);
+        if self.apply_stiffness {
+            self.stiffen_rdr2(c.ch);
+        }
+    }
+
+    /// Deactivate: opposeGravity off and the upper body back to its defaults, spineTwist and headLook stopped, the
+    /// balancer's heading and knee bend let go.
+    fn deactivate_rdr2(&mut self, c: &mut Ctx, head: &mut HeadLook, st: &mut SpineTwist) {
+        for j in Character::mask("ub") {
+            c.ch.eff[j].oppose_gravity = 0.0;
+            c.ch.eff[j].reset(&c.ch.joints[j]);
+        }
+        *self = Flinch::default();
+        st.deactivate();
+        head.deactivate();
+        c.out.dbm_turn = Some(Vec3::ZERO);
+        c.out.dbm_crouch.push(crate::nmdbm_rdr2::Crouch::ReleaseKnee(1e5));
+    }
+
+    fn tick_rdr2(&mut self, c: &mut Ctx, head: &mut HeadLook, st: &mut SpineTwist, dbm_on: bool, failed: bool, dt: f32) {
+        if self.hands_off {
+            self.t_hands -= dt;
+            if self.t_hands <= 0.0 {
+                self.hands_off = false;
+            }
+        }
+        self.state_rdr2(c);
+        if dbm_on {
+            if self.turn && self.turn_towards != 0 {
+                let w = if self.bearing.abs() > 2.8 { c.m.a * self.bearing.signum() } else { self.pos - c.com };
+                let h = (w.normalize_or_zero() * self.turn_towards as f32).normalize_or_zero();
+                c.out.dbm_turn = Some(h * 0.5);
+            }
+            use crate::nmdbm_rdr2::Crouch;
+            c.out.dbm_crouch.push(if self.behind { Crouch::Knee(4, self.leg_offset, 1e5) } else { Crouch::ReleaseKnee(1e5) });
+        }
+        self.posed = [false; 2];
+        if self.behind {
+            (self.t_behind, self.t_front) = (self.t_behind + dt, 0.0);
+            if !self.dont_brace_head {
+                self.protect_head(c, failed);
+            }
+        } else {
+            (self.t_behind, self.t_front) = (0.0, self.t_front + dt);
+            self.front_rdr2(c);
+        }
+        self.look_rdr2(c, head, st, dt);
+        if self.new_hit {
+            if self.apply_stiffness {
+                self.stiffen_rdr2(c.ch);
+            }
+            self.new_hit = false;
+        } else if self.apply_stiffness {
+            self.soften_rdr2(c.ch, dt);
+        }
+    }
+
+    /// Where the target is: direction, bearing, turned away (with the target-right-below latches and
+    /// protectHeadToggle) and the side, swapping hands-off on a change of side.
+    fn state_rdr2(&mut self, c: &mut Ctx) {
+        let up = c.up;
+        let v = self.pos - c.com;
+        let n = v.normalize_or_zero();
+        let (mut front, mut back) = (false, false);
+        if up.dot(n) < -0.96 && c.m.b.dot(up) > 0.7 {
+            let flat = c.m.c - up * up.dot(c.m.c);
+            let f = flat.dot(n) < 0.0 || self.below.1;
+            if !self.below.0 && !self.below.1 {
+                self.below = (!f, f);
+            }
+            (back, front) = self.below;
+        } else {
+            self.below = (false, false);
+        }
+        self.dir = (v - up * up.dot(v)).normalize_or_zero();
+        let loc = crate::rigid::to_frame([c.m.a, c.m.b, c.m.c, c.m.d], self.pos);
+        self.bearing = crate::nmdbm::atan2f(loc.x, -loc.z);
+        if self.protect_head_toggle {
+            self.behind = true;
+        } else if (self.bearing.abs() < 1.5 && !back) || front {
+            self.behind = false;
+        } else if self.bearing.abs() > 1.6 || back {
+            self.behind = true;
+        }
+        if back || front {
+            self.bearing = if self.right { self.bearing.abs() } else { -self.bearing.abs() };
+        } else if self.bearing > 0.4 {
+            if !self.right {
+                (self.hands_off, self.t_hands) = (true, 1.5);
+            }
+            self.right = true;
+        } else if self.bearing < -0.4 {
+            if self.right {
+                (self.hands_off, self.t_hands) = (true, 1.5);
+            }
+            self.right = false;
+        }
+    }
+
+    /// Facing the target: the spine bends back and away from it; for 0.1 s a fixed guard pose, then each free arm
+    /// reaches to its point in front of the chest, palm toward the target.
+    fn front_rdr2(&mut self, c: &mut Ctx) {
+        let up = c.up;
+        let t = 0.75 * self.t_front;
+        let h = (self.pos.dot(up) - c.com.dot(up)).clamp(-0.5, 2.0);
+        let agent = c.ch.agent as f32;
+        let n1 = (noise01(t, self.noise_at, agent) - 0.5) * self.noise_scale;
+        let n2 = (noise01(t, agent, self.noise_at) - 0.5) * self.noise_scale;
+        let n3 = (noise01(agent, t, self.noise_at) - 0.5) * self.noise_scale;
+        let side = self.dir.cross(up) * (self.hand_distance_left_right + n1);
+        let rise = up * h;
+        let fwd = (self.dir + rise).normalize_or_zero() * 0.38;
+        let mut vert = rise.normalize_or_zero() * (self.hand_distance_vertical + n2);
+        let mut fb = fwd * (n3 - self.hand_distance_front_back);
+        if self.right {
+            (vert, fb) = (-vert, -fb);
+        }
+        let centre = c.b.at(SPINE3()) + fwd;
+        let (tl, tr) = (centre + side + fb + vert, centre - side - fb - vert);
+        let b = self.bearing.clamp(-1.0, 1.0);
+        for (k, j) in (*SPINE()).into_iter().enumerate() {
+            c.ch.eff[j].desired[0] = (1.0 - b.abs()) * self.back_bend_amount * [0.1, 0.2, 0.3, 0.4][k];
+            c.ch.eff[j].desired[1] = self.back_bend_amount * b * [-0.1, -0.15, -0.15, -0.1][k];
+        }
+        if self.t_front < 0.1 && !self.dont_brace_head {
+            // right: shoulder (0.85, -0.5, -1.5), elbow 0.3, wrist 0.1; left: (0.995, -0.5, -1.5), 0.6, 0.2
+            for (i, on, l1, elbow, w1) in [(1, self.use_right_arm, 0.85, 0.3, 0.1), (0, self.use_left_arm, 0.995, 0.6, 0.2)] {
+                if on {
+                    c.ch.eff[(*SHOULDER())[i]].desired = [l1, -0.5, -1.5];
+                    c.ch.eff[(*ELBOW())[i]].desired[0] = elbow;
+                    let w = &mut c.ch.eff[(*WRIST())[i]];
+                    (w.desired[0], w.desired[1]) = (w1, 0.0);
+                    w.blend_to_zero(0.35);
+                    self.posed[i] = true;
+                }
+            }
+            return;
+        }
+        let n = crate::rigid::nrm_or_y(c.b.at(SPINE3()) - self.pos);
+        if self.use_left_arm && !c.ch.busy[0] {
+            Self::reach_rdr2(c, 0, tl, n, 0.05, if self.right { -0.3 } else { -0.5 }, 1.0);
+            self.posed[0] = true;
+        }
+        if self.use_right_arm && !c.ch.busy[1] {
+            let twist = if self.right && !self.posed[0] { 0.05 } else { -0.1 };
+            Self::reach_rdr2(c, 1, tr, n, twist, if self.right { -0.5 } else { -0.3 }, -1.0);
+            self.posed[1] = true;
+        }
+    }
+
+    /// RDR2's IK request (target and hand normal, twist), the clavicle's lean2, and the wrist at lean1 0.2, lean2 0
+    /// blended a quarter toward its zero pose. Ours: Delirium's limb IK and wrist aim stand for RDR2's IK solver.
+    fn reach_rdr2(c: &mut Ctx, i: usize, t: Vec3, n: Vec3, twist: f32, clav_lean2: f32, side: f32) {
+        let l = limb(i);
+        crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], t, twist, 0.0, side, 1.0, Vec3::ZERO, None);
+        crate::nmcf::clav_follow(c.ch, l.e[0], l.e[1]);
+        c.ch.eff[l.e[0]].desired[1] = clav_lean2;
+        Shot::wrist(c, l, t, n, side);
+        let w = &mut c.ch.eff[l.e[3]];
+        (w.desired[0], w.desired[1]) = (0.2, 0.0);
+        w.blend_to_zero(0.25);
+    }
+
+    /// Turned away: the spine curls, both arms take one fixed pose over the head (the wrists turn in once a hand is
+    /// there); if the balancer has given up, the hips and knees fold.
+    fn protect_head(&mut self, c: &mut Ctx, failed: bool) {
+        let q = (c.m.a.dot((self.pos - c.com).normalize_or_zero()) as f64).sin() as f32;
+        for (k, j) in (*SPINE()).into_iter().enumerate() {
+            c.ch.eff[j].desired[0] = [0.12, 0.24, 0.36, 0.48][k];
+            c.ch.eff[j].desired[1] = q * [0.2, 0.3, 0.3, 0.2][k];
+        }
+        let s3 = c.b.joint_pos((*SPINE())[3]);
+        let to_head = (c.b.joint_pos((*NECK())[(*NECK()).len() - 1]) - s3).normalize_or_zero();
+        let mut arrived = [false; 2];
+        for (i, on) in [(0, self.use_left_arm), (1, self.use_right_arm)] {
+            if !on {
+                continue;
+            }
+            arrived[i] = (c.b.joint_pos((*WRIST())[i]) - s3).normalize_or_zero().dot(to_head) > 0.85;
+            c.ch.eff[(*CLAVICLE())[i]].desired = [-0.375, -0.07, 0.035];
+            c.ch.eff[(*SHOULDER())[i]].desired = [1.514, -0.396, -0.495];
+            c.ch.eff[(*ELBOW())[i]].desired[0] = 2.4;
+            let w = &mut c.ch.eff[(*WRIST())[i]].desired;
+            (w[0], w[1]) = (1.0, if arrived[i] { -0.5 } else { -1.7 });
+            self.posed[i] = true;
+        }
+        self.at_head = arrived[0] && arrived[1];
+        if failed {
+            for i in 0..2 {
+                c.ch.eff[(*HIP())[i]].desired[0] = 1.5;
+                c.ch.eff[(*KNEE())[i]].desired[0] = -2.0;
+            }
+        }
+    }
+
+    /// spineTwist toward the target (or away), and the head look: at the target (or now and then to the side with
+    /// headLookAwayFromTarget), at the chest while the arms travel to the head, else at the feet; at headLook
+    /// priority 0xe with bodyStiffness and bodydamping.
+    fn look_rdr2(&mut self, c: &mut Ctx, head: &mut HeadLook, st: &mut SpineTwist, dt: f32) {
+        let up = c.up;
+        let w = (noise01(c.ch.agent as f32, 0.75 * (self.t_front + self.t_behind), 0.5 * self.noise_at) - 0.5) * 0.75;
+        let mut side = self.dir.cross(up) * w;
+        st.pos = if self.behind { c.b.at(SPINE3()) - self.dir } else { self.pos } + side;
+        st.stiffness = self.body_stiffness;
+        if !self.use_head_look {
+            return;
+        }
+        if !head.active {
+            head.activate(c.ch, c.b);
+        }
+        let look = if !self.behind {
+            let mut l = self.pos;
+            if self.head_look_away {
+                self.look_t -= dt;
+                if self.look_t >= 0.0 {
+                    l = self.pos + side.normalize_or_zero() * 10.0;
+                } else if self.look_t < -0.2 {
+                    self.look_t = 1.5 + 2.5 * c.ch.random();
+                }
+            }
+            l
+        } else if !self.at_head && (self.posed[0] || self.posed[1]) {
+            side = Vec3::ZERO;
+            c.b.at(SPINE3()) - c.b.part(SPINE3()).m.c * 0.25
+        } else {
+            (c.b.at(limb(2).p[3]) + c.b.at(limb(3).p[3])) * 0.5
+        };
+        head.look(0xe, look - side * 0.75, Vec3::ZERO, true);
+        (head.stiffness, head.damping) = (self.body_stiffness, self.body_damping);
+    }
+
+    fn stiffen_rdr2(&mut self, ch: &mut Character) {
+        self.t_ramp = 0.0;
+        let s = 0.5 * self.body_stiffness;
+        ch.set_stiffness(s, 0.5, "us", Some(0.01));
+        ch.set_stiffness(s, 0.3, "un", Some(0.01));
+        ch.set_stiffness(s, 0.5, "ua", Some(0.01));
+        ch.set_stiffness(s, 0.3, "uw", Some(0.01));
+    }
+
+    /// The stiffness ramp back up over 0.4 s from half, muscle stiffness rising to 1 at 1.6667/s; only the posed arms.
+    fn soften_rdr2(&mut self, ch: &mut Character, dt: f32) {
+        self.t_ramp = (self.t_ramp + dt).min(0.4);
+        let x = (1.0 - (self.t_ramp + 1e-6) / (0.4 + 1e-6)).clamp(0.0, 1.0);
+        for j in *SPINE() {
+            ch.eff[j].oppose_gravity = 1.0 + x;
+        }
+        for j in *NECK() {
+            ch.eff[j].oppose_gravity = 1.0;
+        }
+        let arms: Vec<usize> = (0..2).filter(|&i| self.posed[i]).collect();
+        for &i in &arms {
+            for j in [(*CLAVICLE())[i], (*SHOULDER())[i], (*ELBOW())[i]] {
+                ch.eff[j].oppose_gravity = 1.0;
+            }
+        }
+        let ms = self.ms;
+        let (f29, f25) = ((ms + 1.0) * 0.5, 0.75 + 0.25 * ms);
+        let s = (1.0 - 0.5 * x) * self.body_stiffness;
+        let cap = 0.16667 / dt + 10.0;
+        ch.set_stiffness(s, 2.0 * f25, "us", Some(1.2 * f29));
+        ch.set_stiffness(s.min(cap), 2.0 * f29, "un", Some(0.5 * f29));
+        for &i in &arms {
+            for j in [(*SHOULDER())[i], (*ELBOW())[i]] {
+                ch.eff[j].set_stiffness(s, 2.0 * f25, Some(0.5 * f29));
+            }
+            ch.eff[(*CLAVICLE())[i]].set_stiffness(s, 2.0 * f25, Some(1.2 * f25));
+            ch.eff[(*WRIST())[i]].set_stiffness(s.min(cap), 2.0, Some(0.5 * f25));
+        }
+        self.ms = (ms + 1.6667 * dt).min(1.0);
     }
 }
 

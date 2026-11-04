@@ -148,6 +148,12 @@ pub struct UpperBodyFlinch {
     pub hand_distance_front_back: f32,
     pub noise_scale: f32,
     pub turn_towards: i32,
+    /// RDR2 core only: protectHeadToggle, applyStiffness, dontBraceHead, headLookAwayFromTarget, useHeadLook
+    pub protect_head_toggle: bool,
+    pub apply_stiffness: bool,
+    pub dont_brace_head: bool,
+    pub head_look_away: bool,
+    pub use_head_look: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -228,7 +234,8 @@ impl Default for UpperBodyFlinch {
     fn default() -> UpperBodyFlinch {
         UpperBodyFlinch { pos: Vec3::ZERO, body_stiffness: delirium_data::kv!(117), body_damping: 1.0, back_bend_amount: -delirium_data::kv!(132), left_handed: false, right_handed: false,
                           use_left_arm: true, use_right_arm: true, new_hit: None,
-                          hand_distance_vertical: delirium_data::kv!(78), hand_distance_left_right: delirium_data::kv!(78), hand_distance_front_back: delirium_data::kv!(146), noise_scale: delirium_data::kv!(78), turn_towards: 1 }
+                          hand_distance_vertical: delirium_data::kv!(78), hand_distance_left_right: delirium_data::kv!(78), hand_distance_front_back: delirium_data::kv!(146), noise_scale: delirium_data::kv!(78), turn_towards: 1,
+                          protect_head_toggle: false, apply_stiffness: true, dont_brace_head: false, head_look_away: false, use_head_look: true }
     }
 }
 
@@ -469,6 +476,10 @@ impl Agent {
     pub fn stop_all_behaviours(&mut self) {
         self.locomotion_drive=None;self.locomotion_tracking=false;self.locomotion_terms=None;
         self.extras.stop_all();
+        // RDR2 core: balancerCollisionsReaction stopped with them
+        if let Some(ch) = self.ch.as_mut() {
+            ch.bcr = None;
+        }
         if let Some(ch) = self.ch.as_mut().filter(|_| self.bb_on) {
             crate::nmbb::BodyBalance::deactivate(ch);
         }
@@ -1721,7 +1732,7 @@ impl Agent {
             c.shot_on = self.nm_shot.is_some();
             c.dbm = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).filter(|_| !self.fallen).map(|d| crate::nmshot::DbmView {
                 stepping: d.f.stepping, planted: d.pv.planted, failing: d.p.rdr2.is_some_and(|r| r.failing.is_some()),
-                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value) });
+                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps) });
             if let Some(p) = self.nm_cf_msg.take() {
                 let b = walk_actives!(self);
                 start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);
@@ -1739,7 +1750,7 @@ impl Agent {
                 start_flinch(m, &mut self.nm_fl, &mut c, &mut self.nm_head, &mut self.nm_twist);
             }
             if self.flinch.is_none() {
-                self.nm_fl.deactivate(c.ch, &mut self.nm_head, &mut self.nm_twist);
+                self.nm_fl.deactivate(&mut c, &mut self.nm_head, &mut self.nm_twist);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x90); }
             match self.nm_fow_msg.take() {
@@ -2457,6 +2468,8 @@ fn flinch_params(m: UpperBodyFlinch, f: &mut crate::nmfl::Flinch) {
     (f.hand_distance_vertical, f.hand_distance_left_right, f.hand_distance_front_back, f.noise_scale) =
         (m.hand_distance_vertical, m.hand_distance_left_right, m.hand_distance_front_back, m.noise_scale);
     (f.use_left_arm, f.use_right_arm, f.turn_towards) = (m.use_left_arm, m.use_right_arm, m.turn_towards);
+    (f.protect_head_toggle, f.apply_stiffness, f.dont_brace_head, f.head_look_away, f.use_head_look) =
+        (m.protect_head_toggle, m.apply_stiffness, m.dont_brace_head, m.head_look_away, m.use_head_look);
     if let Some(n) = m.new_hit {
         f.new_hit = n;
     }

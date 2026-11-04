@@ -345,6 +345,8 @@ pub struct DbmView {
     pub failing: bool,
     /// the crouch request's hip pitch now (ours: RDR2's bal+0x578 negated)
     pub hip_pitch: f32,
+    /// the steps it has taken (RDR2's step counter)
+    pub steps: u32,
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {
