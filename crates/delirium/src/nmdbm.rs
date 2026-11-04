@@ -868,7 +868,9 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         let mut c = LegIk { target: target[i], lead: 0.0, yaw, side: if i == 0 { 1.0 } else { -1.0 }, bend: -1.0,
                             w: 1.0, reach: 0.0, lift: 0.0, swing: !planted, free: false };
         if !planted {
-            let ahead = target[i] - (lfoot_v - p.gvel[0]).mul_add(Vec3::splat(delirium_data::kv!(68)), leg.foot.m.d);
+            // RDR2 (rdr2_balancer2.md §7.2) lifts each swing foot by its own velocity; GTA IV reads the left foot's for both
+            let fv = if p.rdr2.is_some() { leg.foot.v } else { lfoot_v };
+            let ahead = target[i] - (fv - p.gvel[0]).mul_add(Vec3::splat(delirium_data::kv!(68)), leg.foot.m.d);
             (c.lead, c.reach, c.lift) = (p.p168, p.rdr2.map_or(delirium_data::kv!(64), |r| r.p.max_foot_speed), sdot(up, ahead, b"yxz").fma(delirium_data::kv!(84), delirium_data::kv!(78)).clamp(delirium_data::kv!(9), delirium_data::kv!(119)));
         }
         let limb = leg.limb;
@@ -1491,7 +1493,8 @@ impl Dbm {
                 let back = sdot(v, s.m.c, b"zyx") < 0.0;
                 self.push += dir * if back { -r.p.sideways_cheat_force } else { r.p.sideways_cheat_force };
             }
-            r.update(dt, s.angvel.length_squared(), was == 0 && self.f.stepping != 0, self.f.stepping != 0);
+            // RDR2's +0x44c counts every step, one starting on the last one's landing tick too (rdr2_balancer.md §5.4)
+            r.update(dt, s.angvel.length_squared(), was != self.f.stepping && self.f.stepping != 0, self.f.stepping != 0);
         }
         pelvis_control(&self.p, &s, &mut self.pv);
         balance_solve(&self.p, &self.f, &self.pv, &mut s);

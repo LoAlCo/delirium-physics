@@ -3467,7 +3467,8 @@ impl FromBehind {
             let k = -r.amounts[3] * (1.0 - (t - r.knees_onset).clamp(0.0, span) / span);
             c.out.dbm_crouch.push(Crouch::Knee(6, k, f32::INFINITY));
         }
-        c.out.dbm_force_balance |= t < r.force_balance;
+        // RDR2 forces balance here only while balancerCollisionsReaction is in state 4 or 7 (rdr2_shot_hits.md §5 step
+        // 8); Delirium has no such state, so under the core it never does
     }
 }
 
@@ -3493,7 +3494,7 @@ impl InGuts {
             let k = -r.knee * (1.0 - (t - r.knees_onset).clamp(0.0, span) / span);
             c.out.dbm_crouch.push(Crouch::Knee(7, k, f32::INFINITY));
         }
-        c.out.dbm_force_balance |= t < r.force_balance;
+        // no forced balance: as fromBehind, RDR2 gates it on balancerCollisionsReaction's states 4/7
     }
 }
 
