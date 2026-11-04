@@ -188,6 +188,8 @@ pub struct ArmsWindmill {
     pub amplitude: f32,
     pub phase: f32,
     pub disable_on_impact: bool,
+    /// RDR2's parameters (read with the RDR2 core)
+    pub rdr2: crate::nmaw::Rdr2Params,
 }
 
 #[derive(Clone, Copy)]
@@ -232,7 +234,8 @@ impl Default for UpperBodyFlinch {
 
 impl Default for ArmsWindmill {
     fn default() -> ArmsWindmill {
-        ArmsWindmill { arm_stiffness: delirium_data::kv!(196), body_stiffness: delirium_data::kv!(117), period: 1.0, amplitude: delirium_data::kv!(119), phase: 0.0, disable_on_impact: true }
+        ArmsWindmill { arm_stiffness: delirium_data::kv!(196), body_stiffness: delirium_data::kv!(117), period: 1.0, amplitude: delirium_data::kv!(119), phase: 0.0, disable_on_impact: true,
+                       rdr2: Default::default() }
     }
 }
 
@@ -372,6 +375,8 @@ pub struct Agent {
     nm_fow: crate::nmfow::FallOverWall,
     nm_fow_msg: Option<Option<FallOverWall>>,
     nm_hf_msg: Option<Option<HighFall>>,
+    /// a highFall message's own parameters, for the RDR2 core's highFall should the core be on when it starts
+    pub(crate) hf_rdr2: Option<Vec<(String, crate::msg::Value)>>,
     nm_gr_msg: Option<Option<crate::nmgr::GrabParams>>,
     nm_pa_msg: Option<Option<crate::nmpa::PointArmParams>>,
     catch_fall: Option<CatchFall>,
@@ -444,7 +449,7 @@ impl Agent {
         let pelvis_up = facing.inverse() * frames[roles.pelvis].rotation;
         let mut a = Agent { locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
                 stiffness: (delirium_data::kv!(31), 1.0), relax: None, config: ConfigureBalance::default(), feedback: vec![], balance: None, lean: None,
-                shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
+                shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
                 brace: None, head_look: vec![], shot_look: false, eff_override: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(200), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0 * build.parts[0].grown, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
                 ch: crate::nmrs::ASSET[build.nm].get().and_then(|a| crate::nmrs::joints(build, a)).map(|j| {
                     let mut c = crate::nmrs::Character::new(j, &frames);
@@ -861,6 +866,11 @@ impl Agent {
                 }
             }
             "braceForImpact" => { let p = &st.brace_for_impact; self.brace_at(p.pos, p.look, p.instance_index); }
+            // RDR2 core: a running pedalLegs takes new backPedal, variances and speed (injuredOnGround re-draws them)
+            "pedalLegs" if self.rdr2_core.is_some() => {
+                let (p, d) = (&st.pedal_legs, &mut self.nm_pd);
+                (d.back_pedal, d.radius_variance, d.leg_angle_variance, d.angular_speed) = (p.back_pedal, p.radius_variance, p.leg_angle_variance, p.angular_speed);
+            }
             _ => {}
         }
     }
@@ -1732,7 +1742,8 @@ impl Agent {
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             c.shot_on = self.nm_shot.is_some();
             c.dbm = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).filter(|_| !self.fallen).map(|d| crate::nmshot::DbmView {
-                stepping: d.f.stepping, planted: d.pv.planted, failing: d.p.rdr2.is_some_and(|r| r.failing.is_some()) });
+                stepping: d.f.stepping, planted: d.pv.planted, failing: d.p.rdr2.is_some_and(|r| r.failing.is_some()),
+                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value) });
             if let Some(p) = self.nm_cf_msg.take() {
                 let b = walk_actives!(self);
                 start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);
@@ -1760,6 +1771,12 @@ impl Agent {
                 }
                 Some(None) => self.nm_fow.deactivate(),
                 None => {}
+            }
+            // RDR2 core: a highFall sent before the core was on is RDR2's (an extra, from its own parameters)
+            if let Some(ps) = self.hf_rdr2.take().filter(|_| c.ch.rdr2 && matches!(self.nm_hf_msg, Some(Some(_)))) {
+                self.nm_hf_msg = None;
+                let ps: Vec<(&str, crate::msg::Value)> = ps.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
+                let _ = self.extras.send_named("highFall", &ps);
             }
             let mut hf = match self.nm_hf_msg.take() {
                 Some(Some(p)) => {
@@ -1801,6 +1818,10 @@ impl Agent {
                 let w = &mut self.nm_aw;
                 (w.body_stiffness, w.period, w.amplitude, w.phase) = (m.body_stiffness, m.period, m.amplitude, m.phase);
                 w.disable_on_impact = m.disable_on_impact;
+                // RDR2 core: the message starts RDR2's armsWindmillAdaptive (highFall's own windmill stays GTA IV's)
+                if !w.active {
+                    (w.rdr2, w.r2) = (m.rdr2, c.ch.rdr2);
+                }
                 w.activate(c.ch);
             }
             if self.windmill.is_none() && !self.nm_hf.active() {
@@ -1970,7 +1991,8 @@ impl Agent {
             if !waits(walk_actives!(self), W_AW()) {
                 self.nm_aw.tick(&mut c, dt);
             }
-            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x58); }
+            // RDR2's armsWindmillAdaptive is slot 0x60 (GTA IV's windmill, highFall's, stays at armsWindmill's 0x58)
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, if self.nm_aw.r2 { 0x60 } else { 0x58 }); }
             if !waits(walk_actives!(self), W_GR()) {
                 let dbm = self.balance.as_mut().and_then(|b| b.dbm.as_mut());
                 self.nm_gr.place(obstacles);
@@ -2018,6 +2040,11 @@ impl Agent {
                     }
                     r.force_balance = out.dbm_force_balance;
                     (r.stagger, r.lead) = (out.dbm_stagger, out.dbm_lead);
+                    // teeter's prediction boost and exclusion plane (this step), and taperKneeStrength (until changed)
+                    (r.lead_add, r.plane) = (out.dbm_lead_add, out.dbm_plane);
+                    if let Some(t) = out.dbm_taper {
+                        r.taper = t;
+                    }
                     match out.dbm_force_step {
                         Some(Some(i)) => (r.forced, r.cancel_step) = (Some((i, r.steps)), true),
                         Some(None) => r.forced = None,
@@ -2034,6 +2061,18 @@ impl Agent {
             }
             // an extra (RDR2's fall to knees) may switch the balancer off
             stop_dbm |= out.dbm == Some(false);
+            // RDR2 core: an extra (teeter) runs spineTwist toward a point, from the next tick
+            if let Some((pos, k)) = out.spine_twist {
+                if !self.nm_twist.active {
+                    self.nm_twist = Default::default();
+                    (self.nm_twist.stiffness, self.nm_twist.always) = (k, true);
+                    self.nm_twist.activate(ch);
+                }
+                self.nm_twist.pos = pos;
+            }
+            if out.spine_twist_stop {
+                self.nm_twist.deactivate();
+            }
             for o in [brace_out, out] {
                 for &(k, v, f) in &o.seq {
                     if f { shot_out.force(k, v) } else { shot_out.torque(k, v) }

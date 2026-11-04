@@ -2031,47 +2031,12 @@ impl ReachForWound {
         }
     }
 
-    /// The hand to `t`: the arm by Delirium's arm search (RDR2's IK request needs its limb IK solver, not decompiled),
-    /// from a little off and above while far; the clavicle with RDR2's hunch terms (or following the neck for a head
-    /// wound); the palm onto the wound within 0.4 m, else the wrist straight.
+    /// The hand to `t` (`hand_place`), the clavicle with RDR2's hunch terms (or following the neck for a head wound);
+    /// a flipped palm side kept for the pull.
     #[allow(clippy::too_many_arguments)]
     fn place_rdr2(&mut self, c: &mut Ctx, s: &mut Rfw2, i: usize, t: Vec3, n: Vec3, clav: Option<[f32; 3]>, hunch: f32) {
-        let l = crate::nmshot::limb(i);
-        for j in [l.e[0], l.e[1], l.e[2]] {
-            c.ch.eff[j].oppose_gravity = 1.0;
-        }
-        let hand = c.b.part(l.p[delirium_data::kv!(0 int)]).m.d;
-        let mut dh = hand - t;
-        let sn = dh.dot(n);
-        dh -= n * if sn < 0.0 { sn } else { 0.0 };
-        let t2 = t + n * (dh.length() * 0.5 - 0.05).min(0.25) + c.up * (dh.length() * 0.5).min(0.15);
-        let start = s.act[i].pose.unwrap_or_else(|| {
-            let [k, a, e] = [0, 1, 2].map(|m| c.ch.actual(l.e[m], c.b.frames));
-            [k[0], k[1], a[0], a[1], a[2], e[0]]
-        });
-        let (mut x, mut miss) = arm_solve(c, l, t2, start);
-        if s.act[i].pose.is_none() && miss > 0.08 {
-            for (sl1, stw) in [(0.6, 0.0), (1.2, -0.6), (0.9, 0.4)] {
-                let (y, m) = arm_solve(c, l, t2, [start[0], start[1], sl1, start[3], stw, 1.5]);
-                if m + 0.02 < miss {
-                    (x, miss) = (y, m);
-                }
-            }
-        }
-        s.act[i].pose = Some(x);
-        match clav {
-            Some(cl) => c.ch.eff[l.e[0]].desired = cl,
-            None => (c.ch.eff[l.e[0]].desired[0], c.ch.eff[l.e[0]].desired[1]) = (x[0] - 0.5 * hunch, x[1] + hunch),
-        }
-        c.ch.eff[l.e[1]].desired = [x[2], x[3], x[4]];
-        c.ch.eff[l.e[2]].desired[0] = x[5];
-        if (hand - t).length() < 0.4 {
-            let side = if i == 0 { 1.0 } else { -1.0 };
-            if crate::nmshot::Shot::wrist(c, l, t, n, side) < 0.0 && clav.is_none() {
-                s.act[i].sign = -s.act[i].sign;
-            }
-        } else {
-            c.ch.eff[l.e[3]].desired = [0.0; 3];
+        if hand_place(c, i, t, n, &mut s.act[i].pose, clav, hunch) {
+            s.act[i].sign = -s.act[i].sign;
         }
     }
 
@@ -2116,6 +2081,50 @@ impl ReachForWound {
                 c.ch.eff[hip].desired[0] = dd * self.hip_bend * gh;
             }
         }
+    }
+}
+
+/// RDR2's hand placement (0x2a4733c) without its pull: hand `i` to `t` on a surface facing `n`, by Delirium's arm
+/// search (RDR2's IK request needs its limb IK solver, not decompiled), from a little off and above while far,
+/// carried on from `pose`; the clavicle with the hunch terms (or `clav`); the palm onto the target within 0.4 m, else
+/// the wrist straight. Returns true when the palm side flipped (reachForWound's pull reads it).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn hand_place(c: &mut Ctx, i: usize, t: Vec3, n: Vec3, pose: &mut Option<[f32; 6]>, clav: Option<[f32; 3]>, hunch: f32) -> bool {
+    let l = crate::nmshot::limb(i);
+    for j in [l.e[0], l.e[1], l.e[2]] {
+        c.ch.eff[j].oppose_gravity = 1.0;
+    }
+    let hand = c.b.part(l.p[delirium_data::kv!(0 int)]).m.d;
+    let mut dh = hand - t;
+    let sn = dh.dot(n);
+    dh -= n * if sn < 0.0 { sn } else { 0.0 };
+    let t2 = t + n * (dh.length() * 0.5 - 0.05).min(0.25) + c.up * (dh.length() * 0.5).min(0.15);
+    let start = pose.unwrap_or_else(|| {
+        let [k, a, e] = [0, 1, 2].map(|m| c.ch.actual(l.e[m], c.b.frames));
+        [k[0], k[1], a[0], a[1], a[2], e[0]]
+    });
+    let (mut x, mut miss) = arm_solve(c, l, t2, start);
+    if pose.is_none() && miss > 0.08 {
+        for (sl1, stw) in [(0.6, 0.0), (1.2, -0.6), (0.9, 0.4)] {
+            let (y, m) = arm_solve(c, l, t2, [start[0], start[1], sl1, start[3], stw, 1.5]);
+            if m + 0.02 < miss {
+                (x, miss) = (y, m);
+            }
+        }
+    }
+    *pose = Some(x);
+    match clav {
+        Some(cl) => c.ch.eff[l.e[0]].desired = cl,
+        None => (c.ch.eff[l.e[0]].desired[0], c.ch.eff[l.e[0]].desired[1]) = (x[0] - 0.5 * hunch, x[1] + hunch),
+    }
+    c.ch.eff[l.e[1]].desired = [x[2], x[3], x[4]];
+    c.ch.eff[l.e[2]].desired[0] = x[5];
+    if (hand - t).length() < 0.4 {
+        let side = if i == 0 { 1.0 } else { -1.0 };
+        crate::nmshot::Shot::wrist(c, l, t, n, side) < 0.0 && clav.is_none()
+    } else {
+        c.ch.eff[l.e[3]].desired = [0.0; 3];
+        false
     }
 }
 
@@ -3710,7 +3719,7 @@ impl Extra for BulletImpulse {
             c.out.impulse.push((*k, at, *imp * (h / BULLET_PERIOD)));
             *left -= h;
         }
-        self.recs.retain(|r| r.3 > 0.0);
+        self.recs.retain(|r| r.3 > 1e-6);
         self.modifier = (self.modifier + 0.38 * dt).min(1.0);
     }
 

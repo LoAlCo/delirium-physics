@@ -95,6 +95,30 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "disableOnImpact", kind: Kind::Bool, used: true, doc: "+144 0x40: an arm stops once its hand hits something (init's true; the game never sends it)." },
         Param { name: "period", kind: Kind::Float, used: true, doc: "" },
         Param { name: "armStiffness", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "angSpeed", kind: Kind::Float, used: true, doc: "RDR2 core only: the phase's speed, rad/s (6.28)" },
+        Param { name: "claviclescale", kind: Kind::Float, used: true, doc: "RDR2 core only: the clavicles' swing, of amplitude (1)" },
+        Param { name: "claviclebias", kind: Kind::Float, used: true, doc: "RDR2 core only: the clavicles' lean2 offset (0.15)" },
+        Param { name: "leftElbowAngle", kind: Kind::Float, used: true, doc: "RDR2 core only: the left elbow drawn to this, rad; below -0.01 off (-1)" },
+        Param { name: "rightElbowAngle", kind: Kind::Float, used: true, doc: "RDR2 core only: the right elbow likewise (-1)" },
+        Param { name: "lean1mult", kind: Kind::Float, used: true, doc: "RDR2 core only: the shoulders' lean1 swing, of amplitude (1)" },
+        Param { name: "lean1offset", kind: Kind::Float, used: true, doc: "RDR2 core only: added to the shoulders' lean1 (0)" },
+        Param { name: "lean2mult", kind: Kind::Float, used: true, doc: "RDR2 core only: the shoulders' lean2 swing, of amplitude (1)" },
+        Param { name: "lean2offset", kind: Kind::Float, used: true, doc: "RDR2 core only: added to the shoulders' lean2 (0)" },
+        Param { name: "elbowRate", kind: Kind::Float, used: true, doc: "RDR2 core only: how fast the elbows go to their angle (1)" },
+        Param { name: "swayamount", kind: Kind::Float, used: true, doc: "RDR2 core only: with setBackAngles, the spine's lean2 sway (0)" },
+        Param { name: "angSpeedMultiplier4Dragging", kind: Kind::Float, used: true, doc: "RDR2 core only: with scrabble, phase speed per m/s of the trunk (1)" },
+        Param { name: "maxangspeed", kind: Kind::Float, used: true, doc: "RDR2 core only: with scrabble, the phase's top speed, rad/s (4)" },
+        Param { name: "scrabblebendupper", kind: Kind::Float, used: true, doc: "RDR2 core only: with scrabble, the elbows bend past this phase, rad (4)" },
+        Param { name: "scrabblebendlower", kind: Kind::Float, used: true, doc: "RDR2 core only: and before this one (1.57)" },
+        Param { name: "scrabblebend", kind: Kind::Float, used: true, doc: "RDR2 core only: the elbows then (2.2)" },
+        Param { name: "scrabbleextend", kind: Kind::Float, used: true, doc: "RDR2 core only: the elbows otherwise (0)" },
+        Param { name: "armDirection", kind: Kind::Int, used: true, doc: "RDR2 core only: the way the arms turn, 0 from his spin (0)" },
+        Param { name: "mask", kind: Kind::Str, used: true, doc: "RDR2 core only: the joints it drives (ub)" },
+        Param { name: "setBackAngles", kind: Kind::Bool, used: true, doc: "RDR2 core only: the spine and neck twist with the arms (true)" },
+        Param { name: "useAngMom", kind: Kind::Bool, used: true, doc: "RDR2 core only: the way from his angular momentum and how far his back faces up (false)" },
+        Param { name: "bendLeftElbow", kind: Kind::Bool, used: true, doc: "RDR2 core only: the left elbow bends on the forward half (false)" },
+        Param { name: "bendRightElbow", kind: Kind::Bool, used: true, doc: "RDR2 core only: the right elbow likewise (false)" },
+        Param { name: "scrabble", kind: Kind::Bool, used: true, doc: "RDR2 core only: the phase from how fast his trunk moves, the elbows bent in a window of it (false)" },
     ] },
     Message { name: "bodyBalance", params: &[
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "" },
@@ -313,6 +337,25 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "fowardVelCutOff", kind: Kind::Float, used: true, doc: "" },
         Param { name: "legStrength", kind: Kind::Float, used: true, doc: "" },
         Param { name: "zeroPoseRoll", kind: Kind::Bool, used: true, doc: "" },
+        Param { name: "pdDamping", kind: Kind::Float, used: false, doc: "RDR2 core only: the orientation PD's damping (1)" },
+        Param { name: "armAngSpeed", kind: Kind::Float, used: false, doc: "RDR2 core only: the windmill's speed, rad/s (7.85)" },
+        Param { name: "armPhase", kind: Kind::Float, used: false, doc: "RDR2 core only: the windmill's phase (3.1)" },
+        Param { name: "armBendElbows", kind: Kind::Bool, used: false, doc: "RDR2 core only: (true; not done: the windmill has no elbow bend)" },
+        Param { name: "legAsymmetry", kind: Kind::Float, used: false, doc: "RDR2 core only: pedalLegs speedAsymmetry (4)" },
+        Param { name: "arms2LegsPhase", kind: Kind::Float, used: false, doc: "RDR2 core only: the windmill's phase offset from the legs (0)" },
+        Param { name: "arms2LegsSync", kind: Kind::Int, used: false, doc: "RDR2 core only: 1: that offset every tick, 2: at the start (1)" },
+        Param { name: "startplayerset", kind: Kind::Float, used: false, doc: "RDR2 core only: (not read by RDR2)" },
+        Param { name: "balance", kind: Kind::Bool, used: false, doc: "RDR2 core only: bodyBalance when he lands on his feet (true)" },
+        Param { name: "alanRickman", kind: Kind::Bool, used: false, doc: "RDR2 core only: the orientation PD keeps him along where he started (false)" },
+        Param { name: "orientateTwist", kind: Kind::Bool, used: false, doc: "RDR2 core only: the orientation PD turns him about up too (true)" },
+        Param { name: "orientateMax", kind: Kind::Float, used: false, doc: "RDR2 core only: the orientation PD's torque clamp (300)" },
+        Param { name: "forwardRoll", kind: Kind::Bool, used: false, doc: "RDR2 core only: RDR2's name of fowardRoll (false)" },
+        Param { name: "forwardOffsetOfLegIK", kind: Kind::Float, used: false, doc: "RDR2 core only: RDR2's unnamed pedalLegs centreForwards in the brace, GTA IV's fowardOffsetOfLegIK (0)" },
+        Param { name: "adaptiveCircling", kind: Kind::Bool, used: false, doc: "RDR2 core only: the legs pedal backwards when he pitches forward (true)" },
+        Param { name: "hula", kind: Kind::Bool, used: false, doc: "RDR2 core only: the legs circle wide when he falls face up (true)" },
+        Param { name: "minSpeedForBrace", kind: Kind::Float, used: false, doc: "RDR2 core only: above this sideways speed the unrecoverable fall catches itself, m/s (10)" },
+        Param { name: "maxSpeedForRecoverableFall", kind: Kind::Float, used: false, doc: "RDR2 core only: faster than this at impact he can't recover, m/s (15)" },
+        Param { name: "landingNormal", kind: Kind::Float, used: false, doc: "RDR2 core only: ground flatter than this (normal.up) counts as a landing (0.6)" },
     ] },
     Message { name: "incomingTransforms", params: &[
     ] },
@@ -680,6 +723,10 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
     if let Some(r) = a.extras.send(msg, params) {
         return r;
     }
+    // RDR2 core: RDR2's highFall, from this message's parameters over RDR2's defaults (its start reloads them)
+    if msg == "highFall" && a.rdr2_core.is_some() {
+        return a.extras.send_named("highFall", params);
+    }
     let m = find(msg).ok_or(Error::Message)?;
     let start = params.iter().find(|(n, _)| *n == "start").map(|(_, v)| v.b()).transpose()?;
     let one_shot = matches!(msg, "activePose" | "applyImpulse" | "bodyRelax" | "defineAttachedObject" | "leanInDirection"
@@ -740,7 +787,10 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
         "fallOverWall" => if on { a.fall_over_wall(st.fall_over_wall.clone()) },
         "grab" => a.grab(build, on.then(|| st.grab.clone())),
         "headLook" => { let p = &st.head_look; a.head_look(build, on.then_some((p.pos, p.vel)), p.stiffness, p.damping, p.always_look, p.always_eyes_horizontal); }
-        "highFall" => if on { a.high_fall(st.high_fall.clone()) },
+        "highFall" => if on {
+            a.high_fall(st.high_fall.clone());
+            a.hf_rdr2 = Some(params.iter().map(|(n, v)| (n.to_string(), v.clone())).collect());
+        },
         "pedalLegs" => if on { a.pedal_legs(st.pedal_legs.clone()) } else { a.stop_pedal() },
         "pointArm" => a.point_arm(on.then_some(st.point_arm)),
         "rollDownStairs" => if on { a.roll_down_stairs(st.roll_down_stairs.clone()) } else { a.stop_roll_down_stairs() },
@@ -782,12 +832,36 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("applyImpulse", "hitPoint") => { let p = &mut st.apply_impulse; p.hit_point = Some(v.v()?); }
         ("applyImpulse", "impulse") => { let p = &mut st.apply_impulse; p.impulse = v.v()?; }
         ("applyImpulse", "equalizeAmount") => { let p = &mut st.apply_impulse; p.equalize_amount = v.f()?; }
-        ("armsWindmillAdaptive", "bodyStiffness") => { let p = &mut st.arms_windmill_adaptive; p.body_stiffness = v.f()?; }
-        ("armsWindmillAdaptive", "amplitude") => { let p = &mut st.arms_windmill_adaptive; p.amplitude = v.f()?; }
-        ("armsWindmillAdaptive", "phase") => { let p = &mut st.arms_windmill_adaptive; p.phase = v.f()?; }
-        ("armsWindmillAdaptive", "disableOnImpact") => { let p = &mut st.arms_windmill_adaptive; p.disable_on_impact = v.b()?; }
+        ("armsWindmillAdaptive", "bodyStiffness") => { let p = &mut st.arms_windmill_adaptive; p.body_stiffness = v.f()?; p.rdr2.body_stiffness = p.body_stiffness; }
+        ("armsWindmillAdaptive", "amplitude") => { let p = &mut st.arms_windmill_adaptive; p.amplitude = v.f()?; p.rdr2.amplitude = p.amplitude; }
+        ("armsWindmillAdaptive", "phase") => { let p = &mut st.arms_windmill_adaptive; p.phase = v.f()?; p.rdr2.phase = p.phase; }
+        ("armsWindmillAdaptive", "disableOnImpact") => { let p = &mut st.arms_windmill_adaptive; p.disable_on_impact = v.b()?; p.rdr2.disable_on_impact = p.disable_on_impact; }
         ("armsWindmillAdaptive", "period") => { let p = &mut st.arms_windmill_adaptive; p.period = v.f()?; }
-        ("armsWindmillAdaptive", "armStiffness") => { let p = &mut st.arms_windmill_adaptive; p.arm_stiffness = v.f()?; p.body_stiffness = p.arm_stiffness; }
+        ("armsWindmillAdaptive", "armStiffness") => { let p = &mut st.arms_windmill_adaptive; p.arm_stiffness = v.f()?; p.body_stiffness = p.arm_stiffness; p.rdr2.arm_stiffness = p.arm_stiffness; }
+        ("armsWindmillAdaptive", "angSpeed") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.ang_speed = v.f()?; }
+        ("armsWindmillAdaptive", "claviclescale") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.clavicle_scale = v.f()?; }
+        ("armsWindmillAdaptive", "claviclebias") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.clavicle_bias = v.f()?; }
+        ("armsWindmillAdaptive", "leftElbowAngle") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.elbow_angle[0] = v.f()?; }
+        ("armsWindmillAdaptive", "rightElbowAngle") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.elbow_angle[1] = v.f()?; }
+        ("armsWindmillAdaptive", "lean1mult") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.lean1.0 = v.f()?; }
+        ("armsWindmillAdaptive", "lean1offset") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.lean1.1 = v.f()?; }
+        ("armsWindmillAdaptive", "lean2mult") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.lean2.0 = v.f()?; }
+        ("armsWindmillAdaptive", "lean2offset") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.lean2.1 = v.f()?; }
+        ("armsWindmillAdaptive", "elbowRate") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.elbow_rate = v.f()?; }
+        ("armsWindmillAdaptive", "swayamount") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.sway = v.f()?; }
+        ("armsWindmillAdaptive", "angSpeedMultiplier4Dragging") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.drag_mult = v.f()?; }
+        ("armsWindmillAdaptive", "maxangspeed") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.max_ang_speed = v.f()?; }
+        ("armsWindmillAdaptive", "scrabblebendupper") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.scrabble_upper = v.f()?; }
+        ("armsWindmillAdaptive", "scrabblebendlower") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.scrabble_lower = v.f()?; }
+        ("armsWindmillAdaptive", "scrabblebend") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.scrabble_bend = v.f()?; }
+        ("armsWindmillAdaptive", "scrabbleextend") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.scrabble_extend = v.f()?; }
+        ("armsWindmillAdaptive", "armDirection") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.arm_direction = v.i()?; }
+        ("armsWindmillAdaptive", "mask") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.mask = intern(v.s()?); }
+        ("armsWindmillAdaptive", "setBackAngles") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.set_back_angles = v.b()?; }
+        ("armsWindmillAdaptive", "useAngMom") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.use_ang_mom = v.b()?; }
+        ("armsWindmillAdaptive", "bendLeftElbow") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.bend_elbow[0] = v.b()?; }
+        ("armsWindmillAdaptive", "bendRightElbow") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.bend_elbow[1] = v.b()?; }
+        ("armsWindmillAdaptive", "scrabble") => { let p = &mut st.arms_windmill_adaptive; p.rdr2.scrabble = v.b()?; }
         ("bodyBalance", "bodyStiffness") => { let p = &mut st.body_balance; p.body_stiffness = v.f()?; }
         ("bodyBalance", "headLookAtVelProb") => { let p = &mut st.body_balance; p.head_look_at_vel_prob = v.f()?; }
         ("bodyBalance", "armsOutStraightenElbows") => { let p = &mut st.body_balance; p.arms_out_straighten_elbows = v.f()?; }

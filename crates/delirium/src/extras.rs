@@ -106,14 +106,17 @@ pub struct Extras {
 impl Extras {
     pub fn send(&mut self, msg: &str, params: &[(&str, Value)]) -> Option<Result<usize, Error>> {
         let name = messages().find(|m| m.name == msg)?.name;
+        Some(self.send_named(name, params))
+    }
+
+    /// As `send`, by the extra's name: also for a message of the built-in behaviours that the RDR2 core runs as an
+    /// extra (RDR2's highFall).
+    pub fn send_named(&mut self, name: &'static str, params: &[(&str, Value)]) -> Result<usize, Error> {
         let mut p = P { params, used: vec![] };
         if name == "injury" {
-            return Some(injury(&mut p).and_then(|i| p.done().map(|()| self.injure.push(i))).map(|()| 0));
+            return injury(&mut p).and_then(|i| p.done().map(|()| self.injure.push(i))).map(|()| 0);
         }
-        let start = match p.b("start", false) {
-            Ok(s) => s,
-            Err(e) => return Some(Err(e)),
-        };
+        let start = p.b("start", false)?;
         if !start && !params.iter().any(|(n, _)| *n == "start") {
             if params.iter().any(|(n, v)| *n == "fireWeapon" && *v == Value::Bool(true)) {
                 self.on.iter_mut().filter(|(n, _)| *n == name).for_each(|(_, e)| e.fire());
@@ -122,31 +125,37 @@ impl Extras {
                 self.on.iter_mut().filter(|(n, _)| *n == name).for_each(|(_, e)| e.let_go(h.clamp(0, 1) as usize));
             }
             for (_, e) in self.on.iter_mut().filter(|(n, _)| *n == name) {
-                if let Err(e) = e.update(&mut P { params, used: vec![] }) {
-                    return Some(Err(e));
-                }
+                e.update(&mut P { params, used: vec![] })?;
             }
-            return Some(Ok(0));
+            return Ok(0);
         }
         if name == "hardConstraint" {
             let was = self.hard.take();
             if !start {
                 self.hard = was.map(|h| HardConstraint { stop: true, ..h });
-                return Some(Ok(0));
+                return Ok(0);
             }
             self.release.extend(was.iter().flat_map(HardConstraint::parts));
-            return Some(HardConstraint::new(&mut p).and_then(|h| p.done().map(|()| self.hard = Some(h))).map(|()| 0));
+            return HardConstraint::new(&mut p).and_then(|h| p.done().map(|()| self.hard = Some(h))).map(|()| 0);
         }
         if start {
             for (_, e) in self.on.iter_mut().filter(|(n, _)| *n == name) {
                 if let Some(r) = e.hit(&mut p) {
-                    return Some(r.and_then(|()| p.done()).map(|()| 0));
+                    return r.and_then(|()| p.done()).map(|()| 0);
                 }
             }
         }
+        // RDR2: highFall can't start while smartFall runs, and smartFall's start stops highFall (only the RDR2 core
+        // runs highFall as an extra)
+        if start && name == "highFall" && self.on.iter().any(|(n, _)| *n == "smartFall") {
+            return Ok(0);
+        }
+        if start && name == "smartFall" {
+            self.take_off(|n, _| n == "highFall");
+        }
         self.take_off(|n, _| n == name);
         if !start {
-            return Some(Ok(0));
+            return Ok(0);
         }
         let e: Result<Box<dyn Extra>, Error> = match name {
             "electrocute" => Electrocute::new(&mut p).map(|e| Box::new(e) as _),
@@ -158,7 +167,7 @@ impl Extras {
                 },
             },
         };
-        Some(e.and_then(|e| p.done().map(|()| self.on.push((name, e)))).map(|()| 0))
+        e.and_then(|e| p.done().map(|()| self.on.push((name, e)))).map(|()| 0)
     }
 
     pub fn tick(&mut self, c: &mut Ctx, obs: &[crate::ragdoll::Obstacle], dt: f32) {
@@ -206,8 +215,11 @@ impl Extras {
 impl Extras {
     pub fn stop_all(&mut self) {
         let held: Vec<usize> = self.wanted.iter().copied().chain(self.hard.iter().flat_map(HardConstraint::parts)).collect();
+        // RDR2's bullet records live in NM's core, not in a behaviour: stopping the behaviours leaves them running
+        let bullets: Vec<_> = std::mem::take(&mut self.on).into_iter().filter(|(n, _)| *n == "applyBulletImpulse").collect();
         *self = Default::default();
         self.release = held;
+        self.on = bullets;
     }
 
     pub fn hard_step(&mut self, doll: &mut crate::ragdoll::Ragdoll, incoming: &[Transform], dt: f32) {
