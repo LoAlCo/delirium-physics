@@ -5185,6 +5185,7 @@ impl Extra for BulletImpulse {
             };
             let local = at.map(|p| f[k].rotation.inverse() * (p - f[k].translation));
             self.recs.push((k, local, imp, BULLET_PERIOD));
+            c.ch.core.bullet = Some(imp);
         }
         for (k, local, imp, left) in &mut self.recs {
             let h = dt.min(*left);
