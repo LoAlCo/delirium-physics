@@ -172,12 +172,14 @@ pub struct Feet {
     pub dist: [f32; 2],
     pub stepping: u32,
     pub flags: u8,
+    /// RDR2 (bal+0x438): s the swing target has been kept near the pelvis this step
+    pub near_time: f32,
 }
 
 impl Default for Feet {
     fn default() -> Feet {
         Feet { pos: [Vec3::ZERO; 2], centre: Vec3::ZERO, start: Vec3::ZERO, prev_target: Vec3::ZERO, prev_sole: Vec3::ZERO,
-               height: [0.0; 2], countdown: delirium_data::kv!(41 int), dist: [0.0; 2], stepping: 0, flags: 0 }
+               height: [0.0; 2], countdown: delirium_data::kv!(41 int), dist: [0.0; 2], stepping: 0, flags: 0, near_time: 0.0 }
     }
 }
 
@@ -437,6 +439,7 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
     };
     f.flags = (f.flags & !delirium_data::kv!(107 int)) | (alone as u8) << delirium_data::kv!(1 int) | (far as u8) << delirium_data::kv!(0 int);
     f.start = f.pos[f.stepping as usize - 1];
+    f.near_time = 0.0;
 }
 
 pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
@@ -503,20 +506,25 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     };
     let leg = &s.legs[i];
     let stance = f.pos[1 - i];
-    if if two { f.dist[0] > f.dist[1] } else { f.dist[0] < f.dist[1] } {
+    // RDR2's "other foot farther" needs a margin (bal+0x314): 0.2 leg lengths, 0.01 turning
+    let margin = p.rdr2.map_or(0.0, |r| if r.turning { 0.01 } else { 0.2 });
+    if if two { f.dist[1] < f.dist[0] - margin } else { f.dist[0] < f.dist[1] - margin } {
         f.flags |= delirium_data::kv!(23 int);
     }
     if !contact {
         f.flags |= delirium_data::kv!(54 int);
     }
     f.centre = s.hvel.mul_add(Vec3::splat(delirium_data::kv!(9)), s.com);
+    if let Some(r) = p.rdr2 {
+        t = keep_near_pelvis(t, &s.pelvis.m, up, side, r.running, p.dt, &mut f.near_time);
+    }
     t = reach(t, up, &s.pelvis.m, p.step_clamp * leg.hip.half_lean1, p.step_clamp * leg.hip.half_lean2);
     let fp = leg.foot.m.d;
     let dir_t = vnorm(shz(t - f.start, up, b"yxz"));
     let ahead = sdot(t, dir_t, b"zyx") - sdot(fp, dir_t, b"zyx");
     let closing = sdot(s.vel, dir_t, b"zyx") - sdot(leg.foot.v, dir_t, b"zyx");
     let left_frac = slen(shz(t - fp, up, b"zyx"), b"zyx") / (slen(shz(f.start - fp, up, b"zyx"), b"zyx") + delirium_data::kv!(50));
-    let sole = fp - leg.foot.m.c * delirium_data::kv!(60) * 0.5;
+    let sole = if p.rdr2.is_some() { fp - leg.foot.m.c * 0.099 } else { fp - leg.foot.m.c * delirium_data::kv!(60) * 0.5 };
     let passed = slen(shz(sole - f.prev_target, up, b"zyx"), b"yxz") > slen(shz(f.prev_sole - t, up, b"zyx"), b"zyx");
     let mut speed = (slen(shz(f.prev_sole - f.prev_target, up, b"zyx"), b"yxz") - slen(shz(sole - t, up, b"zyx"), b"yxz")) / p.dt;
     f.prev_target = t;
@@ -524,23 +532,33 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     let t1 = up.mul_add(Vec3::splat(sdot(f.pos[i], up, b"zyx") - sdot(t, up, b"yxz")), t);
     let (r80, r84) = hip_leans(&leg.hip, t1, leg.hip.mid_lean1, leg.hip.mid_lean2, side);
     let (r88, r92) = hip_leans(&leg.hip, f.start, leg.hip.mid_lean1, leg.hip.mid_lean2, side);
-    let lift = (closing.min(0.0).fma(delirium_data::kv!(78), ahead) * 0.5).clamp(-p.step_height, p.step_height);
+    // RDR2 (0x2ab127c): the foot's own speed counts 0.03 s, not 0.1 s, and with the stance foot off the ground the
+    // target hardly moves from the ground (0.01), unless running or staggering
+    let closed = closing.min(0.0).fma(p.rdr2.map_or(delirium_data::kv!(78), |_| 0.03), ahead);
+    let stance_down = if f.flags & delirium_data::kv!(251 int) != 0 { s.flags & delirium_data::kv!(251 int) != 0 } else { s.flags & delirium_data::kv!(7 int) != 0 };
+    let share = match p.rdr2 {
+        Some(r) if !stance_down && !r.running && !r.stagger => 0.01,
+        _ => 0.5,
+    };
+    let lift = (closed * share).clamp(-p.step_height, p.step_height);
     let (n, foot) = if two { (p.normal[1], &s.legs[1].foot) } else { (p.normal[0], &s.legs[0].foot) };
     let c2 = foot.w.vx(foot.m.c).mul_add(Vec3::splat(delirium_data::kv!(112)), foot.m.c);
     let tilt = delirium_data::kv!(12) / (sdot(n, up, b"zyx") + 0.5);
     let toe = sdot(n, c2, b"zyx");
     let room = hip_room(&leg.hip, r80, r84, r88, r92);
-    let mut h = toe.abs().min(1.0).fma(delirium_data::kv!(78), lift).min(room);
+    let mut h = match p.rdr2 {
+        // RDR2: the foot's pitch only while the foot is still short of the target, and no limit from the hip's room
+        Some(_) => if closed > 0.04 { toe.abs().min(1.0).fma(delirium_data::kv!(78), lift) } else { lift },
+        None => toe.abs().min(1.0).fma(delirium_data::kv!(78), lift).min(room),
+    };
     let mut g = p.target[i];
-    if f.flags & delirium_data::kv!(54 int) == 0 {
-        h += p.rdr2.map_or(delirium_data::kv!(112), |r| r.lift);
+    // RDR2 clears the step's lift while the COM is over his feet, except on a turn step
+    if f.flags & delirium_data::kv!(54 int) == 0 && p.rdr2.is_none_or(|r| r.turning || !inside) {
+        h += p.rdr2.map_or(delirium_data::kv!(112), |r| if r.turning { r.turn_lift } else { r.lift });
         g = p.gup.mul_add(Vec3::splat(sdot(p.gup, f.start - g, b"zyx").max(0.0)), g);
-    } else if let Some(r) = p.rdr2.filter(|r| r.turning) {
-        // RDR2's turn step lifts the foot even when it wasn't planted
-        h += r.turn_lift;
     }
     let h = g.x.fma(up.x, g.z.fma(up.z, tilt.fma(h, g.y * up.y)));
-    if toe < 0.0 || passed {
+    if toe < p.rdr2.map_or(0.0, |_| -0.4) || passed {
         speed = -1.0;
     }
     let t2 = sat(t1, up, h, b"yxz");
@@ -557,6 +575,28 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
         f.stepping = 0;
         decide(s, f, p.rdr2.as_ref());
     }
+}
+
+/// RDR2 (0x2ab127c): the swing target's horizontal reach from under the pelvis (p = target - pelvis + pelvis row a, about
+/// horizontal when the leg is straight), 0.544 m out on the foot's own side once it has been there, for the rest of the
+/// step, and 0.32 m when it has crossed to the other side.
+fn keep_near_pelvis(t: Vec3, pelvis: &M34, up: Vec3, side: f32, running: bool, dt: f32, time: &mut f32) -> Vec3 {
+    let p = t - pelvis.d + pelvis.a;
+    let (len, dir) = (slen(p, b"zyx"), vnorm(shz(p, up, b"yxz")));
+    let d = sdot(dir, vnorm(shz(-pelvis.b, up, b"yxz")), b"zyx") * side;
+    let (mut t, mut v) = (t, dir);
+    if !running && (d < -0.7 || *time >= 1.0 / 15.0) {
+        *time += dt;
+        v = dir * len;
+        let c = clamp_length(v, 0.0, 0.544);
+        t -= v - c;
+        v = c;
+    }
+    if d > 0.7 {
+        let w = v * len;
+        t -= w - clamp_length(w, 0.0, 0.32);
+    }
+    t
 }
 
 fn yaw(k: f32, pelvis: &M34, w: Vec3, toward: bool, predict: bool, angvel: Vec3) -> f32 {
