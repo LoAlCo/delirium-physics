@@ -128,7 +128,7 @@ impl ShotTask {
         let mut out = vec![("shot", p)];
         if hit.health >= delirium_data::kv!(26) {
             if !matches!(hit.blend_group, Some(53..=55 | 57)) {
-                out.push(("stayUpright", vec![("start", B(true)), ("stiffness", F(st("shotUprightStiffness", delirium_data::kv!(5))))]));
+                out.push(if rd { rdr2_stay_upright() } else { ("stayUpright", vec![("start", B(true)), ("stiffness", F(st("shotUprightStiffness", delirium_data::kv!(5))))]) });
             }
         } else {
             let fatal = hit.health < delirium_data::kv!(79);
@@ -209,6 +209,16 @@ impl ShotTask {
         }
         (out, fire)
     }
+}
+
+/// RDR2 core: the StayUpright record RDR2's shot was recorded with (rdr2_core3.md 2.1, slow set, the rest the template's).
+/// 4.002 and 5.005 are the message's 4 and 5 through its per-effector scale, which Delirium doesn't have.
+fn rdr2_stay_upright() -> Msg {
+    use Value::{Bool as B, Float as F, Int as I, Vec3 as V};
+    ("stayUpright", vec![("start", B(true)), ("side", I(0)), ("useForces", B(true)), ("useTorques", B(true)), ("velocityBased", B(true)), ("torqueparts", B(true)),
+                         ("turnTowardsBullets", B(true)), ("switchSpeed", F(4.5)), ("forceSaturationVel", F(4.002)), ("torqueleanreduction", F(1.0)), ("leanmin", F(0.4)),
+                         ("leanmax", F(0.8)), ("lean", F(0.15)), ("supportPosition", F(1.25)), ("noSupportForceMult", F(0.45)), ("antigrav", F(0.7)), ("antigravtime", F(0.5)),
+                         ("antigravspeed", F(0.5)), ("torqueStrength", V(Vec3::new(5.005, 5.005, 0.0)))])
 }
 
 pub(crate) fn flat(v: Vec3, or: Vec3) -> Vec3 {

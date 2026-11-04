@@ -63,6 +63,11 @@
 //!   against its own third axis has its ankle's shin term add its damping part instead of taking it off;
 //! - braceForImpact's car: the predicted COM clipped to the car's box widened by 0.05 m (in place of an exclusion
 //!   plane);
+//! - stayUpright's record (rdr2_core3.md 2): the force scaled by tanh of the COM speed, trunk share on pelvis and spine
+//!   top, the righting torque, and the fall assist: 0.7 M g up at the COM while he is falling, moving and the balancer
+//!   is younger than antigravtime. Its dt is the true NM dt, which sums to real time: the recorder samples once per
+//!   game frame and misses one of the three NM steps per 1/30 s (ctx+0x47b8 += dt advances 0.0203 s on the samples
+//!   reading dt 0.0102), so a 1/60 s tick needs the code's literal force, no 0.69 factor;
 //! Not here: extra foot friction on slopes (where RDR2 reads it isn't known, and Delirium's friction is fixed per
 //! part), obstacle and other-leg avoidance, lean priorities, hipError (nothing at its default 0), the turn step's
 //! flat-foot test, and fallType 3 (slump: it only sets balancerCollisionsReaction's state, so here it is fallType 0).
@@ -151,8 +156,9 @@ pub struct Params {
     pub start_flat_twist: f32,
     pub end_flat_twist: f32,
     pub ankle_twist_mult: f32,
-    /// the planted feet's yaw hold gain while the balancer runs (the core's 60 before): RDR2 writes it every step,
-    /// and its running value (+0x758, default unread) in run mode; here this one in both
+    /// the planted feet's yaw hold gain while the balancer runs (the core's 60 before), s^2 with s = 7.689, the damping
+    /// being 2s: RDR2 writes it every step, and its running value (+0x758, default unread) in run mode; here this one in
+    /// both
     pub foot_slip_stiffness: f32,
     /// standing (below 1 m/s, not staggering), the stance ankle aims from the actual knee to the actual foot on the
     /// renormalised contact normal (RDR2's +0x9c state test is left out)
@@ -175,7 +181,7 @@ impl Default for Params {
                  fall_reduce_gravity_comp: false, min_leg_twist: -1.9, max_leg_twist: 0.2, ankle_keep_pelvis: false,
                  crouch: false, crouch_bend_thresh: 0.3, crouch_bend_max: 0.55, crouch_time: 0.5, crouch_stand_rate: 0.4,
                  crouch_hip_rate: 0.25, start_flat_twist: 0.05, end_flat_twist: 0.15, ankle_twist_mult: 20.0,
-                 foot_slip_stiffness: 7.7, flatter_static_feet: false }
+                 foot_slip_stiffness: 59.126, flatter_static_feet: false }
     }
 }
 
@@ -253,6 +259,98 @@ impl Params {
         }
         true
     }
+}
+
+macro_rules! stay_fields {
+    (bool: $(($bn:literal, $b:ident)),*; f32: $(($fn:literal, $f:ident, $d:expr)),*) => {
+        /// RDR2's StayUpright record (ctx+0x29a0 + side x 0xd0; the template's values, rdr2_core3.md 2.1): the message
+        /// copies this over a set, then its parameters. All off until a message sets useForces or useTorques.
+        #[derive(Clone, Copy, Debug)]
+        pub struct StayUpright {
+            $(pub $b: bool,)*
+            $(pub $f: f32,)*
+            pub torque_strength: bevy_math::Vec3,
+            pub torque_damping: bevy_math::Vec3,
+        }
+
+        impl Default for StayUpright {
+            fn default() -> StayUpright {
+                StayUpright { $($b: false,)* $($f: $d,)*
+                              torque_strength: bevy_math::Vec3::ZERO, torque_damping: bevy_math::Vec3::new(0.5, 0.5, 0.0) }
+            }
+        }
+
+        impl StayUpright {
+            /// One float or flag (1/0) by its RDR2 name; false when the name isn't one of them.
+            pub fn set(&mut self, name: &str, v: f32) -> bool {
+                match name {
+                    $($bn => self.$b = v != 0.0,)*
+                    $($fn => self.$f = v,)*
+                    _ => return false,
+                }
+                true
+            }
+
+            pub fn get(&self, name: &str) -> Option<f32> {
+                match name {
+                    $($bn => Some(self.$b as u8 as f32),)*
+                    $($fn => Some(self.$f),)*
+                    _ => None,
+                }
+            }
+
+            pub fn is_flag(name: &str) -> bool {
+                matches!(name, $($bn)|*)
+            }
+        }
+    };
+}
+
+// Names by joaat of the message's hashes, but for leanRelative (49e2f424) and switchSpeed (ab3a861c), which are ours.
+// lastStand*, stepUpHelp and stayUpAcc* are carried and do nothing here: off or without effect on flat still ground.
+stay_fields! {
+    bool: ("useForces", use_forces), ("useTorques", use_torques), ("lastStandMode", last_stand_mode), ("velocityBased", velocity_based),
+          ("torqueOnlyInAir", torque_only_in_air), ("leanRelative", lean_relative), ("torqueparts", torque_parts),
+          ("turnTowardsBullets", turn_towards_bullets);
+    f32: ("switchSpeed", switch_speed, 100.0), ("lastStandSinkRate", last_stand_sink_rate, 0.3), ("lastStandHorizDamping", last_stand_horiz_damping, 0.4),
+         ("lastStandMaxTime", last_stand_max_time, 0.4), ("forceStrength", force_strength, 3.0), ("forceDamping", force_damping, -1.0),
+         ("forceFeetMult", force_feet_mult, 1.0), ("forceSpine3Share", force_spine3_share, 0.3), ("forceLeanReduction", force_lean_reduction, 1.0),
+         ("forceInAirShare", force_in_air_share, 0.5), ("forceMin", force_min, -1.0), ("forceMax", force_max, -1.0),
+         ("forceSaturationVel", force_saturation_vel, 4.0), ("forceThresholdVel", force_threshold_vel, 0.5),
+         ("torqueSaturationVel", torque_saturation_vel, 4.0), ("torqueThresholdVel", torque_threshold_vel, 2.5),
+         ("torqueleanreduction", torque_lean_reduction, 0.0), ("leanmin", lean_min, 0.5), ("leanmax", lean_max, 1.1), ("lean", lean, 0.0),
+         ("supportPosition", support_position, 2.0), ("noSupportForceMult", no_support_force_mult, 1.0), ("stepUpHelp", step_up_help, 0.0),
+         ("stayUpAcc", stay_up_acc, 0.7), ("stayUpAccMax", stay_up_acc_max, 5.0),
+         ("antigrav", antigrav, 0.0), ("antigravtime", antigrav_time, 0.5), ("antigravspeed", antigrav_speed, 1.5)
+}
+
+impl StayUpright {
+    /// A velocityBased window: 0 below the threshold, tanh up to the saturation speed (1 for an empty window).
+    pub fn window(speed: f32, threshold: f32, saturation: f32) -> f32 {
+        if saturation > threshold {
+            (3.0 / (saturation - threshold) * (speed - threshold)).tanh().max(0.0)
+        } else if speed >= threshold {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// The fall assist's force up (0x2abba6d..0x2abbb39), this balancer tick: the balancer younger than antigravtime,
+    /// the horizontal speed over antigravspeed, the COM moving down. The caller applies it to the pelvis at the COM,
+    /// for dt, as the code does: force x dt, no further scaling.
+    pub fn fall_assist(&self, age: f32, vel: bevy_math::Vec3, mass: f32) -> f32 {
+        if self.antigrav_time > age && vel.truncate().length() > self.antigrav_speed && vel.z < 0.0 {
+            mass * 9.81 * self.antigrav
+        } else {
+            0.0
+        }
+    }
+}
+
+/// What the character's StayUpright sets choose from (0x2a58f10): the slow set below the fast set's switch speed.
+pub fn stay_live(sets: &[StayUpright; 2], vel: bevy_math::Vec3) -> StayUpright {
+    sets[(vel.truncate().length() >= sets[1].switch_speed) as usize]
 }
 
 /// The ankles' support test: fail when 2.4 x the COM's height over them is less than its distance from them.

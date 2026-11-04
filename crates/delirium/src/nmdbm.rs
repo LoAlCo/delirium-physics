@@ -1852,8 +1852,8 @@ pub fn foot_yaw(b: &Body, yaw: &mut [f32; 2], dt: f32) -> Vec<Vec3> {
         }
         let w = sdot(b.doll.motion(k).1, up, b"zyx");
         if b.ch.rdr2 {
-            // RDR2 core (rdr2_core2.md 4): its gains are footSlipStiffness once the balancer has run (60 before) and 10,
-            // over clamp(60 dt, 1, 60); its applier drops a torque over 1e4. Its foot-grip scale (the shot's
+            // RDR2 core (rdr2_core3.md 3.4): its gains are footSlipStiffness and its 2s once the balancer has run (60 and 10
+            // before), over clamp(60 dt, 1, 60); its applier drops a torque over 1e4. Its foot-grip scale (the shot's
             // shockSpin footGripMult) is 1 here: nothing in Delirium sets it.
             let (kp, kd) = b.ch.core.foot_slip;
             let t = up * (d.mul_add(kp, -(w * kd)) * upright) / (60.0 * dt).clamp(1.0, 60.0);
@@ -1895,3 +1895,92 @@ pub fn stabilise(b: &Body, k: f32, dt: f32) -> Vec<Vec3> {
     out
 }
 
+/// RDR2 core: StayUpright's applier (0x2a58f10), while the balancer is active: its force (0x2a1e6c0), and with
+/// `righting` (the balancer balancing, no staggerFall) its righting torque (0x2a598c8). Part positions are their
+/// centres here, so the feet's force points carry no moment; the trunk's points aren't in the note (ours: their
+/// centres). Left out: the kneel state's foot points, the moving floor (nothing here has one), the scale ctx+0x2e1c (1
+/// in every recording).
+pub fn stay_upright(b: &Body, r: &crate::nmdbm_rdr2::StayUpright, dt: f32, righting: bool, torque: &mut [Vec3], at: &mut Vec<(usize, Vec3, Vec3)>) {
+    use crate::nmdbm_rdr2::StayUpright as S;
+    let up = b.ch.up;
+    let feet = [0, 1].map(|i| b.ch.joints[(*ANKLE())[i]].child);
+    let contact = feet.map(|f| b.doll.touch[f] & delirium_data::kv!(95 int) == delirium_data::kv!(7 int));
+    let (com, vel) = b.doll.com();
+    let speed = vel.length();
+    let (cf, vf) = (|k: usize| b.doll.rigid.as_ref().map_or(b.doll.centre(k), |r| r.0[k].d + r.1), |k: usize| b.doll.rigid.as_ref().map_or(b.doll.motion(k).0, |r| r.0[k].v));
+    let pts = feet.map(cf);
+    let mid = (pts[0] + pts[1]) * 0.5;
+    let d = com - mid;
+    let lean = d.normalize_or_zero();
+    let pelvis = b.ch.joints[(*HIP())[0]].parent;
+    if r.use_forces && contact.contains(&true) {
+        let f = if r.velocity_based { S::window(speed, r.force_threshold_vel, r.force_saturation_vel) } else { 1.0 };
+        let k = f * r.force_strength;
+        if k > 0.0 {
+            let c = 1.0 - (1.0 - up.dot(lean).max(0.0)) * r.force_lean_reduction;
+            let c = c * c;
+            let s = c * c * k;
+            let s = s * s;
+            let damp = if r.force_damping < 0.0 { 0.2 * s } else { s * r.force_damping };
+            let proj = com - up * up.dot(d);
+            let i = (proj + vel * 0.1 - mid) * s + (vel - (vf(feet[0]) + vf(feet[1])) * 0.5) * damp;
+            let i = (i - up * up.dot(i)) * (60.0 * dt);
+            // a foot out of contact counts as 2.25 m behind
+            let along = (vel - up * up.dot(vel)).normalize_or_zero();
+            let behind = [0, 1].map(|n| if contact[n] { (com - pts[n]).dot(along) } else { 2.25 });
+            let i = if behind[0] > r.support_position && behind[1] > r.support_position { i * r.no_support_force_mult } else { i };
+            // one foot down: which foot takes forceInAirShare isn't in the note (ours: that one); 0.5 here either way
+            let share = match contact {
+                [true, false] => [r.force_in_air_share, 1.0 - r.force_in_air_share],
+                [false, true] => [1.0 - r.force_in_air_share, r.force_in_air_share],
+                _ => [0.5, 0.5],
+            };
+            for n in 0..2 {
+                at.push((feet[n], pts[n], i * (share[n] * r.force_feet_mult)));
+            }
+            let top = b.ch.joints[(*SPINE())[3]].child;
+            at.push((pelvis, cf(pelvis), i * -(1.0 - r.force_spine3_share)));
+            at.push((top, cf(top), i * -r.force_spine3_share));
+        }
+    }
+    if !(r.use_torques && righting) || (r.torque_only_in_air && contact.contains(&true)) {
+        return;
+    }
+    let f = if r.velocity_based { S::window(speed, r.torque_threshold_vel, r.torque_saturation_vel) } else { 1.0 };
+    let (ks, ds) = (r.torque_strength * f, r.torque_damping * f);
+    if ks == Vec3::ZERO && ds == Vec3::ZERO {
+        return;
+    }
+    let s = b.snap(up);
+    let tilt = up.dot(lean).clamp(-1.0, 1.0).acos();
+    let g = if tilt > r.lean_min { 1.0 - (tilt.min(r.lean_max) - r.lean_min) / (r.lean_max - r.lean_min) * r.torque_lean_reduction } else { 1.0 };
+    let q = if r.lean_relative { Quat::from_rotation_arc(up, if lean == Vec3::ZERO { up } else { lean }) } else { Quat::IDENTITY };
+    let (x, y) = (q * s.m.a, q * s.m.b);
+    let c = if contact.contains(&true) { 1.0 } else { 0.99 };
+    // the note writes e = u x x, h = e x u, which with its signs would push him over: righting needs h along x, so x x u
+    // and u x e [the note's sign, re-read when this matters: off below 2.5 m/s]
+    let e = x.cross(up);
+    let h = up.cross(e);
+    let w = s.angvel;
+    let asin = |v: f32| v.clamp(-1.0, 1.0).asin();
+    let scale = g / (30.0 * dt).clamp(1.0, 30.0);
+    let mut axes = vec![(h, (-166.667 * asin(e.dot(y)) * c * ks.x - 4.0 * c * ds.x * w.dot(h)) * scale),
+                        (e, (166.667 * asin(h.dot(y)) * c * ks.y - 4.0 * c * ds.y * w.dot(e)) * scale)];
+    let along = vel - up * up.dot(vel);
+    if along.length() > 2.0 {
+        axes.push((up, (-166.667 * asin(along.normalize().dot(h)) * c * ks.z - 4.0 * c * ds.z * w.dot(up)) * scale));
+    }
+    let n = b.build.parts.len();
+    for (axis, t) in axes {
+        if r.torque_parts {
+            // over every part by its inertia about the axis (ours: of their sum, so the whole torque is applied)
+            let a = axis.normalize_or_zero();
+            let sum: f32 = (0..n).map(|k| b.doll.inertia(k, a)).sum();
+            for k in 0..n {
+                torque[k] += axis * (t * b.doll.inertia(k, a) / sum);
+            }
+        } else {
+            torque[pelvis] += axis * t;
+        }
+    }
+}
