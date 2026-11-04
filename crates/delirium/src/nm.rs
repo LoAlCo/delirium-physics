@@ -1172,7 +1172,11 @@ impl Agent {
         let snap = ch.clone();
         let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames };
         let cf_was = self.nm_cf.as_ref().is_some_and(|f| f.active);
+        // RDR2 core: the shot's default arms read reachForWound and whether bodyBalance runs
+        let rfw = self.extras.on.iter().filter(|_| ch.rdr2).find(|(n, _)| *n == "reachForWound").and_then(|(_, e)| e.rfw_view());
+        let bb_on = ch.rdr2 && (self.balance.as_ref().is_some_and(|b| b.bb.is_some()) || self.extras.on.iter().any(|(n, _)| *n == "rdr2Balance"));
         let mut c = crate::nmshot::Ctx::new(ch, &body, &mut out, dbm_lost);
+        (c.rfw, c.bb_on) = (rfw, bb_on);
         if tick {
             c.cf = Some((&mut self.nm_cf, &mut self.nm_head, &mut self.nm_twist));
         }
@@ -1209,6 +1213,9 @@ impl Agent {
             if s.failed() {
                 self.fallen = true;
             }
+        }
+        if out.rfw_release != [false; 2] {
+            self.extras.on.iter_mut().filter(|(n, _)| *n == "reachForWound").for_each(|(_, e)| e.rfw_release(out.rfw_release));
         }
         match out.dbm {
             Some(true) => {
@@ -1723,6 +1730,9 @@ impl Agent {
             let mut out = crate::nmshot::Out::default();
             let mut c = crate::nmshot::Ctx::new(&mut *ch, &body, &mut out, dbm_lost);
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
+            c.shot_on = self.nm_shot.is_some();
+            c.dbm = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).filter(|_| !self.fallen).map(|d| crate::nmshot::DbmView {
+                stepping: d.f.stepping, planted: d.pv.planted, failing: d.p.rdr2.is_some_and(|r| r.failing.is_some()) });
             if let Some(p) = self.nm_cf_msg.take() {
                 let b = walk_actives!(self);
                 start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);
@@ -2007,6 +2017,7 @@ impl Agent {
                         }
                     }
                     r.force_balance = out.dbm_force_balance;
+                    (r.stagger, r.lead) = (out.dbm_stagger, out.dbm_lead);
                     match out.dbm_force_step {
                         Some(Some(i)) => (r.forced, r.cancel_step) = (Some((i, r.steps)), true),
                         Some(None) => r.forced = None,
@@ -2510,12 +2521,14 @@ pub struct Hit {
     pub weapon_busy: bool,
     pub blend_group: Option<u32>,
     pub player_hits: bool,
+    /// the agent runs the RDR2 core: the shot task sends RDR2's shot values
+    pub rdr2: bool,
 }
 
 impl Hit {
     pub fn ragdoll(a: &Agent) -> Hit {
         let r = a.doll.root();
-        Hit { vel: a.doll.vel(0).0, root: Some(r), pos: r, fwd: forward(a), ..Default::default() }
+        Hit { vel: a.doll.vel(0).0, root: Some(r), pos: r, fwd: forward(a), rdr2: a.rdr2_core.is_some(), ..Default::default() }
     }
 }
 

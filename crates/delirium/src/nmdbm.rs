@@ -468,7 +468,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     let target_b = a.mul_add(Vec3::splat(sb), (c * sdot(c, dir_a, b"zyx") * sdot(a, dir_a, b"zyx")).mul_add(Vec3::splat(sb), pc));
     f.dist = [slen(shz(target_a - lpos, up, b"yxz"), b"zyx"), slen(shz(target_b - rpos, up, b"yzx"), b"zyx")];
     // RDR2, moving sideways: after each step the other foot leads the decision
-    if let Some(r) = p.rdr2.filter(|r| r.sideways) {
+    if let Some(r) = p.rdr2.filter(|r| r.sideways || r.stagger) {
         f.dist[1 - r.last_foot] += crate::nmdbm_rdr2::Rdr2::alternate();
     }
     decide(s, f, p.rdr2.as_ref());
@@ -873,7 +873,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         leg_ik(&mut c, &limb, &mut leg.knee, &mut leg.hip, &leg.foot, &pelvis, vel);
     }
     // RDR2's ankle balance: each planted ankle's pitch with its foot aimed at the tilted normal
-    let aim = p.rdr2.filter(|r| r.p.ankle_balance).map(|_| {
+    let aim = p.rdr2.filter(|r| r.p.ankle_balance && !r.stagger).map(|_| {
         let ahead = s.com + s.vel * 0.2;
         let d = [0, 1].map(|i| horizontal(s.legs[i].foot.m.d - ahead, up).length());
         (crate::nmdbm_rdr2::Rdr2::ankle_shares(d), crate::nmdbm_rdr2::Rdr2::ankle_aim(Vec3::Z, up, s.com, horizontal(s.vel, up), f.centre))
@@ -1358,12 +1358,18 @@ impl Dbm {
         if off > self.p.abort * h || (h < 0.5 && self.p.low_abort) || self.f.countdown == -1 {
             return false;
         }
+        let hi = up.vd(s.com) - up.vd(l).max(up.vd(r));
         if let (Some(r), Some((al, ar))) = (self.p.rdr2, ankles) {
             // RDR2: the feet give out at giveupHeight whatever the knees do, and the ankles' own support test
             let ha = up.vd(s.com) - up.vd(al).min(up.vd(ar));
             let offa = horizontal(s.com - al, up).length().min(horizontal(s.com - ar, up).length())
                 .min(horizontal(s.com - (al + ar) * 0.5, up).length());
             if h < r.giveup_height() || crate::nmdbm_rdr2::ANKLE_ABORT * ha < offa {
+                return false;
+            }
+            // RDR2's stagger mode: the COM too low over the higher foot (staggerFailHeight x leg length, the leg length
+            // taken as his standing pelvis height)
+            if r.stagger && hi < crate::nmdbm_rdr2::STAGGER_FAIL_HEIGHT * self.p.pelvis_height {
                 return false;
             }
         }
@@ -1430,7 +1436,9 @@ impl Dbm {
         if let Some(r) = self.p.rdr2 {
             let (lean, more) = r.lean_against(horizontal(s.hvel, self.p.up));
             self.lean_vec += lean;
-            if r.own_prediction() {
+            if let Some(t) = r.lead {
+                self.p.lead = t + more;
+            } else if r.own_prediction() {
                 self.p.lead = r.prediction + more;
             }
             self.p.step_clamp += r.clamp_add;

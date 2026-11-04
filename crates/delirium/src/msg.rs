@@ -427,6 +427,14 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "minArmsLooseness", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "minLegsLooseness", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "fallingReaction", kind: Kind::Int, used: true, doc: "RDR2 core only: 0 roll up, 1 catch fall, 4 catch fall then writhe (2, 3 roll up here)" },
+        Param { name: "enableDefaultArms", kind: Kind::Bool, used: true, doc: "RDR2 core only (RDR2's shotConfigureArms): the default arms (true)" },
+        Param { name: "brace", kind: Kind::Bool, used: true, doc: "RDR2 core only: free arms reach towards the ground the way he moves, else the guard pose (true)" },
+        Param { name: "useArmsWindmill", kind: Kind::Bool, used: true, doc: "RDR2 core only: arms windmill when thrown back fast (true)" },
+        Param { name: "alwaysReachTime", kind: Kind::Float, used: true, doc: "RDR2 core only: s a hand holds the wound before releaseWound may let it go (0.3)" },
+        Param { name: "AWSpeedMult", kind: Kind::Float, used: true, doc: "RDR2 core only: windmill speed per m/s (1)" },
+        Param { name: "AWRadiusMult", kind: Kind::Float, used: true, doc: "RDR2 core only: windmill radius per m/s (1)" },
+        Param { name: "AWStiffnessAdd", kind: Kind::Float, used: true, doc: "RDR2 core only: windmill stiffness added with the radius (4)" },
+        Param { name: "releaseWound", kind: Kind::Int, used: true, doc: "RDR2 core only: let a reaching hand go when moving fast, 0 never, 1 with brace, 2 always (1)" },
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "" },
         Param { name: "grabHoldTime", kind: Kind::Float, used: true, doc: "" },
         Param { name: "bodyPart", kind: Kind::Int, used: true, doc: "" },
@@ -1064,6 +1072,14 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("shot", "minArmsLooseness") => { let p = &mut st.shot; p.rdr2.min_arms_looseness = v.f()?; }
         ("shot", "minLegsLooseness") => { let p = &mut st.shot; p.rdr2.min_legs_looseness = v.f()?; }
         ("shot", "fallingReaction") => { let p = &mut st.shot; p.rdr2.falling_reaction = Some(v.i()?); }
+        ("shot", "enableDefaultArms") => { let p = &mut st.shot; p.rdr2.default_arms = v.b()?; }
+        ("shot", "brace") => { let p = &mut st.shot; p.rdr2.brace = v.b()?; }
+        ("shot", "useArmsWindmill") => { let p = &mut st.shot; p.rdr2.use_arms_windmill = v.b()?; }
+        ("shot", "alwaysReachTime") => { let p = &mut st.shot; p.rdr2.always_reach_time = v.f()?; }
+        ("shot", "AWSpeedMult") => { let p = &mut st.shot; p.rdr2.aw_speed_mult = v.f()?; }
+        ("shot", "AWRadiusMult") => { let p = &mut st.shot; p.rdr2.aw_radius_mult = v.f()?; }
+        ("shot", "AWStiffnessAdd") => { let p = &mut st.shot; p.rdr2.aw_stiffness_add = v.f()?; }
+        ("shot", "releaseWound") => { let p = &mut st.shot; p.rdr2.release_wound = v.i()?; }
         ("shot", "grabHoldTime") => { let p = &mut st.shot; p.grab_hold_time = v.f()?; }
         ("shot", "bodyPart") => { let p = &mut st.shot; p.body_part = v.i()?.max(0) as usize; }
         ("shot", "loosenessAmount") => { let p = &mut st.shot; p.looseness_amount = v.f()?; }

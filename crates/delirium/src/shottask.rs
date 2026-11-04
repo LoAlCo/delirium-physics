@@ -9,6 +9,13 @@ use delirium_data::taskparams::TaskParams;
 
 pub type Msg = (&'static str, Vec<(&'static str, Value)>);
 
+/// RDR2 core: the shot message's values RDR2's own shot task was recorded sending (bodyStiffness, armStiffness, the
+/// arms' and legs' least looseness, the weakness ramp in s); with fling on and fallingReaction 0.
+const RDR2_BODY_STIFFNESS: f32 = 7.25;
+const RDR2_ARM_STIFFNESS: f32 = 6.0;
+const RDR2_MIN_LOOSENESS: f32 = 0.45;
+const RDR2_WEAKNESS_RAMP: f32 = 0.4;
+
 #[derive(Clone, Debug)]
 pub struct ShotTask {
     pub part: usize,
@@ -95,9 +102,16 @@ impl ShotTask {
         if melee {
             p.extend([("useHeadLook", B(true)), ("melee", B(true))]);
         }
-        p.extend([("crouching", B(false)), ("reachForWound", B(!melee)), ("fling", B(false)), ("chickenArms", B(false)),
+        // RDR2 core: the shot values RDR2's task was recorded sending (rdr2-decomp/study/rdr2_nmx_compare.md)
+        let rd = hit.rdr2;
+        p.extend([("crouching", B(false)), ("reachForWound", B(!melee)), ("fling", B(rd)), ("chickenArms", B(false)),
                   ("maxSteps", I(if hit.few_steps { delirium_data::kv!(1 int) } else { st("shotMaxSteps", delirium_data::kv!(35)) as i32 })), ("loosenessAmount", F(st("shotLooseness", 1.0))),
-                  ("bodyStiffness", F(st("shotBodyStiffness", delirium_data::kv!(202)))), ("stableHandsAndNeck", B(st("shotStablizeHandsAndNeck", 0.0) != 0.0))]);
+                  ("bodyStiffness", F(if rd { RDR2_BODY_STIFFNESS } else { st("shotBodyStiffness", delirium_data::kv!(202)) })),
+                  ("stableHandsAndNeck", B(st("shotStablizeHandsAndNeck", 0.0) != 0.0))]);
+        if rd {
+            p.extend([("armStiffness", F(RDR2_ARM_STIFFNESS)), ("minArmsLooseness", F(RDR2_MIN_LOOSENESS)), ("minLegsLooseness", F(RDR2_MIN_LOOSENESS)),
+                      ("fallingReaction", I(0)), ("initialWeaknessRampDuration", F(RDR2_WEAKNESS_RAMP))]);
+        }
         let mut lh = |n: &str, l: f32, h: f32| rand.float_in_range(st(&format!("{n}L"), l), st(&format!("{n}H"), h));
         p.push(("timeBeforeReachForWound", F(lh("shotTimeBeforeReachForWound", delirium_data::kv!(78), delirium_data::kv!(60)))));
         p.push(("timeBeforeCollapseWoundLeg", F(st("shotTimeBeforeCollapseWoundLeg", 1.0))));

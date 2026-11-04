@@ -56,6 +56,7 @@ pub fn slot(message: &str) -> u32 {
         | "forceLeanTowardsObject" => 0x18,
         "rdr2Balance" => 0x20,
         "shotSnap" | "shotSpin" | "shotFromBehind" | "shotInGuts" | "shotInjuredLeg" | "shotInjuredArm" | "shotFallToKnees" => 0x38,
+        "staggerFall" => 0x48,
         "meleeReact" => 0x40,
         "handsAndKnees" => 0x70,
         "rdr2Lasso" | "rdr2Bolas" => 0x88,

@@ -83,6 +83,12 @@ pub trait Extra: Send + Sync {
     fn hit(&mut self, _p: &mut P) -> Option<Result<(), Error>> {
         None
     }
+    /// The RDR2 core's reachForWound: what the shot's default arms read of its hands.
+    fn rfw_view(&self) -> Option<crate::nmshot::RfwView> {
+        None
+    }
+    /// The RDR2 core's reachForWound: the shot's releaseWound lets these hands go this step.
+    fn rfw_release(&mut self, _hands: [bool; 2]) {}
 }
 
 #[derive(Default)]

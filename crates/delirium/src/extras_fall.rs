@@ -62,9 +62,16 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "stepsTillStartEnd", kind: Kind::Int, used: true, doc: "steps before the wind-down (6)" },
         Param { name: "timeStartEnd", kind: Kind::Float, used: true, doc: "s before the wind-down, whichever comes first (6)" },
         Param { name: "rampTimeToEndValues", kind: Kind::Float, used: true, doc: "s to ramp to the end gains (2)" },
-        Param { name: "predictionTime", kind: Kind::Float, used: false, doc: "not done: the balancer keeps its own (0.3)" },
+        Param { name: "predictionTime", kind: Kind::Float, used: true, doc: "RDR2 core: the balancer's prediction time, s, going forward (0.15); not done without it" },
+        Param { name: "predictiontimeb", kind: Kind::Float, used: true, doc: "RDR2 core: the same going back (0.15)" },
         Param { name: "perStepReduction1", kind: Kind::Float, used: true, doc: "gains times this each step, floor 0.2 (0.95)" },
-        Param { name: "pushOffDist", kind: Kind::Float, used: true, doc: "m a stagger step pushes off (0.1)" },
+        Param { name: "pushOffDist", kind: Kind::Float, used: true, doc: "m a stagger step pushes off (0.1); RDR2 core: COM this far past the stance foot, going forward, before the knee pushes (0.28)" },
+        Param { name: "pushoffdistb", kind: Kind::Float, used: true, doc: "RDR2 core: the same going back (0.23)" },
+        Param { name: "pushoffknee", kind: Kind::Float, used: true, doc: "RDR2 core: the stance knee pushes when straighter than this, rad (-0.25)" },
+        Param { name: "forcebalancethresh", kind: Kind::Float, used: true, doc: "RDR2 core: slow and the COM this steeply over both feet (cosine): no new steps (1)" },
+        Param { name: "timeToFall", kind: Kind::Float, used: true, doc: "RDR2 core: s before fallType acts (2)" },
+        Param { name: "fallType", kind: Kind::Int, used: true, doc: "RDR2 core: 0 fail the balance when a knee push ends, 1 no new steps, 2 (not done), 3-5 the balancer's lean in the step wait (4)" },
+        Param { name: "firingInputOutput", kind: Kind::Bool, used: true, doc: "RDR2 core: hands the fall to catchFall even while the shot runs (false)" },
         Param { name: "maxPushoffVel", kind: Kind::Float, used: true, doc: "its top speed, m/s (1)" },
         Param { name: "leanInDirRate", kind: Kind::Float, used: true, doc: "lean amount rise, per s (1)" },
         Param { name: "leanInDirMaxF", kind: Kind::Float, used: true, doc: "lean cap going forward (0.3)" },
@@ -473,6 +480,9 @@ pub struct StaggerFall {
     state: u8,
     seed: u32,
     out: Vec<String>,
+    /// RDR2's, with the RDR2 core: its parameters and state
+    rp: StgParams,
+    rd: Option<StgRdr2>,
 }
 impl StaggerFall {
     fn new(p: &mut P) -> Result<StaggerFall, Error> {
@@ -507,7 +517,7 @@ impl StaggerFall {
         Ok(StaggerFall { arm, arm_start, spine, spine_start, hold, ramp, legs, legs_end, prob, steps_end, time_end, ramp_end, reduce,
                          push_dist, push_vel, lean_rate, lean_max, hips_max, lean2, hip_bend, spine_bend, always_fwd, head_pos,
                          head_vel_prob, head, turn, t: 0.0, t_end: 0.0, steps: 0, side: 0.0, push: 0.0, state: 0, seed: delirium_data::kv!(120 int),
-                         out: vec![] })
+                         out: vec![], rp: StgParams::read(p)?, rd: None })
     }
 
     fn rand(&mut self) -> f32 {
@@ -516,7 +526,25 @@ impl StaggerFall {
     }
 }
 impl Extra for StaggerFall {
+    fn stop(&mut self, _c: &mut Ctx) {
+        if let Some(rd) = self.rd.as_ref() {
+            if self.rp.head {
+                self.out.push("headLook start=false".into());
+            }
+            if rd.handed {
+                self.out.push("catchFall start=false".into());
+                self.out.push("rollDownStairs start=false".into());
+            }
+        }
+    }
+
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            let rp = self.rp;
+            let rd = self.rd.get_or_insert_with(|| StgRdr2::new(c, rp, &mut self.out));
+            rd.tick(c, &rp, &mut self.out, dt);
+            return;
+        }
         let cl = (*crate::nmrs::CLAVICLE());
         let fwd = flat((c.b.part(cl[0] + 1).m.d - c.b.part(cl[1] + 1).m.d).cross(Vec3::Z));
         let dir = travel(c, fwd);
@@ -599,6 +627,302 @@ impl Extra for StaggerFall {
 
     fn done(&self) -> bool {
         self.state == 2
+    }
+}
+
+/// RDR2's staggerFall parameters (RDR2's names and defaults; its unnamed values are consts below). Read with every
+/// staggerFall message, used with the RDR2 core.
+#[derive(Clone, Copy, Debug)]
+struct StgParams {
+    /// arm and spine (stiffness, damping) once ramped, and at the start
+    arm: [f32; 2],
+    spine: [f32; 2],
+    arm_start: [f32; 2],
+    spine_start: [f32; 2],
+    hold: f32,
+    ramp: f32,
+    steps_end: i32,
+    legs: f32,
+    prediction: [f32; 2],
+    lean_rate: f32,
+    /// per direction (forward, back): the COM and hip lean noise's (min, max, frequency), the total lean's (min, max),
+    /// the extra hip lean per step past stepsTillStartEnd
+    com: [[f32; 3]; 2],
+    hip: [[f32; 3]; 2],
+    total: [[f32; 2]; 2],
+    bonus: [f32; 2],
+    push_dist: [f32; 2],
+    push_knee: f32,
+    push_vel: f32,
+    force_thresh: f32,
+    head_vel_prob: f32,
+    head: bool,
+    time_to_fall: f32,
+    fall_type: i32,
+    firing: bool,
+}
+
+impl StgParams {
+    fn read(p: &mut P) -> Result<StgParams, Error> {
+        let arm = [p.f("armStiffness", 11.0)?, p.f("armDamping", 1.0)?];
+        let spine = [p.f("spineStiffness", 11.0)?, p.f("spineDamping", 0.7)?];
+        let arm_start = [p.f("armStiffnessStart", 8.0)?, p.f("armDampingStart", 0.1)?];
+        let spine_start = [p.f("spineStiffnessStart", 3.0)?, p.f("spineDampingStart", 0.1)?];
+        let (hold, ramp) = (p.f("timeAtStartValues", 0.0)?, p.f("rampTimeFromStartValues", 0.0)?);
+        p.f("staggerStepProb", 0.0)?;
+        let steps_end = p.i("stepsTillStartEnd", 100)?;
+        let legs = p.f("lowerBodyStiffness", 17.0)?;
+        let prediction = [p.f("predictionTime", 0.15)?, p.f("predictiontimeb", 0.15)?];
+        let lean_rate = p.f("leanInDirRate", 1.0)?;
+        let com = [[0.4, p.f("leanInDirMaxF", 0.4)?, 4.0], [0.3, p.f("leanInDirMaxB", 0.5)?, 4.0]];
+        let hip = [[0.1, p.f("leanHipsMaxF", 0.4)?, 4.0], [-0.2, p.f("leanHipsMaxB", 0.2)?, 6.0]];
+        p.f("lean2multF", -1.0)?;
+        p.f("lean2multB", -1.0)?;
+        let push_dist = [p.f("pushOffDist", 0.28)?, p.f("pushoffdistb", 0.23)?];
+        let (push_knee, push_vel) = (p.f("pushoffknee", -0.25)?, p.f("maxPushoffVel", 1.2)?);
+        let force_thresh = p.f("forcebalancethresh", 1.0)?;
+        let head_vel_prob = p.f("headLookAtVelProb", 1.0)?;
+        let head = p.b("useHeadLook", true)?;
+        let (time_to_fall, fall_type) = (p.f("timeToFall", 2.0)?, p.i("fallType", 4)?);
+        let firing = p.b("firingInputOutput", false)?;
+        Ok(StgParams { arm, spine, arm_start, spine_start, hold, ramp, steps_end, legs, prediction, lean_rate, com, hip,
+                       total: STG_TOTAL, bonus: STG_BONUS, push_dist, push_knee, push_vel, force_thresh, head_vel_prob, head,
+                       time_to_fall, fall_type, firing })
+    }
+}
+
+/// RDR2's unnamed staggerFall values: the total lean's (min, max) forward and back, the extra hip lean per step past
+/// stepsTillStartEnd forward and back, the knee and hip muscle stiffness, the leg stiffness floors (knee and hip,
+/// ankle), the COM-height weakening (from, to in leg lengths, and the least it leaves).
+const STG_TOTAL: [[f32; 2]; 2] = [[-10.0, 10.0], [0.4, 0.5]];
+const STG_BONUS: [f32; 2] = [0.0, 0.1];
+const STG_LEG_MUSCLE: f32 = 0.7;
+const STG_FLOOR: [f32; 2] = [5.0, 7.0];
+const STG_WEAK: [f32; 3] = [0.65, 0.75, 0.3];
+/// Below this speed (m/s) the lean goes along the body's back axis, not the velocity; below STG_SLOW the balance may be
+/// forced (no new steps).
+const STG_DIR_SPEED: f32 = 0.6;
+const STG_SLOW: f32 = 0.65;
+/// How long a foot counts as just stepped (s), and the head look's stiffness.
+const STG_JUST: f32 = 1.0 / 15.0;
+const STG_HEAD: f32 = 11.0;
+
+/// RDR2's staggerFall (with the RDR2 core), from a study of RDR2's code (rdr2-decomp/study/rdr2_stagger.md): the
+/// balancer runs in stagger mode and staggerFall drives its COM and hip leans with noise between per-direction limits;
+/// it counts the balancer's steps, lets the stance leg stop opposing gravity or pushes it off with the knee, sets the
+/// legs' stiffness (weaker as the COM drops) and ramps the spine and arms; once the balancer has given up it hands
+/// the fall to catchFall (and rollDownStairs), unless the shot is running.
+struct StgRdr2 {
+    t: f32,
+    seed: f32,
+    last: u32,
+    steps: i32,
+    just: [f32; 2],
+    leg: [u8; 2],
+    force: bool,
+    latch: bool,
+    fell: bool,
+    handed: bool,
+    leg_len: f32,
+}
+
+impl StgRdr2 {
+    /// Activation: opposeGravity off on the lower spine, neck and clavicles, the head look, the noise seed.
+    fn new(c: &mut Ctx, p: StgParams, out: &mut Vec<String>) -> StgRdr2 {
+        let seed = 4000.0 * c.ch.random();
+        for j in (*SPINE()).iter().take(3).chain(NECK().iter()).chain(CLAVICLE().iter()).copied() {
+            c.ch.eff[j].oppose_gravity = 0.0;
+        }
+        // RDR2 starts the balancer itself; here a balancer is asked for when none runs (ours)
+        if c.dbm.is_none() && c.upright {
+            out.push("bodyBalance start=true".into());
+        }
+        if p.head {
+            out.push(format!("headLook start=true vel={},{},{} stiffness={STG_HEAD} damping=1", c.vel.x, c.vel.y, c.vel.z));
+        }
+        let leg_len = (c.b.joint_pos((*HIP())[0]) - c.b.joint_pos((*ANKLE())[0])).length().max(0.1);
+        StgRdr2 { t: 0.0, seed, last: 0, steps: 0, just: [0.0; 2], leg: [0; 2], force: false, latch: false, fell: false, handed: false,
+                  leg_len }
+    }
+
+    fn foot(c: &Ctx, i: usize) -> usize {
+        c.ch.joints[(*ANKLE())[i]].child
+    }
+
+    fn touching(c: &Ctx, i: usize) -> bool {
+        c.b.doll.touch[Self::foot(c, i)] & delirium_data::kv!(7 int) != 0
+    }
+
+    fn tick(&mut self, c: &mut Ctx, p: &StgParams, out: &mut Vec<String>, dt: f32) {
+        let Some(bal) = c.dbm.filter(|_| c.upright) else {
+            // the balancer has given up: hand the fall over, unless the shot is running and takes it
+            if !self.handed && (p.firing || !c.shot_on) {
+                self.handed = true;
+                self.hand_over(c, out);
+            }
+            return;
+        };
+        c.out.dbm_stagger = true;
+        let up = c.up;
+        let hz = |v: Vec3| v - up * v.dot(up);
+        let (v, back_axis) = (c.vel, c.m.c);
+        let vn = v.normalize_or_zero();
+        let backward = back_axis.dot(vn) > 0.0;
+        let k = backward as usize;
+        let speed = hz(v).length();
+        let feet = [0, 1].map(|i| c.b.part(Self::foot(c, i)).m.d);
+        // no new steps when slow with the COM steeply over both feet
+        if bal.stepping == 0 {
+            self.force = speed < STG_SLOW && feet.iter().all(|&f| up.dot((c.com - f).normalize_or_zero()) > p.force_thresh);
+        }
+        c.out.dbm_force_balance = self.force || (p.fall_type == 1 && self.fell);
+        c.out.dbm_lead = Some(p.prediction[k]);
+        // the balancer's steps
+        if bal.stepping != 0 && bal.stepping != self.last {
+            self.steps += 1;
+            self.just[bal.stepping as usize - 1] = STG_JUST;
+            if p.head && (p.head_vel_prob >= 1.0 || c.ch.random() < p.head_vel_prob) {
+                out.push(format!("headLook start=true vel={},{},{} stiffness={STG_HEAD} damping=1", v.x, v.y, v.z));
+            }
+        }
+        self.last = bal.stepping;
+        for j in &mut self.just {
+            *j -= dt;
+        }
+        // the leans: 3-D noise between each direction's limits, the total clamped, the COM's ramped in
+        let t = self.t;
+        let [cn, cx, cf] = p.com[k];
+        let [hn, hx, hf] = p.hip[k];
+        let hf = if self.force { 0.1 } else { hf };
+        let mut com = cn + (cx - cn) * crate::nmfl::noise01(t * cf, self.seed, -0.5);
+        let mut hip = hn + (hx - hn) * crate::nmfl::noise01(self.seed, t * hf, -0.5);
+        let [lo, hi] = p.total[k];
+        let total = com + hip;
+        if total > hi + 1e-6 {
+            (com, hip) = (com * hi / total, hip * hi / total);
+        } else if total < lo {
+            if com > 0.0 && hip > 0.0 {
+                (com, hip) = (com * lo / total, hip * lo / total);
+            } else if com <= 0.0 {
+                com = lo - hip;
+            } else {
+                hip = lo - com;
+            }
+        }
+        com *= (t * p.lean_rate).clamp(0.0, 1.0);
+        let dir = if speed < STG_DIR_SPEED {
+            hz(back_axis).normalize_or_zero() * if backward { 1.0 } else { -1.0 }
+        } else {
+            hz(v).normalize_or_zero()
+        };
+        let bonus = if self.steps > p.steps_end { (self.steps - p.steps_end - 1) as f32 * p.bonus[k] } else { 0.0 };
+        // ours: the side factor from the body's back axis (the note leaves which row of the spine root it is)
+        let f = hz(back_axis).normalize_or_zero().dot(hz(v).normalize_or_zero()).abs();
+        c.out.hip_lean = Some(dir * (hip + bonus) * f);
+        c.out.lean = Some((crate::nmdbm::LeanMode::Dir(dir), (com + bonus) * f, false));
+        // the spine twists against the hips' swing (going forward)
+        if !backward {
+            let a = [0, 1].map(|i| c.ch.actual((*HIP())[i], c.b.frames)[0]);
+            let d = [0, 1].map(|i| c.ch.eff[(*HIP())[i]].desired[0]);
+            let l = ((a[0] - a[1]) + 0.15 * (d[0] - d[1])).clamp(-0.8, 0.8);
+            for (&j, w) in (*SPINE()).iter().zip([0.35, 0.3, 0.2, 0.15]) {
+                c.ch.eff[j].desired[2] = w * l;
+            }
+        }
+        // the upper body's ramp from the start values
+        let lerp = |a: [f32; 2], b: [f32; 2], u: f32| [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+        let u = if t > p.hold + 1e-6 { if t > p.hold + p.ramp { 1.0 } else { (t - p.hold) / p.ramp } } else { 0.0 };
+        let (arm, spine) = (lerp(p.arm_start, p.arm, u), lerp(p.spine_start, p.spine, u));
+        self.t += dt;
+        // the legs: the stance leg stops opposing gravity, or pushes off with the knee once the COM is past it
+        let prev = self.leg;
+        self.leg = [0; 2];
+        match bal.stepping {
+            1 => self.leg[1] = 2,
+            2 => self.leg[0] = 2,
+            _ => {}
+        }
+        let at = if backward { [0, 1].map(|i| c.b.joint_pos((*ANKLE())[i])) } else { feet };
+        let past = [0, 1].map(|i| hz(c.com - at[i]).dot(hz(v)));
+        let rise = c.b.part(CHEST()).v.dot(up);
+        let fall_time = self.t > p.time_to_fall && c.out.dbm_force_balance;
+        for i in 0..2 {
+            let o = 1 - i;
+            if !(fall_time || (bal.stepping as usize == o + 1 && !bal.planted[i])) {
+                continue;
+            }
+            let touch = Self::touching(c, i);
+            if past[i] <= p.push_dist[k] || !touch || rise >= p.push_vel {
+                if touch {
+                    for j in [(*ANKLE())[i], (*KNEE())[i], (*HIP())[i]] {
+                        c.ch.eff[j].oppose_gravity = 0.0;
+                    }
+                    self.leg[i] = 1;
+                }
+            } else {
+                self.leg[i] = 3;
+                let knee = &mut c.ch.eff[(*KNEE())[i]].desired[0];
+                if *knee > p.push_knee {
+                    self.leg[i] = 4;
+                    *knee += (25.0 * (*knee - p.push_knee)).clamp(0.0, 2.5);
+                }
+            }
+            if self.just[o] >= 0.0 && past[o] > 0.2 {
+                self.leg[o] = 5;
+            }
+        }
+        // leg stiffness: lowerBodyStiffness (ours: RDR2's own base terms aren't read), floored, and weaker on the
+        // stance leg as the COM drops toward the feet (ours: a smoothstep for RDR2's unread curve)
+        let h = feet.iter().map(|&f| up.dot(c.com - f)).fold(f32::MIN, f32::max) / self.leg_len;
+        let [w0, w1, wmin] = STG_WEAK;
+        let g = ((h - w0) / (w1 - w0)).clamp(0.0, 1.0);
+        let g = g * g * (3.0 - 2.0 * g);
+        let w = wmin + (1.0 - wmin) * g * g;
+        for i in 0..2 {
+            let stance = bal.stepping as usize != i + 1;
+            let m = if w < 1.0 && stance { w } else { 1.0 };
+            let (s, sa) = ((p.legs * m).max(STG_FLOOR[0]), (p.legs * m).max(STG_FLOOR[1]));
+            c.ch.eff[(*KNEE())[i]].set_stiffness(s, 0.9, Some(STG_LEG_MUSCLE));
+            c.ch.eff[(*ANKLE())[i]].set_stiffness(sa, 1.0, None);
+            c.ch.eff[(*HIP())[i]].set_stiffness(s, 1.0, Some(STG_LEG_MUSCLE));
+        }
+        c.ch.set_stiffness(spine[0], spine[1], "us", None);
+        c.ch.set_stiffness(spine[0], spine[1], "un", None);
+        // ours: the arms at the ramped arm values (RDR2's arm helper isn't read)
+        c.ch.set_stiffness(arm[0], arm[1], "ua", None);
+        // fall types (timeToFall)
+        let elapsed = self.t > p.time_to_fall;
+        let leaves = |s: u8| (0..2).any(|i| prev[i] == s && self.leg[i] != s);
+        if !self.fell {
+            match p.fall_type {
+                0 if elapsed && leaves(4) => {
+                    self.fell = true;
+                    c.out.dbm = Some(false);
+                }
+                1 | 2 if elapsed => self.fell = true,
+                3 => self.latch = true,
+                4 if elapsed && leaves(1) => self.latch = true,
+                5 if elapsed && leaves(4) => self.latch = true,
+                _ => {}
+            }
+        }
+    }
+
+    /// The balancer gave up: the legs held where they are and soft, catchFall, and rollDownStairs lying face up.
+    fn hand_over(&mut self, c: &mut Ctx, out: &mut Vec<String>) {
+        for i in 0..2 {
+            let (h, kn) = ((*HIP())[i], (*KNEE())[i]);
+            let a = c.ch.actual(h, c.b.frames);
+            let d = c.ch.eff[h].desired;
+            c.ch.eff[h].desired = [a[0], d[1].min(0.0), d[2].min(0.0)];
+            c.ch.eff[kn].desired[0] = c.ch.actual(kn, c.b.frames)[0];
+        }
+        c.ch.set_stiffness(7.0, 1.0, "lb", None);
+        out.push("catchFall start=true legsStiffness=8.25 torsoStiffness=10 armsStiffness=13".into());
+        if c.m.c.dot(c.up) < -0.8 {
+            out.push(format!("rollDownStairs start=true stiffness=7 forcemag=0.4 asymmetricalLegs={} m_useArmToSlowDown=-0.9 \
+                              m_armReachAmount=1.4 spinWhenInAir=true m_legPush=0.2 armReachLength=0.6", 0.2 + 0.6 * c.ch.random()));
+        }
     }
 }
 
