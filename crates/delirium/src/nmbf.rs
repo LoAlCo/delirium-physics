@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::nmrs::{Character, NECK, SPINE};
+use crate::nmrs::{Character, ANKLE, CLAVICLE, ELBOW, HIP, KNEE, NECK, SHOULDER, SPINE, WRIST};
 use crate::nmshot::limb;
 
 #[derive(Clone, Debug)]
@@ -34,6 +34,12 @@ impl Rng {
 }
 
 impl Foetal {
+    /// RDR2's defaults (a start under the RDR2 core reloads them before the message's values; randomSeed isn't
+    /// RDR2's).
+    pub fn rdr2() -> Foetal {
+        Foetal { stiffness: 9.0, damping_factor: 1.0, asymmetry: 0.0, back_twist: 0.0, mask: "fb", ..Foetal::default() }
+    }
+
     pub fn activate(&mut self, ch: &mut Character) {
         if !self.active {
             self.active = true;
@@ -54,6 +60,10 @@ impl Foetal {
     }
 
     fn pose(&self, ch: &mut Character) {
+        if ch.rdr2 {
+            self.curl_rdr2(ch);
+            return;
+        }
         let keep = ch.lock(self.mask);
         self.curl(ch);
         ch.unlock(self.mask, keep);
@@ -94,5 +104,48 @@ impl Foetal {
             (e.strength, e.damping, e.desired[0]) = (delirium_data::kv!(25), delirium_data::kv!(64), -1.0);
         }
     }
-}
 
+    /// RDR2's bodyFoetal (rdr2_foetal.md), at the start and every tick: the draws come from a copy of the character's
+    /// generator (its state isn't advanced, so the pattern is the same every tick). The mask limits only the even
+    /// stiffness; the asymmetric stiffness and the pose are written whatever the mask.
+    fn curl_rdr2(&self, ch: &mut Character) {
+        let kept = ch.rng;
+        let (k, d, a) = (self.stiffness, self.damping_factor, self.asymmetry);
+        if a == 0.0 {
+            ch.set_stiffness(k, d, self.mask, None);
+        } else {
+            let (s0, s1, d0) = ((1.0 - 0.5 * a) * k, (1.0 + 0.3 * a) * k, (1.0 - 0.3 * a) * d);
+            let draw = |ch: &mut Character| {
+                let (u1, u2) = (ch.random(), ch.random());
+                (s0 + u2 * (s1 - s0), d0 + u1 * (d - d0))
+            };
+            let limbs = [CLAVICLE()[0], SHOULDER()[0], ELBOW()[0], WRIST()[0], CLAVICLE()[1], SHOULDER()[1], ELBOW()[1], WRIST()[1],
+                         HIP()[0], KNEE()[0], ANKLE()[0], HIP()[1], KNEE()[1], ANKLE()[1]];
+            for j in limbs {
+                let (s, dd) = draw(ch);
+                ch.eff[j].set_stiffness(s, dd, None);
+            }
+            // the spine's draws go in raw (strength s, damping d), as compiled
+            for j in *SPINE() {
+                let (s, dd) = draw(ch);
+                (ch.eff[j].strength, ch.eff[j].damping) = (s, dd);
+            }
+        }
+        let twist = self.back_twist * ch.random();
+        for i in 0..2 {
+            ch.eff[HIP()[i]].desired[0] = 2.0;
+            ch.eff[KNEE()[i]].desired[0] = -2.0;
+            let e = &mut ch.eff[ANKLE()[i]];
+            (e.strength, e.damping, e.desired[0]) = (20.0, 5.0, -1.0);
+            ch.eff[SHOULDER()[i]].desired[2] = -0.3;
+            ch.eff[SHOULDER()[i]].desired[0] = 1.57;
+            ch.eff[ELBOW()[i]].desired[0] = 2.0;
+        }
+        // the spine writer: a quarter of (2, 0, twist) on each spine joint
+        for j in *SPINE() {
+            ch.eff[j].desired = [0.5, 0.0, (0.25 * twist).clamp(-9.9, 9.9)];
+        }
+        ch.eff[NECK()[0]].desired[0] = 0.5;
+        ch.rng = kept;
+    }
+}

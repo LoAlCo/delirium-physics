@@ -345,6 +345,8 @@ pub struct DbmView {
     pub failing: bool,
     /// the crouch request's hip pitch now (ours: RDR2's bal+0x578 negated)
     pub hip_pitch: f32,
+    /// his standing pelvis height, the leg length the balancer's crouch measures use
+    pub leg: f32,
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {

@@ -391,6 +391,11 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "centreForwards", kind: Kind::Float, used: true, doc: "" },
         Param { name: "legAngleVariance", kind: Kind::Float, used: true, doc: "" },
         Param { name: "randomSeed", kind: Kind::Int, used: true, doc: "" },
+        Param { name: "dragReduction", kind: Kind::Float, used: false, doc: "RDR2 core only: the IK's drag reduction (0.25; Delirium's leg IK has none)" },
+        Param { name: "centresideways", kind: Kind::Float, used: true, doc: "RDR2 core only: the circles' centre moved sideways, m (0)" },
+        Param { name: "ellipse", kind: Kind::Float, used: true, doc: "RDR2 core only: the circle's height over its length, -1..1; negative: its length over its height (1)" },
+        Param { name: "spread", kind: Kind::Float, used: true, doc: "RDR2 core only: the feet's circles apart sideways, m (0)" },
+        Param { name: "hula", kind: Kind::Bool, used: true, doc: "RDR2 core only: level circles at the hips' height, the upper body swaying against them (false)" },
     ] },
     Message { name: "pointArm", params: &[
         Param { name: "instanceIndex", kind: Kind::Int, used: true, doc: "" },
@@ -402,6 +407,23 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "useZeroPoseWhenNotPointing", kind: Kind::Bool, used: true, doc: "" },
         Param { name: "armDamping", kind: Kind::Float, used: true, doc: "" },
         Param { name: "armStiffness", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "useRightArm", kind: Kind::Bool, used: true, doc: "RDR2 core only: point the right arm (under the core useLeftArm points the left; both may) (false)" },
+        Param { name: "targetLeft", kind: Kind::Vec3, used: true, doc: "RDR2 core only: where the left arm points, world (zero)" },
+        Param { name: "targetRight", kind: Kind::Vec3, used: true, doc: "RDR2 core only: where the right arm points, world (zero)" },
+        Param { name: "twistLeft", kind: Kind::Float, used: true, doc: "RDR2 core only (0.3)" },
+        Param { name: "twistRight", kind: Kind::Float, used: true, doc: "RDR2 core only (0.3)" },
+        Param { name: "armStraightnessLeft", kind: Kind::Float, used: true, doc: "RDR2 core only: the hand 0.7 m times this from the shoulder (0.8)" },
+        Param { name: "armStraightnessRight", kind: Kind::Float, used: true, doc: "RDR2 core only (0.8)" },
+        Param { name: "armStiffnessLeft", kind: Kind::Float, used: true, doc: "RDR2 core only (15)" },
+        Param { name: "armStiffnessRight", kind: Kind::Float, used: true, doc: "RDR2 core only (15)" },
+        Param { name: "armDampingLeft", kind: Kind::Float, used: true, doc: "RDR2 core only (1)" },
+        Param { name: "armDampingRight", kind: Kind::Float, used: true, doc: "RDR2 core only (1)" },
+        Param { name: "pointSwingLimitLeft", kind: Kind::Float, used: true, doc: "RDR2 core only: past this clavicle swing (of its range) the arm stops pointing (1.5)" },
+        Param { name: "pointSwingLimitRight", kind: Kind::Float, used: true, doc: "RDR2 core only (1.5)" },
+        Param { name: "instanceHandleLeft", kind: Kind::Int, used: false, doc: "RDR2 core only: a game object the target is relative to (the SDK has no level objects: world coordinates)" },
+        Param { name: "instanceHandleRight", kind: Kind::Int, used: false, doc: "RDR2 core only: as instanceHandleLeft" },
+        Param { name: "useZeroPoseWhenNotPointingLeft", kind: Kind::Bool, used: true, doc: "RDR2 core only (false)" },
+        Param { name: "useZeroPoseWhenNotPointingRight", kind: Kind::Bool, used: true, doc: "RDR2 core only (false)" },
     ] },
     Message { name: "rollDownStairs", params: &[
         Param { name: "forcemag", kind: Kind::Float, used: true, doc: "" },
@@ -733,6 +755,16 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
                                  | "leanToPosition" | "leanTowardsObject" | "setStiffness" | "shotRelax");
     if start == Some(true) && matches!(msg, "bodyBalance" | "shot" | "pointArm") {
         reset(st, msg);
+        // RDR2 core: pointArm's own two-arm parameters
+        if msg == "pointArm" && a.rdr2_core.is_some() {
+            st.point_arm.rdr2 = Some(Default::default());
+        }
+    } else if start == Some(true) && a.rdr2_core.is_some() && matches!(msg, "pedalLegs" | "bodyFoetal") {
+        // RDR2 core: a start reloads RDR2's defaults before the message's values
+        match msg {
+            "pedalLegs" => st.pedal_legs = crate::nmpd::rdr2_message(),
+            _ => st.body_foetal = crate::nmbf::Foetal::rdr2(),
+        }
     } else if !one_shot {
         a.held_params(st, msg);
     }
@@ -1074,8 +1106,27 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("pedalLegs", "centreForwards") => { let p = &mut st.pedal_legs; p.centre_forwards = v.f()?; }
         ("pedalLegs", "legAngleVariance") => { let p = &mut st.pedal_legs; p.leg_angle_variance = v.f()?; }
         ("pedalLegs", "randomSeed") => { let p = &mut st.pedal_legs; p.random_seed = v.i()?.max(0) as u32; }
+        ("pedalLegs", "centresideways") => { let p = &mut st.pedal_legs; p.rdr2.centre_sideways = v.f()?; }
+        ("pedalLegs", "ellipse") => { let p = &mut st.pedal_legs; p.rdr2.ellipse = v.f()?; }
+        ("pedalLegs", "spread") => { let p = &mut st.pedal_legs; p.rdr2.spread = v.f()?; }
+        ("pedalLegs", "hula") => { let p = &mut st.pedal_legs; p.rdr2.hula = v.b()?; }
         ("pointArm", "instanceIndex") => { let p = &mut st.point_arm; p.instance_index = v.i()?; }
-        ("pointArm", "useLeftArm") => { let p = &mut st.point_arm; p.use_left_arm = v.b()?; }
+        ("pointArm", "useLeftArm") => { let p = &mut st.point_arm; p.use_left_arm = v.b()?; if let Some(r) = p.rdr2.as_mut() { r[0].use_arm = p.use_left_arm; } }
+        ("pointArm", "targetLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].target = v.v()?; }
+        ("pointArm", "targetRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].target = v.v()?; }
+        ("pointArm", "twistLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].twist = v.f()?; }
+        ("pointArm", "twistRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].twist = v.f()?; }
+        ("pointArm", "armStraightnessLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].arm_straightness = v.f()?; }
+        ("pointArm", "armStraightnessRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].arm_straightness = v.f()?; }
+        ("pointArm", "armStiffnessLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].arm_stiffness = v.f()?; }
+        ("pointArm", "armStiffnessRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].arm_stiffness = v.f()?; }
+        ("pointArm", "armDampingLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].arm_damping = v.f()?; }
+        ("pointArm", "armDampingRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].arm_damping = v.f()?; }
+        ("pointArm", "pointSwingLimitLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].point_swing_limit = v.f()?; }
+        ("pointArm", "pointSwingLimitRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].point_swing_limit = v.f()?; }
+        ("pointArm", "useRightArm") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].use_arm = v.b()?; }
+        ("pointArm", "useZeroPoseWhenNotPointingLeft") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[0].use_zero_pose = v.b()?; }
+        ("pointArm", "useZeroPoseWhenNotPointingRight") => { let p = &mut st.point_arm; p.rdr2.get_or_insert_with(Default::default)[1].use_zero_pose = v.b()?; }
         ("pointArm", "twist") => { let p = &mut st.point_arm; p.twist = v.f()?; }
         ("pointArm", "target") => { let p = &mut st.point_arm; p.target = v.v()?; }
         ("pointArm", "pointSwingLimit") => { let p = &mut st.point_arm; p.point_swing_limit = v.f()?; }
@@ -1416,8 +1467,27 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("pedalLegs", "centreForwards") => { let p = &st.pedal_legs; Value::Float(p.centre_forwards) }
         ("pedalLegs", "legAngleVariance") => { let p = &st.pedal_legs; Value::Float(p.leg_angle_variance) }
         ("pedalLegs", "randomSeed") => { let p = &st.pedal_legs; Value::Int(p.random_seed as i32) }
+        ("pedalLegs", "centresideways") => { let p = &st.pedal_legs; Value::Float(p.rdr2.centre_sideways) }
+        ("pedalLegs", "ellipse") => { let p = &st.pedal_legs; Value::Float(p.rdr2.ellipse) }
+        ("pedalLegs", "spread") => { let p = &st.pedal_legs; Value::Float(p.rdr2.spread) }
+        ("pedalLegs", "hula") => { let p = &st.pedal_legs; Value::Bool(p.rdr2.hula) }
         ("pointArm", "instanceIndex") => { let p = &st.point_arm; Value::Int(p.instance_index) }
         ("pointArm", "useLeftArm") => { let p = &st.point_arm; Value::Bool(p.use_left_arm) }
+        ("pointArm", "targetLeft") => { let p = &st.point_arm; Value::Vec3(p.rdr2.unwrap_or_default()[0].target) }
+        ("pointArm", "targetRight") => { let p = &st.point_arm; Value::Vec3(p.rdr2.unwrap_or_default()[1].target) }
+        ("pointArm", "twistLeft") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[0].twist) }
+        ("pointArm", "twistRight") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[1].twist) }
+        ("pointArm", "armStraightnessLeft") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[0].arm_straightness) }
+        ("pointArm", "armStraightnessRight") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[1].arm_straightness) }
+        ("pointArm", "armStiffnessLeft") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[0].arm_stiffness) }
+        ("pointArm", "armStiffnessRight") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[1].arm_stiffness) }
+        ("pointArm", "armDampingLeft") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[0].arm_damping) }
+        ("pointArm", "armDampingRight") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[1].arm_damping) }
+        ("pointArm", "pointSwingLimitLeft") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[0].point_swing_limit) }
+        ("pointArm", "pointSwingLimitRight") => { let p = &st.point_arm; Value::Float(p.rdr2.unwrap_or_default()[1].point_swing_limit) }
+        ("pointArm", "useRightArm") => { let p = &st.point_arm; Value::Bool(p.rdr2.unwrap_or_default()[1].use_arm) }
+        ("pointArm", "useZeroPoseWhenNotPointingLeft") => { let p = &st.point_arm; Value::Bool(p.rdr2.unwrap_or_default()[0].use_zero_pose) }
+        ("pointArm", "useZeroPoseWhenNotPointingRight") => { let p = &st.point_arm; Value::Bool(p.rdr2.unwrap_or_default()[1].use_zero_pose) }
         ("pointArm", "twist") => { let p = &st.point_arm; Value::Float(p.twist) }
         ("pointArm", "target") => { let p = &st.point_arm; Value::Vec3(p.target) }
         ("pointArm", "pointSwingLimit") => { let p = &st.point_arm; Value::Float(p.point_swing_limit) }

@@ -3205,7 +3205,11 @@ impl Sim {
             "flinch" => vec![format!("upperBodyFlinch start=true pos={}", v3(head + s.fwd * 2.0))],
             "brace" => vec![format!("braceForImpact start=true pos={} look={}", v3(chest + s.fwd), v3(chest + s.fwd))],
             "look" => vec![format!("headLook start=true alwaysLook=true pos={}", v3(head + s.fwd * 2.0 + s.left()))],
+            // the RDR2 core's pointArm has a target and a use flag per arm (none on by default)
+            "point" if self.rdr2_core => vec![format!("pointArm start=true useRightArm=true targetRight={}", v3(chest + s.fwd * 2.0 - s.left()))],
             "point" => vec![format!("pointArm start=true target={}", v3(chest + s.fwd * 2.0 - s.left()))],
+            // the RDR2 core's duck does nothing until a new hit
+            "duck" if self.rdr2_core => vec!["duck start=true newHit=true".into()],
             "lean" => vec!["bodyBalance start=true".into(), format!("leanInDirection start=true leanAmount={} dir={}", LEAN_BUTTON(), v3(s.fwd))],
             "relax" => vec!["bodyRelax start=true".into()],
             "stayup" => vec![format!("stayUpright start=true stiffness={}", STAYUP_STIFFNESS())],
