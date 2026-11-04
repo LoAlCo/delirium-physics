@@ -149,7 +149,8 @@ fn default(m: &Message, p: &Param) -> Option<Value> {
 fn parse(kind: Kind, v: &str) -> Option<Value> {
     Some(match kind {
         Kind::Float => Value::Float(v.parse().ok()?),
-        Kind::Int => Value::Int(v.parse().ok()?),
+        // a whole number; true/false read as 1/0 (rdr2Sit's constrain was a flag before it became RDR2's mode)
+        Kind::Int => Value::Int(match v { "true" => 1, "false" => 0, _ => v.parse().ok()? }),
         Kind::Bool => Value::Bool(match v {
             "true" | "1" => true,
             "false" | "0" => false,

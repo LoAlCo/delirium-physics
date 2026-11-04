@@ -18,13 +18,17 @@ use crate::ragdoll::{Build, Muscle, Rigid};
 
 pub const HOMER: usize = 0;
 pub const MARGE: usize = 1;
+/// Red Dead Redemption 2's own bodies (Fred, Wilma), built from the player's own RDR2 files when asked for: the same
+/// tables as Homer's and Marge's, in the same layout.
+pub const RDR2_FRED: usize = 2;
+pub const RDR2_WILMA: usize = 3;
 pub fn asset_of(ped_type: &str) -> usize {
     if ped_type.eq_ignore_ascii_case("CIVFEMALE") { MARGE } else { HOMER }
 }
-pub static ASSET: [std::sync::OnceLock<Vec<nm_asset::Joint>>; 2] = [const { std::sync::OnceLock::new() }; 2];
-pub static SELF: [std::sync::OnceLock<Vec<(usize, usize)>>; 2] = [const { std::sync::OnceLock::new() }; 2];
-pub static PARTS: [std::sync::OnceLock<Vec<[[f32; 3]; 4]>>; 2] = [const { std::sync::OnceLock::new() }; 2];
-pub static MASSES: [std::sync::OnceLock<Vec<f32>>; 2] = [const { std::sync::OnceLock::new() }; 2];
+pub static ASSET: [std::sync::OnceLock<Vec<nm_asset::Joint>>; 4] = [const { std::sync::OnceLock::new() }; 4];
+pub static SELF: [std::sync::OnceLock<Vec<(usize, usize)>>; 4] = [const { std::sync::OnceLock::new() }; 4];
+pub static PARTS: [std::sync::OnceLock<Vec<[[f32; 3]; 4]>>; 4] = [const { std::sync::OnceLock::new() }; 4];
+pub static MASSES: [std::sync::OnceLock<Vec<f32>>; 4] = [const { std::sync::OnceLock::new() }; 4];
 
 pub fn load(nm: usize, d: &[u8]) {
     set(nm, nm_asset::read(d), nm_asset::parts(d), nm_asset::masses(d), nm_asset::self_collision(d));
@@ -302,6 +306,17 @@ fn rage_frames(three: bool, limits: &[(f32, f32); 3], in_parent: Quat, in_child:
     let quat = |r: [Vec3; 3]| Quat::from_mat3(&Mat3::from_cols(r[0], r[1], r[2]).transpose()).normalize();
     let (p, c) = rage_rows(limits, rows(in_parent), rows(in_child));
     (quat(p), quat(c))
+}
+
+/// The turns RAGE gives a joint's frames in its parent and child to centre them in its limits: its frames there are
+/// (frame in parent) * .0 and (frame in child) * .1.
+pub fn rage_turn(three: bool, limits: &[(f32, f32); 3]) -> (Quat, Quat) {
+    rage_frames(three, limits, Quat::IDENTITY, Quat::IDENTITY)
+}
+
+/// Each part's turn with every joint at zero (its rig's own zero pose).
+pub fn zero_turns(build: &Build) -> Vec<Quat> {
+    zero_pose(build)
 }
 
 pub(crate) fn zero_pose(build: &Build) -> Vec<Quat> {

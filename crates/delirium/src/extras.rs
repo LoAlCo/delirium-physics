@@ -103,6 +103,17 @@ pub trait Extra: Send + Sync {
     }
     /// The RDR2 core's pointGun: controlledFall's writes.
     fn pg_set(&mut self, _time_warp_scale: f32) {}
+    /// RDR2 core's sit: distance constraints for the solver, (part, the point on it, world; the other end, world;
+    /// the most they may be apart; breaking strength, less than 0 never), as the grab's grips.
+    fn ropes(&self) -> Vec<(usize, bevy_math::Vec3, bevy_math::Vec3, f32, f32)> {
+        vec![]
+    }
+    /// RDR2 core's sit: parts that don't collide this step (bits).
+    fn contact_off(&self) -> u32 {
+        0
+    }
+    /// A new bullet (applyBulletImpulse started): RDR2's shot tells sit.
+    fn bullet(&mut self) {}
 }
 
 #[derive(Default)]
@@ -115,6 +126,9 @@ pub struct Extras {
     wanted: Vec<usize>,
     stopping: Vec<Box<dyn Extra>>,
     injure: Vec<(Vec<usize>, f32)>,
+    /// the running extras' ropes and contact-off bits this step (RDR2 core's sit)
+    pub ropes: Vec<(usize, bevy_math::Vec3, bevy_math::Vec3, f32, f32)>,
+    pub contact_off: u32,
 }
 
 impl Extras {
@@ -151,6 +165,9 @@ impl Extras {
             }
             self.release.extend(was.iter().flat_map(HardConstraint::parts));
             return HardConstraint::new(&mut p).and_then(|h| p.done().map(|()| self.hard = Some(h))).map(|()| 0);
+        }
+        if start && name == "applyBulletImpulse" {
+            self.on.iter_mut().for_each(|(_, e)| e.bullet());
         }
         if start {
             for (_, e) in self.on.iter_mut().filter(|(n, _)| *n == name) {
@@ -208,6 +225,8 @@ impl Extras {
             self.outbox.extend(e.lines());
         }
         self.want.clear();
+        self.ropes.clear();
+        self.contact_off = 0;
         for (n, e) in &mut self.on {
             e.objects(obs);
             if let Some(w) = world {
@@ -219,6 +238,8 @@ impl Extras {
             }
             self.outbox.extend(e.lines());
             self.want.extend(e.constraints());
+            self.ropes.extend(e.ropes());
+            self.contact_off |= e.contact_off();
         }
         // RDR2 core: controlledFall writes into a running pointGun (here after both have ticked)
         for s in self.on.iter().filter_map(|(_, e)| e.pg_coupling()).collect::<Vec<_>>() {

@@ -48,7 +48,7 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
 // ---- shared ----
 
 /// RDR2's part i, ours.
-fn rp(i: usize) -> usize {
+pub(crate) fn rp(i: usize) -> usize {
     match i {
         0 => 0,
         1 | 2 => HIP()[i - 1] + 1,
@@ -76,7 +76,7 @@ fn parts(bits: u32) -> Vec<usize> {
 }
 
 /// An RDR2 part mask, our joints (each part's joint to its parent; the pelvis has none).
-fn joints(bits: u32) -> Vec<usize> {
+pub(crate) fn joints(bits: u32) -> Vec<usize> {
     parts(bits).into_iter().filter(|&k| k > 0).map(|k| k - 1).collect()
 }
 

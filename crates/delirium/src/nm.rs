@@ -464,7 +464,7 @@ impl Agent {
                 brace: None, head_look: vec![], shot_look: false, eff_override: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(200), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0 * build.parts[0].grown, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
                 ch: crate::nmrs::ASSET[build.nm].get().and_then(|a| crate::nmrs::joints(build, a)).map(|j| {
                     let mut c = crate::nmrs::Character::new(j, &frames);
-                    c.mode = if build.nm == crate::nmrs::MARGE { 2 } else { 1 };
+                    c.mode = if build.nm == crate::nmrs::MARGE || build.nm == crate::nmrs::RDR2_WILMA { 2 } else { 1 };
                     c
                 }) };
         a.nm_bw = a.ch.as_mut().map(crate::nmbw::Writhe::new);
@@ -472,6 +472,22 @@ impl Agent {
             (a.legs, a.hip_yaw) = (crate::nmdbm::MARGE_LEGS(), crate::nmdbm::MARGE_YAW());
             if let Some(ch) = a.ch.as_mut() {
                 ch.stance_yaw = (crate::nmdbm::MARGE_YAW().1, crate::nmdbm::MARGE_HEAD());
+            }
+        }
+        // RDR2's own bodies stand as Homer (Marge) does, on their own legs: GTA IV's stance for them, its foot width
+        // in proportion to how far apart their feet are in their zero poses
+        let gta = match build.nm { crate::nmrs::RDR2_FRED => Some(crate::nmrs::HOMER), crate::nmrs::RDR2_WILMA => Some(crate::nmrs::MARGE), _ => None };
+        if let Some(g) = gta {
+            let [l, r] = [(*crate::nmrs::ANKLE())[0], (*crate::nmrs::ANKLE())[1]].map(|j| j + 1);
+            let apart = |nm: usize| crate::nmrs::PARTS[nm].get().filter(|p| p.len() > l.max(r)).map(|p| (Vec3::from(p[l][3]) - Vec3::from(p[r][3])).with_z(0.0).length());
+            if g == crate::nmrs::MARGE {
+                (a.legs, a.hip_yaw) = (crate::nmdbm::MARGE_LEGS(), crate::nmdbm::MARGE_YAW());
+                if let Some(ch) = a.ch.as_mut() {
+                    ch.stance_yaw = (crate::nmdbm::MARGE_YAW().1, crate::nmdbm::MARGE_HEAD());
+                }
+            }
+            if let (Some(ours), Some(theirs)) = (apart(build.nm), apart(g)) {
+                a.legs.1 *= ours / theirs.max(1e-3);
             }
         }
         a
@@ -2477,7 +2493,12 @@ impl Agent {
         drive.muscles = &m;
         self.nm_gr.hold_points(|k, at| self.doll.grip_local(k, at));
         self.doll.grips = self.nm_gr.grips();
-        self.doll.contact_off = self.nm_gr.contact_off;
+        // RDR2 core's sit: its seat constraints, as grips
+        for &(k, at, to, len, strength) in &self.extras.ropes {
+            let local = self.doll.grip_local(k, at);
+            self.doll.grips.push((k, local, to, len, strength));
+        }
+        self.doll.contact_off = self.nm_gr.contact_off | self.extras.contact_off;
         if let Some(pairs) = crate::nmrs::SELF[build.nm].get().filter(|_| build.parts.len() == delirium_data::nm_asset::PARTS.len()) {
             let legs = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).is_some_and(|d| d.held);
             let hands = self.nm_fl.hands_off;
