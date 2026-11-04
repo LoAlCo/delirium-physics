@@ -953,6 +953,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         Some(_) => (s.vel.vd(horizontal(s.m.c, up)) < 0.0, aim.is_some() && s.vel.length() < 1.0),
         None => (false, false),
     };
+    let contact = [s.flags & delirium_data::kv!(251 int) != 0, s.flags & delirium_data::kv!(7 int) != 0];
     for (i, planted) in [lp, rp].into_iter().enumerate() {
         let side = if i == 0 { 1.0 } else { -1.0 };
         let leg = &mut s.legs[i];
@@ -965,14 +966,27 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             } else {
                 (-sdot(sh.w, sh.m.a, b"yzx")).fma(leg.ankle.damping / leg.ankle.strength, sdot(sh.m.c, normal[i], b"yzx"))
             };
-            // RDR2 (rdr2_balancer3.md 9): the blend with the foot's side only while the foot (relative to the ground)
-            // moves at most 0.4 of its way along s.m.c; beyond, the shin term alone
-            let blend = p.rdr2.is_none() || (leg.foot.v - p.gvel[i]).normalize_or_zero().vd(s.m.c) <= 0.4;
-            let mut a = if blend { sdot(p.normal[i], vnorm(leg.foot.m.a.vx(up)), b"zyx").fma(delirium_data::kv!(20), a * delirium_data::kv!(60)) } else { a };
-            if sdot(leg.foot.v, s.m.c, b"yzx") < 0.0 {
-                a -= delirium_data::kv!(60);
+            match p.rdr2 {
+                // RDR2 (0x2aae0b4): the blend with the foot's side only while the foot's horizontal direction, relative to
+                // the ground, is at most 0.4 along s.m.c, otherwise the shin term alone; -0.2 only in that blend, moving
+                // forward and not staggering; and no acos(leg length) (the recorded swing pitch fits this to 0.01 rad)
+                Some(r) => {
+                    let along = horizontal(leg.foot.v - p.gvel[i], up).normalize_or_zero().vd(s.m.c);
+                    if along <= 0.4 {
+                        let a = sdot(p.normal[i], vnorm(leg.foot.m.a.vx(up)), b"zyx").fma(0.8, a * 0.2);
+                        if !r.stagger && along < 0.0 { a - 0.2 } else { a }
+                    } else {
+                        a
+                    }
+                }
+                None => {
+                    let mut a = sdot(p.normal[i], vnorm(leg.foot.m.a.vx(up)), b"zyx").fma(delirium_data::kv!(20), a * delirium_data::kv!(60));
+                    if sdot(leg.foot.v, s.m.c, b"yzx") < 0.0 {
+                        a -= delirium_data::kv!(60);
+                    }
+                    a + acos(p.leg_length.clamp(delirium_data::kv!(72), delirium_data::kv!(263)))
+                }
             }
-            a + acos(p.leg_length.clamp(delirium_data::kv!(72), delirium_data::kv!(263)))
         } else {
             // RDR2 (rdr2_balancer3.md 9): flatterStaticFeet, standing: the actual knee and foot on the renormalised
             // normal; off it, moving forward, the pitch is negated above 5 m/s or moving sideways (its caller's flag
@@ -993,7 +1007,12 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             }
             let n = if flat { normal[i].normalize_or_zero() } else { normal[i] };
             let a = asin(sdot(leg.knee.m.c, vnorm(k - foot).vx(n), b"xyz"));
-            if flip { -a } else { a }
+            // RDR2 (0x2aae0b4): the knee-to-foot aim is for the ankle balance, flatterStaticFeet and staggering; otherwise
+            // (not a running foot in the air, which aims from the actual knee) the stance ankle's pitch is 0
+            match p.rdr2 {
+                Some(r) if !r.stagger && !flat && !balancing && !(r.running && !contact[i]) => 0.0,
+                _ => if flip { -a } else { a },
+            }
         };
         leg.ankle.desired[0] = a;
     }
@@ -1011,6 +1030,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     // RDR2 balances with the ankles only below 1 m/s; faster, the planted ankles lie flat
     let slow = s.vel.length() < 1.0;
     let rd = p.rdr2.filter(|r| r.p.ankle_balance && !r.p.ankle_keep_pelvis);
+    let stance_lean = if p.rdr2.is_some_and(|r| r.stagger) { 0.0 } else { lean };
     if let Some(r) = rd {
         for (i, sgn) in [(0, 1.0), (1, -1.0)] {
             if let (true, Some((flat, tilted))) = (slow, twist_flat[i]) {
@@ -1025,7 +1045,8 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     };
     if lp {
         s.legs[0].ankle.desired[0] = match w[0] {
-            Some(w) if rd.is_some() => if slow { ankle(0, s.legs[0].ankle.desired[0], w) } else { s.legs[0].ankle.desired[0] },
+            // RDR2's lean clamp (0.2) goes on every planted ankle, off the staggering
+            Some(w) if rd.is_some() => stance_lean + if slow { ankle(0, s.legs[0].ankle.desired[0], w) } else { s.legs[0].ankle.desired[0] },
             Some(w) => (pv.out[1] + lean).mul_add(w, s.legs[0].ankle.desired[0]),
             None => pv.out[1] + s.legs[0].ankle.desired[0] + lean,
         };
@@ -1037,7 +1058,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     s.legs[0].ankle.desired[1] = twist(0, lp);
     if rp {
         s.legs[1].ankle.desired[0] = match w[1] {
-            Some(w) if rd.is_some() => if slow { ankle(1, s.legs[1].ankle.desired[0], w) } else { s.legs[1].ankle.desired[0] },
+            Some(w) if rd.is_some() => (if slow { ankle(1, s.legs[1].ankle.desired[0], w) } else { s.legs[1].ankle.desired[0] }) - stance_lean,
             Some(w) => s.legs[1].ankle.desired[0] + (pv.out[1] - lean) * w,
             None => s.legs[1].ankle.desired[0] + (pv.out[1] - lean),
         };
@@ -1997,10 +2018,12 @@ pub fn stay_upright(b: &Body, r: &crate::nmdbm_rdr2::StayUpright, dt: f32, right
     let q = if r.lean_relative { Quat::from_rotation_arc(up, if lean == Vec3::ZERO { up } else { lean }) } else { Quat::IDENTITY };
     let (x, y) = (q * s.m.a, q * s.m.b);
     let c = if contact.contains(&true) { 1.0 } else { 0.99 };
-    // the note writes e = u x x, h = e x u, which with its signs would push him over: righting needs h along x, so x x u
-    // and u x e [the note's sign, re-read when this matters: off below 2.5 m/s]
-    let e = x.cross(up);
-    let h = up.cross(e);
+    // e = x x u, h = u x e as the code has them (0x2a59b8b..; the note had the crosses swapped). The frame (h, u, e) then
+    // turns about h by -lean (0x319ed8): e and the yaw axis lean, h doesn't
+    let e0 = x.cross(up);
+    let h = up.cross(e0);
+    let (sl, cl) = (-r.lean).sin_cos();
+    let (yaw_up, e) = (up * cl + e0 * sl, e0 * cl - up * sl);
     let w = s.angvel;
     let asin = |v: f32| v.clamp(-1.0, 1.0).asin();
     let scale = g / (30.0 * dt).clamp(1.0, 30.0);
@@ -2008,7 +2031,7 @@ pub fn stay_upright(b: &Body, r: &crate::nmdbm_rdr2::StayUpright, dt: f32, right
                         (e, (166.667 * asin(h.dot(y)) * c * ks.y - 4.0 * c * ds.y * w.dot(e)) * scale)];
     let along = vel - up * up.dot(vel);
     if along.length() > 2.0 {
-        axes.push((up, (-166.667 * asin(along.normalize().dot(h)) * c * ks.z - 4.0 * c * ds.z * w.dot(up)) * scale));
+        axes.push((yaw_up, (-166.667 * asin(along.normalize().dot(h)) * c * ks.z - 4.0 * c * ds.z * w.dot(yaw_up)) * scale));
     }
     let n = b.build.parts.len();
     for (axis, t) in axes {
