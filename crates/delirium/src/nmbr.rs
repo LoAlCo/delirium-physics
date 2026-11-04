@@ -345,6 +345,10 @@ impl Brace {
         let now = world(obstacles, p.pos, p.instance_index);
         if let (true, Some(o)) = (c.ch.rdr2, Obstacle::find(obstacles, p.instance_index)) {
             self.class = side_class(o, c.com);
+            // the balancer clips his predicted COM to the car's box (next step)
+            if let Some(r) = k.dbm.as_deref_mut().and_then(|d| d.p.rdr2.as_mut()) {
+                r.car = Some(crate::nmdbm_rdr2::Rdr2::car_box(o.centre, o.rot * Vec3::X, o.rot * Vec3::Y, o.half.truncate()));
+            }
         }
         use crate::nmdbm::{sdot, slen};
         self.tvel = (now - self.target) * (1.0 / dt);
