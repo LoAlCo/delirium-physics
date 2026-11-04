@@ -3123,12 +3123,18 @@ impl Extra for Keyframe {
         self.r2.constraints()
     }
 
-    fn stop(&mut self, _c: &mut Ctx) {
+    fn stop(&mut self, c: &mut Ctx) {
         self.r2.stop();
+        // RDR2's deactivate: ZMP gravity compensation back on
+        if c.ch.rdr2 {
+            c.ch.core.zmp = true;
+        }
     }
 
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
         if c.ch.rdr2 {
+            // RDR2's activate turns the core's ZMP gravity compensation off (the full gravity opposed, even airborne)
+            c.ch.core.zmp = false;
             return self.r2.tick(c, dt);
         }
         self.t += dt;

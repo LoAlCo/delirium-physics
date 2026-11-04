@@ -992,6 +992,7 @@ struct AnimPoseRdr2 {
     grav: [f32; 5],
     connected: [i32; 4],
     source: i32,
+    zmp: bool,
 }
 
 /// RDR2's animPose limb masks, in its parameter order (the spine's stiffness mask takes the neck and head, its
@@ -1049,9 +1050,10 @@ impl AnimPose {
         for (g, name) in grav.iter_mut().zip(["LeftArm", "RightArm", "Spine", "LeftLeg", "RightLeg"]) {
             *g = p.f(&format!("gravComp{name}"), -1.0)?;
         }
-        let _ = (p.b("useZMPGravityCompensation", true)?, p.i("dampenSideMotionInstanceHandle", 0)?);
+        let zmp = p.b("useZMPGravityCompensation", true)?;
+        let _ = p.i("dampenSideMotionInstanceHandle", 0)?;
         Ok(AnimPoseRdr2 {
-            global, mask, limbs, grav,
+            global, mask, limbs, grav, zmp,
             over: [p.b("overideHeadlook", false)?, p.b("overidePointArm", false)?, p.b("overidePointGun", false)?],
             connected: [p.i("connectedLeftHand", 0)?, p.i("connectedRightHand", 0)?, p.i("connectedLeftFoot", -2)?, p.i("connectedRightFoot", -2)?],
             source: p.i("animSource", 0)?,
@@ -1065,8 +1067,8 @@ impl AnimPose {
     /// own gravity opposition. The overrides make headLook and pointArm yield (nm.rs); animPose drives those joints.
     /// Ours or left out: Delirium has one incoming pose, so every animSource below 3 reads it, and without one the
     /// limbs go to the pose he was in when he went ragdoll (the effectors' zero); no instances, so no side-motion
-    /// damping (dampenSideMotionInstanceHandle); the ZMP gravity-compensation flag and the connected-joint flags have
-    /// no reader in Delirium.
+    /// damping (dampenSideMotionInstanceHandle). The ZMP gravity-compensation flag and the connected hands and feet
+    /// go to the core's gravity opposition (nmdbm.rs `oppose_gravity`).
     fn tick_rdr2(&mut self, c: &mut Ctx) {
         self.r2_on = true;
         let r = &self.rdr2;
@@ -1092,6 +1094,7 @@ impl AnimPose {
             }
         }
         if g >= -1e-5 {
+            c.ch.core.zmp = r.zmp;
             for &j in &mine {
                 c.ch.eff[j].oppose_gravity = g;
             }
@@ -1111,6 +1114,19 @@ impl AnimPose {
                 c.ch.eff[l.e[3]].set_stiffness(16.0, 1.0, Some(12.0));
             }
         }
+        if r.grav.iter().any(|&g| g >= -1e-4) {
+            c.ch.core.zmp = r.zmp;
+        }
+        // the connected flags: -1 takes the hand or foot from contact at the next gravity pass, 0 / 1 set it
+        // (a hand stays so after), anything else leaves it (a foot is from contact every step anyway)
+        for (i, &v) in r.connected.iter().enumerate() {
+            match (i, v) {
+                (0 | 1, -1) => c.ch.core.hands_auto[i] = true,
+                (0 | 1, 0 | 1) => (c.ch.core.hands[i], c.ch.core.hands_auto[i]) = (v == 1, false),
+                (_, 0 | 1) => c.ch.core.feet[i - 2] = Some(v == 1),
+                _ => {}
+            }
+        }
         for (i, m) in ["ul", "ur", "us", "ll", "lr"].into_iter().enumerate() {
             if r.grav[i] >= -1e-5 {
                 for j in Character::mask(m) {
@@ -1123,11 +1139,12 @@ impl AnimPose {
 
 impl Extra for AnimPose {
     fn stop(&mut self, c: &mut Ctx) {
-        // RDR2's deactivate: gravity opposition off on effectorMask (and the ZMP flag back on, which has no reader)
+        // RDR2's deactivate: gravity opposition off on effectorMask, and the ZMP flag back on
         if self.r2_on {
             for j in Character::mask(&self.rdr2.mask) {
                 c.ch.eff[j].oppose_gravity = 0.0;
             }
+            c.ch.core.zmp = true;
         }
     }
 
