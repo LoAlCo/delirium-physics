@@ -150,37 +150,37 @@ pub static MESSAGES: [Message; 15] = [
         Param { name: "vDampenPlaneNormal", kind: Kind::Vec3, used: true, doc: "brakes motion along it (zero: off)" },
     ] },
     Message { name: "armsWindmill", params: &[
-        Param { name: "leftNormal", kind: Kind::Vec3, used: true, doc: "the circle's plane normal, his frame: x forward, y left, z up (0 1 0)" },
-        Param { name: "leftCentre", kind: Kind::Vec3, used: true, doc: "the circle's centre from the part, his frame (0.15 0.25 0.05)" },
-        Param { name: "leftPartID", kind: Kind::Int, used: true, doc: "the part the circle is from (10, the chest)" },
-        Param { name: "leftRadius1", kind: Kind::Float, used: true, doc: "m (0.45)" },
-        Param { name: "leftRadius2", kind: Kind::Float, used: true, doc: "m (0.45)" },
+        Param { name: "leftNormal", kind: Kind::Vec3, used: true, doc: "the circle's plane normal, his frame: x forward, y left, z up (0 1 0); RDR2 core: the circle's turns about the chest's X, Y, Z, rad (0 0.2 0.2)" },
+        Param { name: "leftCentre", kind: Kind::Vec3, used: true, doc: "the circle's centre from the part, his frame (0.15 0.25 0.05); RDR2 core: in the chest's frame (0 0.5 -0.1)" },
+        Param { name: "leftPartID", kind: Kind::Int, used: true, doc: "the part the circle is from (10, the chest); RDR2 core: always the chest" },
+        Param { name: "leftRadius1", kind: Kind::Float, used: true, doc: "m (0.45); RDR2 core: 0.75" },
+        Param { name: "leftRadius2", kind: Kind::Float, used: true, doc: "m (0.45); RDR2 core: 0.75" },
         Param { name: "leftSpeed", kind: Kind::Float, used: true, doc: "revolutions a second (1)" },
-        Param { name: "rightNormal", kind: Kind::Vec3, used: true, doc: "the circle's plane normal, his frame: x forward, y left, z up (0 -1 0)" },
-        Param { name: "rightCentre", kind: Kind::Vec3, used: true, doc: "the circle's centre from the part, his frame (0.15 -0.25 0.05)" },
-        Param { name: "rightPartID", kind: Kind::Int, used: true, doc: "the part the circle is from (10, the chest)" },
-        Param { name: "rightRadius1", kind: Kind::Float, used: true, doc: "m (0.45)" },
-        Param { name: "rightRadius2", kind: Kind::Float, used: true, doc: "m (0.45)" },
+        Param { name: "rightNormal", kind: Kind::Vec3, used: true, doc: "the circle's plane normal, his frame: x forward, y left, z up (0 -1 0); RDR2 core: as the left (0 -0.2 -0.2)" },
+        Param { name: "rightCentre", kind: Kind::Vec3, used: true, doc: "the circle's centre from the part, his frame (0.15 -0.25 0.05); RDR2 core: (0 -0.5 -0.1)" },
+        Param { name: "rightPartID", kind: Kind::Int, used: true, doc: "the part the circle is from (10, the chest); RDR2 core: always the chest" },
+        Param { name: "rightRadius1", kind: Kind::Float, used: true, doc: "m (0.45); RDR2 core: 0.75" },
+        Param { name: "rightRadius2", kind: Kind::Float, used: true, doc: "m (0.45); RDR2 core: 0.75" },
         Param { name: "rightSpeed", kind: Kind::Float, used: true, doc: "revolutions a second (1)" },
-        Param { name: "radius1Delta", kind: Kind::Float, used: true, doc: "adaptive, a second (0)" },
+        Param { name: "radius1Delta", kind: Kind::Float, used: true, doc: "adaptive, a second (0); not RDR2's" },
         Param { name: "radius2Delta", kind: Kind::Float, used: true, doc: "(0)" },
         Param { name: "speedDelta", kind: Kind::Float, used: true, doc: "(0)" },
         Param { name: "shoulderStiffness", kind: Kind::Float, used: true, doc: "(12)" },
         Param { name: "shoulderDamping", kind: Kind::Float, used: true, doc: "(1)" },
         Param { name: "elbowStiffness", kind: Kind::Float, used: true, doc: "(12)" },
         Param { name: "elbowDamping", kind: Kind::Float, used: true, doc: "(1)" },
-        Param { name: "shoulderStiffnessDelta", kind: Kind::Float, used: true, doc: "adaptive, a second (0)" },
+        Param { name: "shoulderStiffnessDelta", kind: Kind::Float, used: true, doc: "adaptive, a second (0); not RDR2's" },
         Param { name: "elbowStiffnessDelta", kind: Kind::Float, used: true, doc: "(0)" },
-        Param { name: "phaseOffset", kind: Kind::Float, used: true, doc: "the right arm behind the left, radians (3.14)" },
-        Param { name: "dragReduction", kind: Kind::Float, used: false, doc: "(not done)" },
+        Param { name: "phaseOffset", kind: Kind::Float, used: true, doc: "the right arm behind the left, radians (3.14); RDR2 core: degrees, only kept by forceSync (0)" },
+        Param { name: "dragReduction", kind: Kind::Float, used: true, doc: "(not done: Delirium's limb IK has no drag reduction)" },
         Param { name: "IKtwist", kind: Kind::Float, used: true, doc: "shoulder twist in the IK (0)" },
         Param { name: "angVelThreshold", kind: Kind::Float, used: true, doc: "adaptive: body spin, rad/s, before it speeds up (0.1)" },
         Param { name: "angVelGain", kind: Kind::Float, used: true, doc: "adaptive: faster by this per rad/s over (1)" },
-        Param { name: "leftElbowMin", kind: Kind::Float, used: true, doc: "least elbow bend, rad (0.3)" },
-        Param { name: "rightElbowMin", kind: Kind::Float, used: true, doc: "(0.3)" },
-        Param { name: "mirrorMode", kind: Kind::Int, used: true, doc: "1: the right arm goes round the other way (0)" },
-        Param { name: "adaptiveMode", kind: Kind::Bool, used: true, doc: "speed tracks his spin (false)" },
-        Param { name: "forceSync", kind: Kind::Bool, used: true, doc: "no phase offset (false)" },
+        Param { name: "leftElbowMin", kind: Kind::Float, used: true, doc: "least elbow bend, rad (0.3); RDR2 core: approached at 5/s (0.5)" },
+        Param { name: "rightElbowMin", kind: Kind::Float, used: true, doc: "(0.3); RDR2 core: (0.5)" },
+        Param { name: "mirrorMode", kind: Kind::Int, used: true, doc: "1: the right arm goes round the other way (0); RDR2 core: 1 the right circle the left's mirrored, 2 its centre only, 0 its own (1)" },
+        Param { name: "adaptiveMode", kind: Kind::Int, used: true, doc: "speed tracks his spin (false); RDR2 core: 1 the turn's sign from his spin, 2 its speed, 3 and the shoulder stiffness (0)" },
+        Param { name: "forceSync", kind: Kind::Bool, used: true, doc: "no phase offset (false); RDR2 core: keep the right arm phaseOffset behind the left (true)" },
         Param { name: "useLeft", kind: Kind::Bool, used: true, doc: "(true)" },
         Param { name: "useRight", kind: Kind::Bool, used: true, doc: "(true)" },
         Param { name: "disableOnImpact", kind: Kind::Bool, used: true, doc: "a hand stops once it hits something (true)" },
@@ -912,6 +912,9 @@ pub struct ArmsWindmill {
     disable_on_impact: bool,
     angle: [f32; 2],
     hit: [bool; 2],
+    /// the RDR2 core's parameters (RDR2's defaults) and state (nmwm.rs)
+    rdr2: crate::nmwm::Params,
+    r2: Option<crate::nmwm::Windmill>,
 }
 
 impl ArmsWindmill {
@@ -924,6 +927,7 @@ impl ArmsWindmill {
                         speed: p.f(&format!("{side}Speed"), 1.0)? })
         };
         let arm = [circle("left", 1.0)?, circle("right", -1.0)?];
+        let rdr2 = Self::rdr2(p)?;
         let _ = p.f("dragReduction", 0.0)?;
         let force_sync = p.b("forceSync", false)?;
         let phase = p.f("phaseOffset", std::f32::consts::PI)?;
@@ -942,12 +946,44 @@ impl ArmsWindmill {
             disable_on_impact: p.b("disableOnImpact", true)?,
             angle: [0.0; 2],
             hit: [false; 2],
+            rdr2,
+            r2: None,
+        })
+    }
+
+    /// The message read with RDR2's names and defaults (rdr2_windmill.md A.2).
+    fn rdr2(p: &mut P) -> Result<crate::nmwm::Params, Error> {
+        let d = crate::nmwm::Params::default();
+        let side = |p: &mut P, s: &str, i: usize| -> Result<(Vec3, Vec3, [f32; 2], f32), Error> {
+            Ok((p.v(&format!("{s}Normal"), d.normal[i])?, p.v(&format!("{s}Centre"), d.centre[i])?,
+                [p.f(&format!("{s}Radius1"), d.radius[i][0])?, p.f(&format!("{s}Radius2"), d.radius[i][1])?], p.f(&format!("{s}Speed"), d.speed[i])?))
+        };
+        let (l, r) = (side(p, "left", 0)?, side(p, "right", 1)?);
+        Ok(crate::nmwm::Params {
+            normal: [l.0, r.0], centre: [l.1, r.1], radius: [l.2, r.2], speed: [l.3, r.3],
+            shoulder: (p.f("shoulderStiffness", d.shoulder.0)?, p.f("shoulderDamping", d.shoulder.1)?),
+            elbow: (p.f("elbowStiffness", d.elbow.0)?, p.f("elbowDamping", d.elbow.1)?),
+            phase_offset: p.f("phaseOffset", d.phase_offset)?, drag_reduction: p.f("dragReduction", d.drag_reduction)?,
+            ik_twist: p.f("IKtwist", d.ik_twist)?, ang_vel_threshold: p.f("angVelThreshold", d.ang_vel_threshold)?,
+            ang_vel_gain: p.f("angVelGain", d.ang_vel_gain)?,
+            elbow_min: [p.f("leftElbowMin", d.elbow_min[0])?, p.f("rightElbowMin", d.elbow_min[1])?],
+            mirror_mode: p.i("mirrorMode", d.mirror_mode)?, adaptive_mode: p.i("adaptiveMode", d.adaptive_mode)?,
+            force_sync: p.b("forceSync", d.force_sync)?, use_arm: [p.b("useLeft", true)?, p.b("useRight", true)?],
+            disable_on_impact: p.b("disableOnImpact", d.disable_on_impact)?,
         })
     }
 }
 
 impl Extra for ArmsWindmill {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        // RDR2 core: RDR2's armsWindmill (nmwm.rs), started on the first tick
+        if c.ch.rdr2 {
+            let p = self.rdr2;
+            let w = self.r2.get_or_insert_with(|| crate::nmwm::Windmill::start(c, &p));
+            w.tick(c, &p, dt);
+            return;
+        }
+        self.r2 = None;
         let over = if self.adaptive { (c.angvel.length() - self.spin.0).max(0.0) } else { 0.0 };
         if over > 0.0 {
             for a in &mut self.arm {

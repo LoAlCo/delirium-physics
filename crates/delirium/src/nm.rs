@@ -188,6 +188,8 @@ pub struct ArmsWindmill {
     pub amplitude: f32,
     pub phase: f32,
     pub disable_on_impact: bool,
+    /// RDR2's parameters (read with the RDR2 core)
+    pub rdr2: crate::nmaw::Rdr2Params,
 }
 
 #[derive(Clone, Copy)]
@@ -232,7 +234,8 @@ impl Default for UpperBodyFlinch {
 
 impl Default for ArmsWindmill {
     fn default() -> ArmsWindmill {
-        ArmsWindmill { arm_stiffness: delirium_data::kv!(196), body_stiffness: delirium_data::kv!(117), period: 1.0, amplitude: delirium_data::kv!(119), phase: 0.0, disable_on_impact: true }
+        ArmsWindmill { arm_stiffness: delirium_data::kv!(196), body_stiffness: delirium_data::kv!(117), period: 1.0, amplitude: delirium_data::kv!(119), phase: 0.0, disable_on_impact: true,
+                       rdr2: Default::default() }
     }
 }
 
@@ -863,6 +866,11 @@ impl Agent {
                 }
             }
             "braceForImpact" => { let p = &st.brace_for_impact; self.brace_at(p.pos, p.look, p.instance_index); }
+            // RDR2 core: a running pedalLegs takes new backPedal, variances and speed (injuredOnGround re-draws them)
+            "pedalLegs" if self.rdr2_core.is_some() => {
+                let (p, d) = (&st.pedal_legs, &mut self.nm_pd);
+                (d.back_pedal, d.radius_variance, d.leg_angle_variance, d.angular_speed) = (p.back_pedal, p.radius_variance, p.leg_angle_variance, p.angular_speed);
+            }
             _ => {}
         }
     }
@@ -1788,6 +1796,10 @@ impl Agent {
                 let w = &mut self.nm_aw;
                 (w.body_stiffness, w.period, w.amplitude, w.phase) = (m.body_stiffness, m.period, m.amplitude, m.phase);
                 w.disable_on_impact = m.disable_on_impact;
+                // RDR2 core: the message starts RDR2's armsWindmillAdaptive (highFall's own windmill stays GTA IV's)
+                if !w.active {
+                    (w.rdr2, w.r2) = (m.rdr2, c.ch.rdr2);
+                }
                 w.activate(c.ch);
             }
             if self.windmill.is_none() && !self.nm_hf.active() {
@@ -1957,7 +1969,8 @@ impl Agent {
             if !waits(walk_actives!(self), W_AW()) {
                 self.nm_aw.tick(&mut c, dt);
             }
-            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x58); }
+            // RDR2's armsWindmillAdaptive is slot 0x60 (GTA IV's windmill, highFall's, stays at armsWindmill's 0x58)
+            if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, if self.nm_aw.r2 { 0x60 } else { 0x58 }); }
             if !waits(walk_actives!(self), W_GR()) {
                 let dbm = self.balance.as_mut().and_then(|b| b.dbm.as_mut());
                 self.nm_gr.place(obstacles);
