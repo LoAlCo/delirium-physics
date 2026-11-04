@@ -1154,6 +1154,28 @@ impl Agent {
         self.roll_up.is_some()
     }
 
+    /// Read-only list of what is running now, for the headless NMX_DUMP comparison (changes nothing).
+    pub fn nmx_active(&self) -> Vec<String> {
+        let mut v: Vec<String> = vec![];
+        if let Some(b) = self.balance.as_ref() {
+            if b.dbm.is_some() {
+                v.push(if self.rdr2_core.is_some() { "balancer(rdr2)".into() } else { "balancer(dbm)".into() });
+            } else if b.on() {
+                v.push("balancer(simple)".into());
+            }
+        }
+        let flags = [
+            ("bodyBalance", self.bb_on), ("shot", self.nm_shot.is_some()), ("catchFall", self.nm_cf.is_some()), ("bodyWrithe", self.nm_bw.is_some()),
+            ("bodyRollUp", self.nm_ru.active), ("rollDownStairs", self.nm_rds.active || self.rds_on), ("armsWindmill", self.nm_aw.active),
+            ("pedalLegs", self.nm_pd.active), ("bodyFoetal", self.nm_bf.active), ("headLook", self.nm_head.active), ("spineTwist", self.nm_twist.active),
+            ("upperBodyFlinch", self.nm_fl.active), ("braceForImpact", self.nm_br.active), ("relax", self.relax.is_some()),
+            ("lean", self.lean.is_some()), ("fallen", self.fallen), ("highFall", self.high_falling()),
+        ];
+        v.extend(flags.iter().filter(|f| f.1).map(|f| f.0.to_string()));
+        v.extend(self.extras.on.iter().map(|(n, _)| n.to_string()));
+        v
+    }
+
     fn nm_shot_step(&mut self, build: &Build, frames: &[Transform], dbm_lost: bool, dt: f32, tick: bool) -> crate::nmshot::Out {
         let mut out = crate::nmshot::Out::default();
         let Some(ch) = self.ch.as_mut() else { return out };
