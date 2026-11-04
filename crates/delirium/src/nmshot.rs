@@ -151,6 +151,8 @@ pub struct Out {
     pub force: Vec<Vec3>,
     pub seq: Vec<(usize, Vec3, bool)>,
     pub impulse: Vec<(usize, Vec3, Vec3)>,
+    /// RDR2 core: the default arms' releaseWound, telling reachForWound to let that hand go this step
+    pub rfw_release: [bool; 2],
 }
 
 impl Out {
@@ -243,6 +245,7 @@ pub struct Shot {
     grab_front: bool,
     sub: [bool; 15],
     rd: ShotRdr2State,
+    da: DefaultArms,
 }
 
 const LOOSE_L: usize = 0;
@@ -304,6 +307,19 @@ pub struct Ctx<'a, 'b> {
     pub dbm: Option<DbmView>,
     /// RDR2 core: the shot behaviour is running (staggerFall leaves the fall to it)
     pub shot_on: bool,
+    /// RDR2 core: what the shot's default arms read of reachForWound (None when it isn't running)
+    pub rfw: Option<RfwView>,
+    /// RDR2 core: bodyBalance is running (the default arm pose leaves the arms to it)
+    pub bb_on: bool,
+}
+
+/// What the shot's default arms read of RDR2's reachForWound, per hand: in a reach with the hand placed, how long
+/// since the reach started (its clock less timeBeforeReachForWound), and the time since that hand's reach last ended.
+#[derive(Clone, Copy, Debug)]
+pub struct RfwView {
+    pub reached: [bool; 2],
+    pub on: [f32; 2],
+    pub since_stop: [f32; 2],
 }
 
 /// What an extra may read of the balancer this step (RDR2's bal+0x45c, +0x550 and its fail ramp).
@@ -322,7 +338,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
         Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed,
-              dbm: None, shot_on: false }
+              dbm: None, shot_on: false, rfw: None, bb_on: false }
     }
 
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.
@@ -330,6 +346,13 @@ impl<'a, 'b> Ctx<'a, 'b> {
     fn module(&mut self, tag: u32) {
         let reach = tag == REACH_L() as u32 || tag == REACH_R() as u32;
         let slot = if reach && self.shot_slot == crate::limbreq::SHOT { crate::limbreq::slot("reachForWound") } else { self.shot_slot };
+        if let Some(r) = self.reqs.as_deref_mut() {
+            r.mark(&self.ch.eff, slot);
+        }
+    }
+
+    /// With the RDR2 core's limb requests: what was just written is the request of the behaviour in `slot`.
+    fn mark(&mut self, slot: u32) {
         if let Some(r) = self.reqs.as_deref_mut() {
             r.mark(&self.ch.eff, slot);
         }
@@ -412,6 +435,7 @@ impl Shot {
             reach: [Reach::default(); 2], cur_reach: 0, cur_arm: 0, m228: 0.0, m248: 0.0, m24c: 0.0, m250: 0.0, m254: 0.0,
             f258: 0.0, f25c: 0.0, f260: 0.0, f264: 0.0, f268: 0.0, f26c: 0, f270: 0.0, f274: 0.0, f278: [false; 2],
             flags: delirium_data::kv!(251 int), grab_front: false, sub: [false; 15], rd: ShotRdr2State::default(),
+            da: DefaultArms::default(),
         };
         // RDR2 resets only the joints off the legs: the legs keep the balancer's stiffness
         let legs: Vec<usize> = if c.ch.rdr2 { Character::mask("lb") } else { vec![] };
@@ -1363,6 +1387,16 @@ pub struct ShotRdr2 {
     /// 0 bodyRollUp, 1 catchFall, 2 rollDownStairs, 3 smartFall, 4 catchFall then bodyWrithe (None: GTA IV's
     /// useCatchFallOnFall picks 1 or 0)
     pub falling_reaction: Option<i32>,
+    /// RDR2's shotConfigureArms for the default arms: enableDefaultArms, brace, useArmsWindmill, alwaysReachTime,
+    /// AWSpeedMult, AWRadiusMult, AWStiffnessAdd, releaseWound (0 never, 1 only with brace, 2 always)
+    pub default_arms: bool,
+    pub brace: bool,
+    pub use_arms_windmill: bool,
+    pub always_reach_time: f32,
+    pub aw_speed_mult: f32,
+    pub aw_radius_mult: f32,
+    pub aw_stiffness_add: f32,
+    pub release_wound: i32,
 }
 
 impl Default for ShotRdr2 {
@@ -1372,7 +1406,8 @@ impl Default for ShotRdr2 {
                    spine_damping: 1.0, initial_neck_stiffness: 14.0, initial_neck_damping: 1.0, neck_stiffness: 14.0, neck_damping: 1.0,
                    k_mult_on_loose: 0.0, k_mult_4_legs: 0.3, initial_weakness_ramp: 0.4, initial_weakness_zero: 0.0,
                    initial_neck_ramp: 0.4, initial_neck_duration: 0.0, spine_blend_zero: 0.6, min_arms_looseness: 0.1,
-                   min_legs_looseness: 0.1, falling_reaction: None }
+                   min_legs_looseness: 0.1, falling_reaction: None, default_arms: true, brace: true, use_arms_windmill: true,
+                   always_reach_time: 0.3, aw_speed_mult: 1.0, aw_radius_mult: 1.0, aw_stiffness_add: 4.0, release_wound: 1 }
     }
 }
 
@@ -1617,8 +1652,8 @@ impl Shot {
         if self.rd.started {
             self.strength_rdr2(c, dt);
         }
-        self.run(c, REACT(), Some(|_, c| c.ch.busy != [true; 2]), Some(Shot::react_enter), Some(Shot::react_tick),
-                 Some(|s, _| s.new_hit || s.failed()), None, dt);
+        self.run(c, REACT(), Some(|s, _| s.p.rdr2.default_arms && !s.failed()), Some(Shot::arms_enter), Some(Shot::arms_tick),
+                 Some(|s, _| s.new_hit || s.failed() || !s.p.rdr2.default_arms), Some(Shot::arms_exit), dt);
         c.module(REACT() as u32);
         self.run(c, FALL, Some(|s, _| s.failed()), Some(Shot::fall_enter), Some(Shot::fall_tick), None, None, dt);
         c.module(FALL as u32);
@@ -1639,5 +1674,374 @@ impl Shot {
         }
         c.module(102);
         self.new_hit = false;
+    }
+}
+
+// ---- RDR2's default arms (configureArms runner 2, with the RDR2 core), from rdr2_shot_defaultarms.md ----
+
+/// The default arms' state: the brace phase clocks, the windmill timers and which arms windmill, releaseWound's
+/// hysteresis timers and released hands, the hold blend's clavicle, shoulder and elbow states per arm, and the
+/// armsWindmill it runs.
+#[derive(Clone, Copy, Debug, Default)]
+struct DefaultArms {
+    t: [f32; 2],
+    wm_t: [f32; 2],
+    wm: [bool; 2],
+    release_t: [f32; 2],
+    release: [bool; 2],
+    hold: [[f32; 7]; 2],
+    aw: Option<Windmill>,
+}
+
+/// RDR2's armsWindmill as the shot runs it: each arm's phase, the shot's radius, speed, stiffness and phase
+/// additions, which arms it drives, and whether each hand is still clear of contact (disableOnImpact).
+#[derive(Clone, Copy, Debug, Default)]
+struct Windmill {
+    theta: [f32; 2],
+    delta: [f32; 2],
+    speed_add: [f32; 2],
+    ks_add: f32,
+    ke_add: f32,
+    phase_add: f32,
+    on: [bool; 2],
+    live: [bool; 2],
+}
+
+/// One armsWindmill circle as the shot configures it: centre in the chest's frame, the frame's three turns (rad),
+/// the radii in leg lengths, the speed in turns a second.
+struct Circle {
+    centre: Vec3,
+    turn: Vec3,
+    radii: [f32; 2],
+    speed: f32,
+}
+
+/// The shot's armsWindmill: the left circle, and the right one's own radii and speed (mirrorMode 1 builds its frame
+/// and centre from the left one).
+const AW_CIRCLES: [Circle; 2] = [
+    Circle { centre: Vec3::new(0.0, 0.5, -0.3), turn: Vec3::new(0.0, 0.2, 0.2), radii: [0.15, 0.2], speed: -0.5 },
+    Circle { centre: Vec3::new(0.0, 0.5, -0.1), turn: Vec3::new(0.0, -0.2, -0.2), radii: [0.3, 0.1], speed: -0.3 },
+];
+/// The shot's armsWindmill shoulder and elbow stiffness (both damping 1), phaseOffset in degrees, elbow floor.
+const AW_STIFFNESS: f32 = 9.0;
+const AW_PHASE: f32 = 60.0;
+const AW_ELBOW_MIN: f32 = 0.5;
+
+fn wrap_2pi(x: f32) -> f32 {
+    x.rem_euclid(std::f32::consts::TAU)
+}
+
+impl Shot {
+    fn arms_enter(&mut self, c: &mut Ctx) {
+        self.da.t = [c.ch.random(), c.ch.random()];
+    }
+
+    fn arms_exit(&mut self, _c: &mut Ctx) {
+        self.da.aw = None;
+        self.da.release = [false; 2];
+    }
+
+    /// RDR2's default arms: an arm not reaching for the wound (or let go of it) windmills while he is thrown back
+    /// fast, else braces (a reach towards the ground the way he moves) or, with brace off, holds the guard pose; for
+    /// 0.4 s after a reach ends the arm moves to that pose at 1 rad/s. releaseWound lets a reaching hand go when he
+    /// moves fast and not backwards.
+    fn arms_tick(&mut self, c: &mut Ctx, dt: f32) {
+        let r = self.p.rdr2;
+        let u = self.fall[0];
+        let up = c.up;
+        let rfw = c.rfw;
+        let reach = rfw.map_or([false; 2], |v| v.reached);
+        for t in self.da.t.iter_mut() {
+            *t += dt;
+        }
+        // the chest's velocity, turned by the trunk's pitching and lessened when he leans back
+        let mid = c.b.part(SP()[2]).m;
+        let top = c.b.part(SP()[4]);
+        let mut vc = top.v * 0.6;
+        let w = 0.25 * c.angvel.dot(mid.b).clamp(0.0, 4.0);
+        vc -= mid.c * (vc.length() * w);
+        vc += mid.a * (0.5 * vc.length() * w);
+        if up.dot(mid.c) > 0.5 {
+            vc -= mid.c * vc.length();
+        }
+        let spd = vc.length();
+        let back = vc.normalize_or_zero().dot(mid.c);
+        let side = c.vel.normalize_or_zero().dot(top.m.a);
+        let draw = [c.ch.random(), c.ch.random()];
+        let tl = draw.map(|x| 0.5 + 0.5 * x);
+        let wm_on = r.use_arms_windmill && back > 0.3 && spd > 0.6;
+        if wm_on {
+            for t in self.da.wm_t.iter_mut() {
+                *t += dt;
+            }
+            let live = self.da.aw.map_or([true; 2], |a| a.live);
+            self.da.wm = [!reach[0] && self.da.wm_t[0] < tl[0] && side < 0.7 && live[0],
+                          !reach[1] && self.da.wm_t[1] < tl[1] && side > -0.7 && live[1]];
+        } else {
+            self.da.aw = None;
+            self.da.wm = [false; 2];
+            for i in 0..2 {
+                if self.da.wm_t[i] > tl[i] {
+                    self.da.wm_t[i] += dt;
+                    if self.da.wm_t[i] > 0.8 + 0.5 * draw[i] + 0.9 * c.ch.random() {
+                        self.da.wm_t[i] = 0.0;
+                    }
+                }
+            }
+        }
+        // releaseWound
+        if ((r.release_wound == 1 && r.brace) || r.release_wound == 2) && back < 0.2 && spd > 0.8 {
+            let legs = [limb(2), limb(3)];
+            let injured = legs.iter().any(|l| l.p[1..].contains(&self.p.body_part));
+            let on = rfw.map_or([0.0; 2], |v| v.on);
+            let mut want = [reach[0] && on[0] > r.always_reach_time, reach[1] && on[1] > r.always_reach_time];
+            let f = c.b.part(SP()[0]).m.b.dot(c.vel.normalize_or_zero());
+            if f > 0.3 {
+                want[0] &= !injured || c.ch.random() > 0.9;
+            }
+            if f < -0.3 {
+                want[1] &= !injured || c.ch.random() > 0.9;
+            }
+            for i in 0..2 {
+                self.da.release_t[i] -= dt;
+                if self.da.release_t[i] < 0.0 && want[i] != self.da.release[i] {
+                    self.da.release[i] = want[i];
+                    self.da.release_t[i] = if want[i] { 0.4 } else { 0.6 };
+                }
+            }
+        }
+        c.out.rfw_release = self.da.release;
+        let window = rfw.map_or([false; 2], |v| v.since_stop.map(|t| (0.0..0.4).contains(&t)));
+        for i in 0..2 {
+            if c.ch.busy[i] {
+                continue;
+            }
+            let free = !reach[i] || self.da.release[i];
+            let mut posed = None;
+            if r.brace && !self.da.wm[i] && free {
+                posed = Some(self.brace_arm(c, i, u, window[i]));
+            }
+            if !self.da.wm[i] && posed.is_none() && free {
+                posed = Some(self.guard_arm(c, i, u, window[i]));
+            }
+            let l = limb(i);
+            let hold = &mut self.da.hold[i];
+            if posed == Some(true) {
+                for (k, j) in [(0, l.e[0]), (3, l.e[1])] {
+                    let tgt = c.ch.eff[j].desired;
+                    let d = [tgt[0] - hold[k], tgt[1] - hold[k + 1], tgt[2] - hold[k + 2]];
+                    let m = d.iter().fold(0.0f32, |a, x| a.max(x.abs()));
+                    let f = if m >= 1.2e-7 { (dt / m).min(1.0) } else { 1.0 };
+                    for n in 0..3 {
+                        hold[k + n] += f * d[n];
+                    }
+                    c.ch.eff[j].desired = [hold[k], hold[k + 1], hold[k + 2]];
+                }
+                let tgt = c.ch.eff[l.e[2]].desired[0];
+                hold[6] += (tgt - hold[6]).clamp(-dt, dt);
+                c.ch.eff[l.e[2]].desired[0] = hold[6];
+            } else if window[i] {
+                let (cl, sh, el) = (c.actual(l.e[0]), c.actual(l.e[1]), c.actual(l.e[2]));
+                *hold = [cl[0], cl[1], cl[2], sh[0], sh[1], sh[2], el[0]];
+            }
+        }
+        c.module(REACT() as u32);
+        if wm_on {
+            self.windmill(c, r, u, spd, dt);
+            c.mark(0x58);
+        }
+    }
+
+    /// RDR2's brace arm: the hand thrown towards the ground the way the chest moves (out to the side, ahead or
+    /// behind as the trunk and thigh frames say), 0.81..1.03 arm lengths from the shoulder, the wrist bent back near
+    /// the ground; when he is nearly still the arm relaxes to the zero pose. Returns `window` when it relaxed.
+    fn brace_arm(&mut self, c: &mut Ctx, i: usize, u: f32, window: bool) -> bool {
+        let sg = if i == 0 { -1.0 } else { 1.0 };
+        let t = self.da.t[i];
+        let rho = if i == 0 { 0.812 + 0.223 * c.ch.random() } else { 0.809 + 0.216 * c.ch.random() };
+        let (l, leg) = (limb(i), limb(2 + i));
+        let up = c.up;
+        let sp = c.b.part(SP()[2]).m;
+        let (nr1, nr2) = (horizontal(-sp.b, up), horizontal(-sp.c, up));
+        let feet = c.b.part(limb(2).p[3]).m.d.dot(up) + c.b.part(limb(3).p[3]).m.d.dot(up);
+        let h = (c.b.part(l.p[3]).m.d.dot(up) - 0.5 * feet).max(0.0);
+        let vh = horizontal(c.b.part(SP()[4]).v, up);
+        let lm = c.b.part(leg.p[1]).m;
+        let (r0, lr2) = (horizontal(lm.a, up), horizontal(-lm.c, up));
+        let mut a = r0.dot(vh) + 0.1 * i as f32;
+        if a.abs() < 0.4 {
+            a = 0.4 * sg;
+        }
+        let b = lr2.dot(vh) + 0.1;
+        let cc = if b >= 0.0 { b } else { -0.5 * b };
+        if a * sg < 0.0 {
+            a *= 0.8 * (3.0 * t).sin();
+        }
+        let dir = if b >= 0.0 { nr1 * a + nr2 * cc - up } else { r0 * (0.5 * a) + lr2 * cc - up };
+        let sh = c.b.joint_pos(l.e[1]);
+        let el = c.b.joint_pos(l.e[2]);
+        let len = (el - sh).length() + (c.b.joint_pos(l.e[3]) - el).length();
+        let target = sh + dir.normalize_or_zero() * (rho * len).min(dir.length());
+        let side = if i == 0 { 1.0 } else { -1.0 };
+        crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], target, 0.2, 0.0, side, 1.0, Vec3::ZERO, None);
+        let e = &mut c.ch.eff[l.e[2]].desired[0];
+        *e = e.max(0.3);
+        if b < 0.0 {
+            *e += 0.5 * (5.0 * t).sin();
+        }
+        c.ch.eff[l.e[0]].desired = [0.0; 3];
+        c.ch.eff[l.e[3]].desired = [0.0, if h < 0.7 { -2.5 * (0.7 - h) } else { 0.0 }, 0.2];
+        let v = c.vel.length();
+        let mut ret = false;
+        if v < 0.5 {
+            for j in [l.e[0], l.e[1], l.e[2]] {
+                c.ch.eff[j].blend_to_zero(1.0 - 2.0 * v);
+            }
+            c.ch.eff[l.e[3]].blend_to_zero(1.0);
+            ret = window;
+        }
+        let s = (11.0 * u).max(1.0);
+        let d = if ret { 1.0 } else { 0.7 };
+        for j in l.e {
+            c.ch.eff[j].set_stiffness(s, d, None);
+        }
+        c.ch.eff[l.e[2]].set_stiffness(0.75 * s, 0.75 * d, None);
+        c.ch.eff[l.e[3]].set_stiffness((s - 1.0).max(7.0), 1.75, None);
+        ret
+    }
+
+    /// RDR2's default arm pose (brace off): a guard driven by how fast the chest moves against the pelvis, relaxing
+    /// to the zero pose with the shoulder a little out and the elbow bent when it doesn't. Returns `window` when it
+    /// posed the arm (bodyBalance running leaves the angles to it).
+    fn guard_arm(&mut self, c: &mut Ctx, i: usize, u: f32, window: bool) -> bool {
+        let sg = if i == 0 { -1.0 } else { 1.0 };
+        let l = limb(i);
+        let (top, pel) = (c.b.part(SP()[4]), c.b.part(SP()[0]));
+        let dv = top.v - pel.v;
+        let d = (top.m.d - pel.m.d) + dv * 0.6;
+        let f = (dv.length() - 0.15).clamp(0.0, 1.0);
+        for j in [l.e[0], l.e[1], l.e[3]] {
+            c.ch.eff[j].set_stiffness((2.0 * f + 8.0) * u, 1.0, None);
+        }
+        c.ch.eff[l.e[2]].set_stiffness((2.0 * f + 4.0) * u, 1.0, None);
+        c.ch.eff[l.e[3]].set_stiffness(10.0, 1.0, None);
+        let m = c.b.eff3(l.e[1]).m;
+        let x = 4.0 * m.a.dot(d);
+        let y = (4.0 * 0.707 * sg * (m.b - m.c).dot(d)).clamp(-8.0, 8.0);
+        let mut q = -x.sin();
+        if q < 0.0 {
+            q *= 0.7;
+        }
+        let rr = x.cos() + y - 0.5 * f;
+        c.og(l.e[0], f);
+        c.og(l.e[1], f);
+        if c.bb_on {
+            return false;
+        }
+        let g = 1.0 - f;
+        let (ls, lc) = (c.limits(l.e[1]), c.limits(l.e[0]));
+        c.ch.eff[l.e[1]].desired = [(q + 0.5 * (ls[0] + ls[1])) * f, (rr + 0.5 * (ls[2] + ls[3])) * f + 0.2 * g, 0.0];
+        c.ch.eff[l.e[0]].desired = [0.0, (rr + 0.5 * (lc[2] + lc[3])) * f, 0.0];
+        c.ch.eff[l.e[2]].desired[0] = f + 0.7 * g;
+        for j in [l.e[0], l.e[1], l.e[3]] {
+            c.ch.eff[j].blend_to_zero(g);
+        }
+        c.ch.eff[l.e[3]].blend_to_zero(1.0);
+        window
+    }
+
+    /// RDR2's armsWindmill as the shot runs it: started with each arm's phase from where its hand is, the circles'
+    /// radii, speeds, stiffness and phase gap grown with how fast he goes back; each arm circles its hand on an
+    /// ellipse in the chest's frame (the right one mirrored from the left), the two kept a phase apart, and stops
+    /// for good once its hand touches something.
+    fn windmill(&mut self, c: &mut Ctx, r: ShotRdr2, u: f32, spd: f32, dt: f32) {
+        let leg = (c.b.joint_pos((*HIP())[0]) - c.b.joint_pos((*ANKLE())[0])).length().max(0.1);
+        let chest = c.b.part(SP()[4]).m;
+        let circle = |i: usize| -> ([Vec3; 3], Vec3) {
+            let l = &AW_CIRCLES[0];
+            let mut f = [chest.a, chest.b, chest.c];
+            let turn = |f: &mut [Vec3; 3], p: usize, q: usize, ang: f32| {
+                let (s, co) = ang.sin_cos();
+                let (x, y) = (f[p], f[q]);
+                (f[p], f[q]) = (x * co + y * s, y * co - x * s);
+            };
+            turn(&mut f, 0, 1, std::f32::consts::FRAC_PI_2);
+            turn(&mut f, 2, 0, l.turn.y);
+            turn(&mut f, 0, 1, l.turn.z);
+            turn(&mut f, 1, 2, l.turn.x);
+            let mut centre = l.centre;
+            if i == 1 {
+                centre.y = -centre.y;
+                for row in f.iter_mut() {
+                    *row -= chest.b * (2.0 * row.dot(chest.b));
+                }
+            }
+            (f, world(&chest, centre))
+        };
+        let hands = [limb(0).p[3], limb(1).p[3]];
+        let mut aw = self.da.aw.unwrap_or_else(|| {
+            let theta = [0, 1].map(|i| {
+                let (f, o) = circle(i);
+                let d = c.b.part(hands[i]).m.d - o;
+                wrap_2pi(f[2].dot(d).atan2(f[1].dot(d)))
+            });
+            Windmill { theta, live: [true; 2], ..Default::default() }
+        });
+        aw.on = self.da.wm;
+        let e = spd - 0.5;
+        let rad = 0.3 * (e * r.aw_radius_mult).clamp(0.0, 1.5);
+        aw.delta = [rad * leg, rad];
+        let sign = [AW_CIRCLES[0].speed, AW_CIRCLES[1].speed].map(|k| if k > 0.0 { 1.0 } else { -1.0 });
+        aw.speed_add = [sign[0] * (e * r.aw_speed_mult).clamp(0.0, 1.5), sign[1] * (e * r.aw_speed_mult).clamp(0.0, 1.7)];
+        aw.ks_add = 2.2222 * rad * r.aw_stiffness_add * u - (1.0 - u) * AW_STIFFNESS;
+        aw.ke_add = (u - 1.0) * AW_STIFFNESS;
+        aw.phase_add = 30.0 * c.m.a.dot(c.up);
+        let (ks, ke) = (AW_STIFFNESS + aw.ks_add, AW_STIFFNESS + aw.ke_add);
+        let speed = [AW_CIRCLES[0].speed + aw.speed_add[0], AW_CIRCLES[1].speed + aw.speed_add[1]];
+        for i in 0..2 {
+            if aw.on[i] {
+                let l = limb(i);
+                c.ch.eff[l.e[0]].set_stiffness(ks, 1.0, None);
+                c.ch.eff[l.e[1]].set_stiffness(ks, 1.0, None);
+                c.ch.eff[l.e[2]].set_stiffness(ke, 1.0, None);
+            }
+        }
+        // forceSync: the right arm kept phaseOffset behind the left, each one's step sped up or slowed by up to half
+        let mut step = [dt; 2];
+        if aw.on == [true; 2] {
+            let tau = std::f32::consts::TAU;
+            let (tl, tr) = (aw.theta[0], aw.theta[1]);
+            let phi = wrap_2pi(tr - (AW_PHASE + aw.phase_add).to_radians());
+            let (mut d1, mut d2) = if phi > tl { (phi - tl, tau - phi + tl) } else { (tau - tl + phi, tl - phi) };
+            if AW_CIRCLES[0].speed < 0.0 && AW_CIRCLES[1].speed < 0.0 {
+                (d1, d2) = (d2, d1);
+            }
+            let m = (0.5 * d1.min(d2)).clamp(0.0, 0.5);
+            step = if d1 > d2 { [dt * (1.0 - m), dt * (1.0 + m)] } else { [dt * (1.0 + m), dt * (1.0 - m)] };
+        }
+        for i in 0..2 {
+            if aw.live[i] && c.b.doll.collided(&[hands[i]]) {
+                aw.live[i] = false;
+            }
+            if !(aw.on[i] && aw.live[i]) {
+                continue;
+            }
+            let l = limb(i);
+            let (f, o) = circle(i);
+            aw.theta[i] = wrap_2pi(aw.theta[i] + std::f32::consts::TAU * step[i] * speed[i]);
+            let k = &AW_CIRCLES[i];
+            let (s, co) = aw.theta[i].sin_cos();
+            let p = o + f[1] * ((k.radii[0] * leg + aw.delta[i]) * co) + f[2] * ((k.radii[1] * leg + aw.delta[i]) * s);
+            let side = if i == 0 { 1.0 } else { -1.0 };
+            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], p, 0.0, 0.0, side, 1.0, Vec3::ZERO, None);
+            let a = c.actual(l.e[2])[0];
+            if a < AW_ELBOW_MIN {
+                let floor = a + (AW_ELBOW_MIN - a) * (5.0 * dt).clamp(0.0, 1.0);
+                let e = &mut c.ch.eff[l.e[2]].desired[0];
+                *e = e.max(floor);
+            }
+            c.ch.eff[l.e[3]].desired = [0.0; 3];
+        }
+        self.da.aw = Some(aw);
     }
 }

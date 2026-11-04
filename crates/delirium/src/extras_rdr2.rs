@@ -1666,6 +1666,18 @@ impl Extra for ReachForWound {
         }
     }
 
+    fn rfw_view(&self) -> Option<crate::nmshot::RfwView> {
+        let s = self.r2.as_ref()?;
+        Some(crate::nmshot::RfwView { reached: [0, 1].map(|i| s.reaching[i] && s.act[i].reached), on: s.act.map(|a| a.clock - self.wait),
+                                      since_stop: s.since_stop })
+    }
+
+    fn rfw_release(&mut self, hands: [bool; 2]) {
+        if let Some(s) = self.r2.as_mut() {
+            s.release = hands;
+        }
+    }
+
     fn done(&self) -> bool {
         if let Some(s) = &self.r2 {
             return s.idle(self.wait + self.hold);
@@ -1726,20 +1738,21 @@ impl Default for ArmRec {
 
 /// reachForWound's RDR2-core state: the arm records and which arms are in a reach, bullets not yet taken in, the
 /// spine twist (its timer, side and limiter), the spine bend for a leg wound and its release, the hunch rhythm's
-/// alternation, whether a hit came while down, and his leg length.
+/// alternation, whether a hit came while down, and his leg length; the hands the shot's releaseWound lets go this
+/// step, and the time since each hand's reach last ended (both for the shot's default arms).
 #[derive(Clone, Default)]
 struct Rfw2 {
     act: [ArmRec; 2], pend: [Option<ArmRec>; 2], reaching: [bool; 2], hits: Vec<(Vec3, i32)>,
     twist_t: f32, twist_left: bool, twist: Limiter, bend: Limiter, releasing: bool, toggle: bool, toggle_at: f32,
-    hit_down: bool, len: f32,
+    hit_down: bool, len: f32, release: [bool; 2], since_stop: [f32; 2],
 }
 
 impl Rfw2 {
-    /// Nothing left to do: no arm in a reach or waiting for one, no bend to let go of. (RDR2's behaviour never stops
-    /// itself; idle, it does nothing.)
+    /// Nothing left to do: no arm in a reach or waiting for one, no bend to let go of, and no reach ended in the last
+    /// 0.4 s (the shot's default arms still read that). (RDR2's behaviour never stops itself; idle, it does nothing.)
     fn idle(&self, window: f32) -> bool {
         !self.reaching.contains(&true) && self.pend.iter().all(Option::is_none) && !self.releasing && self.hits.is_empty()
-            && self.act.iter().all(|a| !(a.fresh && a.clock <= window))
+            && self.act.iter().all(|a| !(a.fresh && a.clock <= window)) && self.since_stop.iter().all(|&t| t >= 0.4)
     }
 }
 
@@ -1767,7 +1780,7 @@ impl ReachForWound {
         let mut s = self.r2.take().unwrap_or_else(|| {
             let len = |a: usize, b: usize| (c.b.joint_pos(a) - c.b.joint_pos(b)).length();
             Box::new(Rfw2 { hits: vec![(self.point, self.part)], toggle: true, len: len(HIP()[0], KNEE()[0]) + len(KNEE()[0], ANKLE()[0]),
-                            ..Default::default() })
+                            since_stop: [100.0; 2], ..Default::default() })
         });
         for (point, part) in std::mem::take(&mut s.hits) {
             self.intake(c, &mut s, point, part);
@@ -1776,6 +1789,9 @@ impl ReachForWound {
         for a in s.act.iter_mut() {
             a.clock += dt;
             a.demand = 0.0;
+        }
+        for t in s.since_stop.iter_mut() {
+            *t += dt;
         }
         for i in 0..2 {
             let free = !c.ch.busy[i];
@@ -1790,10 +1806,12 @@ impl ReachForWound {
                 s.bend.current = SPINE().iter().map(|&j| c.ch.actual(j, c.b.frames)[0]).sum::<f32>() * 0.25;
                 s.reaching[i] = true;
             }
-            if s.reaching[i] {
+            // a hand the shot lets go of (releaseWound) is left alone this step
+            if s.reaching[i] && !s.release[i] {
                 self.update_arm(c, &mut s, i, dt);
             }
         }
+        s.release = [false; 2];
         self.bend_rdr2(c, &mut s, dt);
         self.r2 = Some(s);
     }
@@ -1867,6 +1885,7 @@ impl ReachForWound {
             c.ch.eff[j].desired = c.ch.actual(j, c.b.frames);
         }
         s.reaching[i] = false;
+        s.since_stop[i] = 0.0;
     }
 
     /// One frame of one hand's reach (RDR2's update).

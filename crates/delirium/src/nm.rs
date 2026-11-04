@@ -1150,7 +1150,11 @@ impl Agent {
         let snap = ch.clone();
         let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames };
         let cf_was = self.nm_cf.as_ref().is_some_and(|f| f.active);
+        // RDR2 core: the shot's default arms read reachForWound and whether bodyBalance runs
+        let rfw = self.extras.on.iter().filter(|_| ch.rdr2).find(|(n, _)| *n == "reachForWound").and_then(|(_, e)| e.rfw_view());
+        let bb_on = ch.rdr2 && (self.balance.as_ref().is_some_and(|b| b.bb.is_some()) || self.extras.on.iter().any(|(n, _)| *n == "rdr2Balance"));
         let mut c = crate::nmshot::Ctx::new(ch, &body, &mut out, dbm_lost);
+        (c.rfw, c.bb_on) = (rfw, bb_on);
         if tick {
             c.cf = Some((&mut self.nm_cf, &mut self.nm_head, &mut self.nm_twist));
         }
@@ -1187,6 +1191,9 @@ impl Agent {
             if s.failed() {
                 self.fallen = true;
             }
+        }
+        if out.rfw_release != [false; 2] {
+            self.extras.on.iter_mut().filter(|(n, _)| *n == "reachForWound").for_each(|(_, e)| e.rfw_release(out.rfw_release));
         }
         match out.dbm {
             Some(true) => {
