@@ -9862,6 +9862,52 @@ impl Sim {
     }
 }
 
+mod nmx {
+    use super::*;
+    use std::io::Write;
+    /// Per-frame state for comparison with RDR2 recordings (headless NMX_DUMP only).
+    pub struct Dump {
+        frames: std::io::BufWriter<std::fs::File>,
+        joints: std::io::BufWriter<std::fs::File>,
+    }
+    impl Dump {
+        pub fn new(p: &str) -> Dump {
+            let mut frames = std::io::BufWriter::new(std::fs::File::create(format!("{p}.frames.csv")).unwrap());
+            let mut joints = std::io::BufWriter::new(std::fs::File::create(format!("{p}.joints.csv")).unwrap());
+            let _ = writeln!(frames, "frame,t,com_x,com_y,com_z,comv_x,comv_y,comv_z,com_speed,fwd_x,fwd_y,fwd_z,up_x,up_y,up_z,tilt_deg,lowest_part_z,head_z,mass,bal_steps,bal_foot,health,active");
+            let _ = writeln!(joints, "frame,t,joint,des0,des1,des2,act0,act1,act2,muscle_stiffness,strength,damping,oppose_gravity,injury");
+            Dump { frames, joints }
+        }
+        pub fn frame(&mut self, sim: &Sim, i: usize) {
+            let d = &sim.agent.doll;
+            let n = sim.build.parts.len();
+            let m = d.mass();
+            let (mut c, mut v) = (Vec3::ZERO, Vec3::ZERO);
+            for k in 0..n {
+                c += d.centre(k) * d.part_mass(k) / m;
+                v += d.motion(k).0 * d.part_mass(k) / m;
+            }
+            let fr: Vec<Transform> = d.frames().collect();
+            let low = (0..n).map(|k| d.centre(k).z).fold(f32::MAX, f32::min);
+            let s = sim.ours();
+            // trunk up: pelvis (part 0) to the top spine part (10), as RDR2's COM-matrix up row is read
+            let up = (d.centre(10) - d.centre(0)).normalize_or(Vec3::Z);
+            let (steps, foot) = sim.agent.balance_steps().map_or((-1, -1), |(a, b)| (a as i64, b as i64));
+            let t = (i + 1) as f32 / 60.0;
+            let _ = writeln!(self.frames, "{i},{t},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{m},{steps},{foot},{},{}",
+                c.x, c.y, c.z, v.x, v.y, v.z, v.length(), s.fwd.x, s.fwd.y, s.fwd.z, up.x, up.y, up.z, up.z.clamp(-1.0, 1.0).acos().to_degrees(),
+                low, fr.get(12).map_or(0.0, |f| f.translation.z), sim.health, sim.agent.nmx_active().join(";"));
+            if let Some(ch) = sim.agent.character() {
+                for (j, e) in ch.eff.iter().enumerate() {
+                    let a = ch.read.get(j).copied().unwrap_or([f32::NAN; 3]);
+                    let _ = writeln!(self.joints, "{i},{t},{j},{},{},{},{},{},{},{},{},{},{},{}", e.desired[0], e.desired[1], e.desired[2], a[0], a[1], a[2],
+                        e.muscle_stiffness, e.strength, e.damping, e.oppose_gravity, e.injury);
+                }
+            }
+        }
+    }
+}
+
 fn headless(mut sim: Sim, n: usize) {
     sim.button("balance");
     // RDR2_SLOPE=<degrees>: a ramp under him, rising along +x, through his feet (to try the RDR2 core on a slope)
@@ -9951,15 +9997,49 @@ fn headless(mut sim: Sim, n: usize) {
     // test hook: RDR2_SEND="70:shot fallingReaction=2;90:..." sends those message lines at those frames
     let sends: Vec<(usize, String)> = std::env::var("RDR2_SEND").unwrap_or_default().split(';')
         .filter_map(|x| x.split_once(':')).filter_map(|(f, l)| Some((f.trim().parse().ok()?, l.trim().to_string()))).collect();
+    // comparison hooks (headless only; nothing changes unless set): NMX_FIRE="shot back@180;..." presses those buttons
+    // at those frames instead of the frame-60 chest shot; NMX_PUSH="frame:part:dvx,dvy,dvz" gives that part an impulse of
+    // (his whole mass x dv) in his own frame (x forward, y left, z up), part 99 every part its own mass x dv; NMX_DUMP=<path> writes per-frame state to
+    // <path>.frames.csv and <path>.joints.csv
+    let fires: Option<Vec<(usize, String)>> = std::env::var("NMX_FIRE").ok().map(|v| v.split(';')
+        .filter_map(|x| x.rsplit_once('@')).filter_map(|(b, f)| Some((f.trim().parse().ok()?, b.trim().to_string()))).collect());
+    let push: Option<(usize, usize, Vec3)> = std::env::var("NMX_PUSH").ok().and_then(|v| {
+        let mut it = v.splitn(3, ':');
+        let (f, k, d) = (it.next()?.parse().ok()?, it.next()?.parse().ok()?, it.next()?);
+        let d: Vec<f32> = d.split(',').filter_map(|x| x.parse().ok()).collect();
+        Some((f, k, Vec3::new(*d.first()?, *d.get(1)?, *d.get(2)?)))
+    });
+    let mut dump = std::env::var("NMX_DUMP").ok().map(|p| nmx::Dump::new(&p));
     for i in 0..n {
-        if i == 60 {
-            sim.button("shot");
+        match &fires {
+            None if i == 60 => sim.button("shot"),
+            Some(f) => for (_, b) in f.iter().filter(|(at, _)| *at == i) {
+                sim.button(b);
+            },
+            _ => {}
+        }
+        if let Some((_, k, dv)) = push.filter(|p| p.0 == i) {
+            let s = sim.ours();
+            let fwd = s.fwd.with_z(0.0).normalize_or(Vec3::X);
+            let left = Vec3::Z.cross(fwd);
+            let dv = fwd * dv.x + left * dv.y + Vec3::Z * dv.z;
+            // part 99: every part gets its own mass x dv (the whole body moves at once)
+            let parts: Vec<usize> = if k == 99 { (0..sim.build.parts.len()).collect() } else { vec![k] };
+            for p in parts {
+                let at = sim.agent.doll.centre(p);
+                let j = dv * if k == 99 { sim.agent.doll.part_mass(p) } else { sim.agent.doll.mass() };
+                sim.agent.doll.impulse(p, at, j);
+            }
+            sim.say(format!("nmx  push part {k}: dv {dv:?}"));
         }
         for (_, l) in sends.iter().filter(|(f, _)| *f == i) {
             sim.send(l);
         }
         sim.tick();
         sim.rise(1.0 / 60.0);
+        if let Some(d) = dump.as_mut() {
+            d.frame(&sim, i);
+        }
         let line: Vec<String> = sim.agent.doll.frames().map(|f| {
             let (p, r) = (f.translation, f.rotation);
             [p.x, p.y, p.z, r.x, r.y, r.z, r.w].map(|x| format!("{:08x}", x.to_bits())).join(" ")
