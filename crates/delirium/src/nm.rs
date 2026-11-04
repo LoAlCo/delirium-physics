@@ -2229,6 +2229,9 @@ impl Agent {
                 let righting = !self.fallen && !self.extras.on.iter().any(|(n, _)| *n == "staggerFall");
                 torque.resize(torque.len().max(build.parts.len()), Vec3::ZERO);
                 crate::nmdbm::stay_upright(&body, &rec, dt, righting, &mut torque, &mut stay_at);
+                if let (true, true, Some(heading)) = (rec.turn_towards_bullets, !self.fallen, snap.core.bullet) {
+                    crate::nmdbm::turn_towards_bullets(&body, heading, dt, &mut torque);
+                }
             }
             if self.locomotion_tracking {
                 self.locomotion_terms=Some(locomotion_drive::NativeTerms{torque:torque.clone(),push:push.clone(),yaw:ch.foot_yaw,attached:snap.attached});
