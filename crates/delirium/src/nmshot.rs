@@ -28,6 +28,16 @@ pub(crate) fn chest_part() -> usize {
     SP()[4]
 }
 
+/// RDR2's spine limb parts in order: pelvis, the four spine parts, neck, head.
+pub(crate) fn spine_parts() -> [usize; 7] {
+    *SP()
+}
+
+/// RDR2's spine limb joints in order: the four spine joints, neck, head.
+pub(crate) fn spine_joints() -> [usize; 6] {
+    *SE()
+}
+
 pub(crate) fn limb(i: usize) -> Limb {
     if i < 2 {
         let c = (*CLAVICLE())[i];
@@ -323,6 +333,8 @@ pub struct Ctx<'a, 'b> {
     pub rfw: Option<RfwView>,
     /// RDR2 core: bodyBalance is running (the default arm pose leaves the arms to it)
     pub bb_on: bool,
+    /// the extras running this step, by message name (RDR2's behaviours read whether staggerFall runs)
+    pub extras_on: Vec<&'static str>,
 }
 
 /// What the shot's default arms read of RDR2's reachForWound, per hand: in a reach with the hand placed, how long
@@ -354,7 +366,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
         Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed,
-              dbm: None, shot_on: false, rfw: None, bb_on: false }
+              dbm: None, shot_on: false, rfw: None, bb_on: false, extras_on: vec![] }
     }
 
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.
@@ -1449,6 +1461,93 @@ struct ShotRdr2State {
 /// RDR2's relax: shotRelax's lower-body period with its default (ours: our relax message gives only the upper one).
 const RDR2_RELAX_LOWER: f32 = 0.4;
 
+/// RDR2's strength block (the shot's, shared with meleeReact): the weakness k, the base stiffnesses, the neck's
+/// stiffness and damping, the upper and lower strengths U and W, looseness and its multipliers, and whether the
+/// balancer is running (its leg stiffness then scaled up as the legs loosen).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Strength {
+    pub k: f32,
+    pub body_stiffness: f32,
+    pub arm_stiffness: f32,
+    pub spine_damping: f32,
+    pub neck: (f32, f32),
+    pub upper: f32,
+    pub lower: f32,
+    pub looseness: f32,
+    pub k_mult_on_loose: f32,
+    pub k_mult_4_legs: f32,
+    pub min_legs_looseness: f32,
+    pub min_arms_looseness: f32,
+    pub stable_hands_and_neck: bool,
+    pub balancing: bool,
+}
+
+/// RDR2's biped strength applier: the trunk, legs, arms, neck and wrists from a strength block, looseness-blended
+/// (L = looseness k + 1 - looseness); opposeGravity from U.
+pub(crate) fn apply_strength(c: &mut Ctx, s: &Strength, dt: f32) {
+    let (k, u, w) = (s.k, s.upper, s.lower);
+    let (ns, nd) = s.neck;
+    let h = (u + 1.0) * 0.5;
+    let l = s.looseness * k + (1.0 - s.looseness);
+    let m = ((1.0 - l) * s.k_mult_on_loose + 1.0) * h;
+    let lc = l.clamp(0.05, 1.0);
+    for i in 0..2 {
+        for j in limb(i).e {
+            c.og(j, h);
+        }
+    }
+    for &j in SPINE().iter() {
+        c.og(j, u + 1.0);
+    }
+    for &j in crate::nmrs::NECK().iter() {
+        c.og(j, 1.0);
+    }
+    c.ch.set_stiffness(m * s.body_stiffness, lc * s.spine_damping, "us", Some(lc));
+    let lg = s.min_legs_looseness.max(lc).min(2.0);
+    for i in 0..2 {
+        c.ch.eff[(*KNEE())[i]].muscle_stiffness = 1.5 * lg;
+        c.ch.eff[(*HIP())[i]].muscle_stiffness = 1.5 * lg;
+    }
+    if s.balancing {
+        // the balancer's leg stiffness, scaled up as the legs loosen (kMult4Legs)
+        let ml = ((1.0 - lg) * s.k_mult_4_legs + 1.0) * (w + 1.0) * 0.5;
+        for i in 0..2 {
+            let knee = &mut c.ch.eff[(*KNEE())[i]];
+            let base = knee.strength.sqrt();
+            let sigma = (ml * base).powi(2);
+            knee.strength = sigma;
+            if w < 1.0 {
+                let st = (base - 5.0) * w + 5.0;
+                let damp = (w + 1.0) * 0.5;
+                c.ch.eff[(*HIP())[i]].set_stiffness(st.min(sigma.sqrt()), damp, None);
+                c.ch.eff[(*KNEE())[i]].set_stiffness(st.min(sigma.sqrt()), damp, None);
+                c.ch.eff[(*ANKLE())[i]].set_stiffness((base - 3.0) * w + 3.0, 1.0, None);
+            }
+        }
+    }
+    let la = s.min_arms_looseness.max(lc).min(2.0);
+    let (mut o, mut d) = ([0.0f32; 2], [0.0f32; 2]);
+    if c.ch.busy[0] {
+        (o, d) = ([0.5, -0.5], [-0.2, 0.2]);
+    }
+    if c.ch.busy[1] {
+        (o, d) = ([-0.5, 0.5], [0.2, -0.2]);
+    }
+    c.ch.set_stiffness((o[0] + s.arm_stiffness) * m, (d[0] + 1.0) * lc, "ul", Some(la));
+    c.ch.set_stiffness((o[1] + s.arm_stiffness) * m, (d[1] + 1.0) * lc, "ur", Some(la));
+    if s.stable_hands_and_neck {
+        c.ch.set_stiffness(ns, nd, "un", Some(1.5));
+    } else {
+        c.ch.set_stiffness((ns * m).min(1.0 / (6.0 * dt) + 10.0), nd * lc, "un", Some(1.5 * lc));
+    }
+    c.ch.set_stiffness(13.0, 1.0, "uw", Some(1.0));
+    if u < 0.3 {
+        for &j in KNEE().iter() {
+            c.ch.eff[j].muscle_stiffness = 2.0 * u + 0.5;
+        }
+    }
+}
+
 impl Shot {
     /// RDR2's bullet intake for the core: the bullet's lean and twist over the body, the weakness and neck ramps
     /// restarted (alwaysResetLooseness), the exaggeration set going.
@@ -1550,65 +1649,11 @@ impl Shot {
         if !self.failed() {
             let ns = r.initial_neck_stiffness + (r.neck_stiffness - r.initial_neck_stiffness) * kn;
             let nd = r.initial_neck_damping + (r.neck_damping - r.initial_neck_damping) * kn;
-            let h = (u + 1.0) * 0.5;
-            let l = p.looseness_amount * k + (1.0 - p.looseness_amount);
-            let m = ((1.0 - l) * r.k_mult_on_loose + 1.0) * h;
-            let lc = l.clamp(0.05, 1.0);
-            for i in 0..2 {
-                for j in limb(i).e {
-                    c.og(j, h);
-                }
-            }
-            for &j in SPINE().iter() {
-                c.og(j, u + 1.0);
-            }
-            for &j in crate::nmrs::NECK().iter() {
-                c.og(j, 1.0);
-            }
-            c.ch.set_stiffness(m * p.body_stiffness, lc * r.spine_damping, "us", Some(lc));
-            let lg = r.min_legs_looseness.max(lc).min(2.0);
-            for i in 0..2 {
-                c.ch.eff[(*KNEE())[i]].muscle_stiffness = 1.5 * lg;
-                c.ch.eff[(*HIP())[i]].muscle_stiffness = 1.5 * lg;
-            }
-            if !self.no_balance && !c.dbm_failed {
-                // the balancer's leg stiffness, scaled up as the legs loosen (kMult4Legs)
-                let ml = ((1.0 - lg) * r.k_mult_4_legs + 1.0) * (w + 1.0) * 0.5;
-                for i in 0..2 {
-                    let knee = &mut c.ch.eff[(*KNEE())[i]];
-                    let base = knee.strength.sqrt();
-                    let sigma = (ml * base).powi(2);
-                    knee.strength = sigma;
-                    if w < 1.0 {
-                        let st = (base - 5.0) * w + 5.0;
-                        let damp = (w + 1.0) * 0.5;
-                        c.ch.eff[(*HIP())[i]].set_stiffness(st.min(sigma.sqrt()), damp, None);
-                        c.ch.eff[(*KNEE())[i]].set_stiffness(st.min(sigma.sqrt()), damp, None);
-                        c.ch.eff[(*ANKLE())[i]].set_stiffness((base - 3.0) * w + 3.0, 1.0, None);
-                    }
-                }
-            }
-            let la = r.min_arms_looseness.max(lc).min(2.0);
-            let (mut o, mut d) = ([0.0f32; 2], [0.0f32; 2]);
-            if c.ch.busy[0] {
-                (o, d) = ([0.5, -0.5], [-0.2, 0.2]);
-            }
-            if c.ch.busy[1] {
-                (o, d) = ([-0.5, 0.5], [0.2, -0.2]);
-            }
-            c.ch.set_stiffness((o[0] + r.arm_stiffness) * m, (d[0] + 1.0) * lc, "ul", Some(la));
-            c.ch.set_stiffness((o[1] + r.arm_stiffness) * m, (d[1] + 1.0) * lc, "ur", Some(la));
-            if p.stable_hands_and_neck {
-                c.ch.set_stiffness(ns, nd, "un", Some(1.5));
-            } else {
-                c.ch.set_stiffness((ns * m).min(1.0 / (6.0 * dt) + 10.0), nd * lc, "un", Some(1.5 * lc));
-            }
-            c.ch.set_stiffness(13.0, 1.0, "uw", Some(1.0));
-            if u < 0.3 {
-                for &j in KNEE().iter() {
-                    c.ch.eff[j].muscle_stiffness = 2.0 * u + 0.5;
-                }
-            }
+            apply_strength(c, &Strength { k, body_stiffness: p.body_stiffness, arm_stiffness: r.arm_stiffness, spine_damping: r.spine_damping,
+                                          neck: (ns, nd), upper: u, lower: w, looseness: p.looseness_amount, k_mult_on_loose: r.k_mult_on_loose,
+                                          k_mult_4_legs: r.k_mult_4_legs, min_legs_looseness: r.min_legs_looseness,
+                                          min_arms_looseness: r.min_arms_looseness, stable_hands_and_neck: p.stable_hands_and_neck,
+                                          balancing: !self.no_balance && !c.dbm_failed }, dt);
         }
         let s = &mut self.rd;
         if r.initial_weakness_zero <= s.tk {
