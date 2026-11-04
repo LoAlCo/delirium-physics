@@ -405,6 +405,12 @@ pub struct Rdr2 {
     pub stagger: bool,
     /// staggerFall's prediction time this step (bal+0x6bc over the base), in place of the balancer's own
     pub lead: Option<f32>,
+    /// teeter's addition to the prediction time this step (bal+0x6bc with +0x6c0 set)
+    pub lead_add: f32,
+    /// taperKneeStrength (bal+0x654): off while teeter boosts or leans away, and in highFall's landing on the feet
+    pub taper: bool,
+    /// teeter's exclusion plane this step (bal+0x33c): point, horizontal normal, side sign, offset
+    pub plane: Option<(bevy_math::Vec3, bevy_math::Vec3, f32, f32)>,
 }
 
 impl Rdr2 {
@@ -414,7 +420,7 @@ impl Rdr2 {
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false,
                leg_twist: (p.min_leg_twist, p.max_leg_twist), turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, pause: 0.0, aligned: false, landed: false, crouching: None,
-               started: false, stagger: false, lead: None }
+               started: false, stagger: false, lead: None, lead_add: 0.0, taper: true, plane: None }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.
@@ -512,6 +518,14 @@ impl Rdr2 {
         }
         let f = (v.length() - 1.0).clamp(0.0, 3.0) / 3.0;
         (-v.normalize_or_zero() * l * f * 0.5, l * f * 0.3)
+    }
+
+    /// The exclusion plane's clamp of a predicted point (RDR2's placement with bal+0x33c set: the offset alone):
+    /// e = (q - point - offset n).n; if side e > 0 the point is moved back onto the offset plane.
+    pub fn exclude(&self, q: bevy_math::Vec3) -> bevy_math::Vec3 {
+        let Some((at, n, side, off)) = self.plane else { return q };
+        let e = (q - at - n * off).dot(n);
+        if side * e > 0.0 { q - n * e } else { q }
     }
 
     /// Each foot's step width from the minimum spread `min` (GTA IV's: min x 0.3 + 0.08).

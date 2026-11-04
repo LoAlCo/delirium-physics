@@ -443,6 +443,8 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     f.centre = (f.pos[0] + f.pos[1]) * 0.5;
     f.dist = [0.0; 2];
     let pc = sat(s.hvel.mul_add(Vec3::splat(p.lead), s.com), up, sdot(f.centre, up, b"zyx"), b"yxz");
+    // RDR2 core: teeter's exclusion plane keeps the prediction on its side
+    let pc = match p.rdr2 { Some(r) if r.plane.is_some() => r.exclude(pc), _ => pc };
     let inside = match p.rdr2 {
         Some(r) => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172 - r.p.step_decision_threshold,
         None => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172,
@@ -1437,9 +1439,9 @@ impl Dbm {
             let (lean, more) = r.lean_against(horizontal(s.hvel, self.p.up));
             self.lean_vec += lean;
             if let Some(t) = r.lead {
-                self.p.lead = t + more;
-            } else if r.own_prediction() {
-                self.p.lead = r.prediction + more;
+                self.p.lead = t + more + r.lead_add;
+            } else if r.own_prediction() || r.lead_add != 0.0 {
+                self.p.lead = r.prediction + more + r.lead_add;
             }
             self.p.step_clamp += r.clamp_add;
         }
@@ -1462,7 +1464,7 @@ impl Dbm {
             if r.running {
                 (self.p.leg_stiffness, self.p.step_height) = (r.p.leg_stiffness_run, r.p.step_height_run);
             }
-            self.p.taper = if r.running { r.p.taper_knee_strength_run } else { c.taper } && !r.on_slope;
+            self.p.taper = if r.running { r.p.taper_knee_strength_run } else { c.taper } && !r.on_slope && r.taper;
         }
         if let (Some(r), i @ 1..=2) = (self.p.rdr2, was) {
             let (i, up) = (i as usize - 1, self.p.up);

@@ -123,6 +123,13 @@ pub struct Out {
     /// RDR2 core: staggerFall's stagger mode for the balancer this step, and its prediction time
     pub dbm_stagger: bool,
     pub dbm_lead: Option<f32>,
+    /// RDR2 core: teeter's addition to the balancer's prediction time this step (bal+0x6bc with +0x6c0 on)
+    pub dbm_lead_add: f32,
+    /// RDR2 core: the balancer's taperKneeStrength (bal+0x654) from now on, as teeter and highFall set it
+    pub dbm_taper: Option<bool>,
+    /// RDR2 core: teeter's exclusion plane this step (point, horizontal normal, side sign, offset): the balancer's
+    /// predicted COM is kept on the plane `offset` from the edge
+    pub dbm_plane: Option<(Vec3, Vec3, f32, f32)>,
     /// RDR2 core: a hip lean asked of the balancer (hipsLean*)
     pub hip_lean: Option<Vec3>,
     /// A lean asked for by an extra (RDR2's lean family, onFire's stagger): the balancer leans that way from the next
@@ -331,6 +338,8 @@ pub struct DbmView {
     pub planted: [bool; 2],
     /// the timed fail has started (RDR2's fail ramp)
     pub failing: bool,
+    /// the crouch request's hip pitch now (ours: RDR2's bal+0x578 negated)
+    pub hip_pitch: f32,
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {
