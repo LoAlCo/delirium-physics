@@ -90,6 +90,11 @@ pub trait Extra: Send + Sync {
     }
     /// The RDR2 core's reachForWound: the shot's releaseWound lets these hands go this step.
     fn rfw_release(&mut self, _hands: [bool; 2]) {}
+    /// The RDR2 core's animPose: whether headLook, pointArm's left arm and its right arm yield to it (its override
+    /// set and its effectorMask holding those joints). None when it isn't running RDR2's way.
+    fn anim_pose_yield(&self) -> Option<[bool; 3]> {
+        None
+    }
 }
 
 #[derive(Default)]

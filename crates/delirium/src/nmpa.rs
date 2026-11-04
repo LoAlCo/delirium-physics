@@ -52,6 +52,8 @@ pub struct PointArm {
     pub(crate) pointing: bool,
     /// RDR2: each arm's pointing flag (left, right)
     pointing2: [bool; 2],
+    /// RDR2 core: the arms (left, right) animPose holds this tick (its overidePointArm and effectorMask)
+    pub held: [bool; 2],
 }
 
 impl Default for PointArmParams {
@@ -64,7 +66,7 @@ impl Default for PointArmParams {
 
 impl Default for PointArm {
     fn default() -> PointArm {
-        PointArm { p: PointArmParams::default(), reach: delirium_data::kv!(74), active: false, pointing: false, pointing2: [true; 2] }
+        PointArm { p: PointArmParams::default(), reach: delirium_data::kv!(74), active: false, pointing: false, pointing2: [true; 2], held: [false; 2] }
     }
 }
 
@@ -106,10 +108,9 @@ impl PointArm {
             return;
         }
         if let Some(arms) = self.p.rdr2.filter(|_| c.ch.rdr2) {
-            // the right arm first, as RDR2 does; RDR2 skips an arm the unnamed slot-0xd8 behaviour holds (Delirium
-            // has none)
+            // the right arm first, as RDR2 does, skipping an arm animPose (slot 0xd8) holds
             for i in [1, 0] {
-                if arms[i].use_arm {
+                if arms[i].use_arm && !self.held[i] {
                     self.arm_rdr2(c, i, arms[i]);
                 }
             }

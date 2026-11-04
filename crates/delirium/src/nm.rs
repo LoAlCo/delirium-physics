@@ -1733,6 +1733,7 @@ impl Agent {
             }
             let mut out = crate::nmshot::Out::default();
             let mut c = crate::nmshot::Ctx::new(&mut *ch, &body, &mut out, dbm_lost);
+            c.incoming = &self.incoming;
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             c.shot_on = self.nm_shot.is_some();
             c.dbm = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).filter(|_| !self.fallen).map(|d| crate::nmshot::DbmView {
@@ -1999,10 +2000,14 @@ impl Agent {
                 self.nm_gr.tick(&mut c, &mut self.nm_head, &mut self.nm_twist, dbm, dt);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xd0); }
-            if (hl_was || (shot_out.head_look_start.is_none() && !shot_out.head_look_activate)) && !waits(walk_actives!(self), W_HEAD()) {
+            // RDR2 core: headLook and pointArm's arms yield to animPose when its override is set and it holds them
+            let ap = self.extras.on.iter().filter(|_| c.ch.rdr2).find(|(n, _)| *n == "animPose").and_then(|(_, e)| e.anim_pose_yield());
+            let ap = ap.unwrap_or_default();
+            if (hl_was || (shot_out.head_look_start.is_none() && !shot_out.head_look_activate)) && !waits(walk_actives!(self), W_HEAD()) && !ap[0] {
                 self.nm_head.tick(c.ch, &body, dt);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xf8); }
+            self.nm_pa.held = [ap[1], ap[2]];
             self.nm_pa.tick(&mut c);
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x100); }
             // an extra (RDR2's duck) may ask the balancer to crouch; nothing else here sets these, so they're None

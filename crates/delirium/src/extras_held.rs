@@ -108,6 +108,7 @@ pub static MESSAGES: [Message; 15] = [
         Param { name: "righting", kind: Kind::Bool, used: true, doc: "turn him face up (true)" },
         Param { name: "rightingStrength", kind: Kind::Float, used: true, doc: "of his weight, as torque (0.3)" },
         Param { name: "rightingTime", kind: Kind::Float, used: true, doc: "s it lasts, easing off (2)" },
+        Param { name: "footBuoyancy", kind: Kind::Float, used: true, doc: "RDR2 core: times buoyancy on the shins and feet (0.1)" },
     ] },
     Message { name: "animPose", params: &[
         Param { name: "pose", kind: Kind::Str, used: true, doc: "joint:a,b,c;joint:a,b,c; angles in radians (empty: hold the pose he is in)" },
@@ -148,6 +149,14 @@ pub static MESSAGES: [Message; 15] = [
         Param { name: "dampenSideMotionInstanceIndex", kind: Kind::Int, used: false, doc: "(not done)" },
         Param { name: "vDampenPlanePoint", kind: Kind::Vec3, used: false, doc: "(not done)" },
         Param { name: "vDampenPlaneNormal", kind: Kind::Vec3, used: true, doc: "brakes motion along it (zero: off)" },
+        Param { name: "effectorMask", kind: Kind::Str, used: true, doc: "RDR2 core: the joints it drives (fb; mask is read when this isn't sent)" },
+        Param { name: "stiffnessLeftAnkle", kind: Kind::Float, used: true, doc: "RDR2 core (-1: leave it)" },
+        Param { name: "dampingLeftAnkle", kind: Kind::Float, used: true, doc: "RDR2 core (1)" },
+        Param { name: "muscleStiffnessLeftAnkle", kind: Kind::Float, used: true, doc: "RDR2 core (-1: none)" },
+        Param { name: "stiffnessRightAnkle", kind: Kind::Float, used: true, doc: "RDR2 core (-1: leave it)" },
+        Param { name: "dampingRightAnkle", kind: Kind::Float, used: true, doc: "RDR2 core (1)" },
+        Param { name: "muscleStiffnessRightAnkle", kind: Kind::Float, used: true, doc: "RDR2 core (-1: none)" },
+        Param { name: "dampenSideMotionInstanceHandle", kind: Kind::Int, used: false, doc: "RDR2 core (not done: no instances)" },
     ] },
     Message { name: "armsWindmill", params: &[
         Param { name: "leftNormal", kind: Kind::Vec3, used: true, doc: "the circle's plane normal, his frame: x forward, y left, z up (0 1 0); RDR2 core: the circle's turns about the chest's X, Y, Z, rad (0 0.2 0.2)" },
@@ -772,19 +781,88 @@ pub struct Buoyancy {
     strength: f32,
     time: f32,
     t: f32,
+    /// RDR2 core: the message read with RDR2's defaults (rdr2_buoyancy.md section 2)
+    rdr2: BuoyancyRdr2,
 }
+
+/// RDR2's buoyancy parameters: buoyancy, chestBuoyancy, footBuoyancy, damping, the plane (point, normal),
+/// righting, rightingStrength (rightingTime is parsed by RDR2 but never read).
+struct BuoyancyRdr2 { buoyancy: f32, chest: f32, foot: f32, damping: f32, point: Vec3, normal: Vec3, righting: bool, strength: f32 }
 
 impl Buoyancy {
     fn new(p: &mut P) -> Result<Buoyancy, Error> {
+        let rdr2 = BuoyancyRdr2 { buoyancy: p.f("buoyancy", 1.0)?, chest: p.f("chestBuoyancy", 8.0)?, foot: p.f("footBuoyancy", 0.1)?,
+                                  damping: p.f("damping", 40.0)?, point: p.v("surfacePoint", Vec3::ZERO)?, normal: p.v("surfaceNormal", Vec3::Z)?,
+                                  righting: p.b("righting", true)?, strength: p.f("rightingStrength", 25.0)? };
         Ok(Buoyancy { buoyancy: p.f("buoyancy", delirium_data::kv!(138))?, chest: p.f("chestBuoyancy", 0.5)?, damping: p.f("damping", delirium_data::kv!(5))?,
                       point: p.v("surfacePoint", Vec3::ZERO)?, normal: p.v("surfaceNormal", Vec3::Z)?.normalize_or(Vec3::Z),
                       righting: p.b("righting", true)?, strength: p.f("rightingStrength", delirium_data::kv!(24))?, time: p.f("rightingTime", 2.0)?,
-                      t: 0.0 })
+                      t: 0.0, rdr2 })
+    }
+
+    /// RDR2's tick (rdr2_buoyancy.md section 4). Each part whose lowest point (centre less its half-size along the
+    /// normal) is under the plane gets lift 9810 x volume x (depth / full height, at most 1) x buoyancy (x
+    /// chestBuoyancy on the upper two spine parts, x footBuoyancy on the shins and feet) along the normal and a
+    /// mass-free drag of -damping x its velocity. Righting: with the third spine part (RDR2's part 9) wet, a torque
+    /// about up x its axis 0, (angle - 0.2) x rightingStrength, ramping in over 2 s from when it got wet.
+    /// Ours: Delirium has no core water plane (setCharacterUnderwater), so the message's plane (or its defaults) is
+    /// always used; the part's half-size and volume are from its capsule or box (RDR2 reads its bound's); RDR2's
+    /// "vector x dt at the part" is taken as a force.
+    fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let r = &self.rdr2;
+        let n = r.normal.normalize_or_zero();
+        let spine = crate::nmshot::spine_parts();
+        let (chest, nine) = ([spine[3], spine[4]], spine[3]);
+        let (l, rl) = (crate::nmshot::limb(2), crate::nmshot::limb(3));
+        let feet = [l.p[2], l.p[3], rl.p[2], rl.p[3]];
+        let mut wet9 = false;
+        for (k, d) in c.b.build.parts.iter().enumerate() {
+            let (half, vol) = match d.boxed {
+                Some(e) => (2.0 * e.min_element(), 8.0 * e.x * e.y * e.z),
+                None => (d.radius, std::f32::consts::PI * d.radius * d.radius * (2.0 * d.half + 4.0 / 3.0 * d.radius)),
+            };
+            let p = c.b.part(k);
+            let h = (r.point - (p.m.d - n * half)).dot(n);
+            if h <= 0.0 {
+                continue;
+            }
+            let full = 2.0 * half;
+            let mut b = r.buoyancy;
+            if chest.contains(&k) {
+                b *= r.chest;
+            }
+            if feet.contains(&k) {
+                b *= r.foot;
+            }
+            let lift = 9810.0 * vol * (h.min(full) / full) * b;
+            c.out.force(k, n * lift);
+            c.out.force(k, p.v * -r.damping);
+            if k == nine {
+                wet9 = true;
+                if r.righting {
+                    let a = p.m.a;
+                    let w = c.ch.up.normalize_or_zero();
+                    let x = w.cross(a);
+                    let th = x.length().min(1.0).asin();
+                    self.t += dt;
+                    let ramp = 0.5 * self.t.clamp(0.0, 2.0);
+                    if th - 0.2 > 0.0 {
+                        c.out.torque(k, x.normalize_or_zero() * ((th - 0.2) * r.strength * ramp));
+                    }
+                }
+            }
+        }
+        if !wet9 {
+            self.t = 0.0;
+        }
     }
 }
 
 impl Extra for Buoyancy {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c, dt);
+        }
         if self.point == Vec3::ZERO {
             self.point = pos(c, CHEST());
         }
@@ -824,6 +902,33 @@ pub struct AnimPose {
     connected: [bool; 4],
     plane: Vec3,
     frozen: bool,
+    /// RDR2 core: the message read with RDR2's names and defaults (rdr2_animpose.md section 2)
+    rdr2: AnimPoseRdr2,
+    r2_on: bool,
+}
+
+/// RDR2's animPose parameters. Limbs in RDR2's order: left arm, right arm, spine, left leg, right leg, left ankle,
+/// right ankle; gravComp for the first five; connected hands and feet: 1 on, 0 off, -1 by contact, -2 untouched.
+struct AnimPoseRdr2 {
+    global: [f32; 4],
+    mask: String,
+    over: [bool; 3],
+    limbs: [[f32; 3]; 7],
+    grav: [f32; 5],
+    connected: [i32; 4],
+    source: i32,
+}
+
+/// RDR2's animPose limb masks, in its parameter order (the spine's stiffness mask takes the neck and head, its
+/// gravity mask the spine joints only).
+const RDR2_LIMBS: [&str; 7] = ["ul", "ur", "uk", "ll", "lr", "la", "ra"];
+
+fn rdr2_limb(m: &str) -> Vec<usize> {
+    match m {
+        "la" => vec![(*ANKLE())[0]],
+        "ra" => vec![(*ANKLE())[1]],
+        _ => Character::mask(m),
+    }
 }
 
 const REGIONS: [(&str, &str); 5] = [("LeftArm", "ul"), ("RightArm", "ur"), ("Spine", "uk"), ("LeftLeg", "ll"), ("RightLeg", "lr")];
@@ -837,9 +942,12 @@ impl AnimPose {
                 *x = p.f(&format!("{what}{name}"), -1.0)?;
             }
         }
+        let rdr2 = Self::rdr2(p)?;
         let _ = (p.b("useZMPGravityCompensation", false)?, p.i("animSource", 0)?, p.i("dampenSideMotionInstanceIndex", -1)?);
         let _ = p.v("vDampenPlanePoint", Vec3::ZERO)?;
         Ok(AnimPose {
+            rdr2,
+            r2_on: false,
             pose: parse_pose(&p.s("pose", "")?),
             mask: p.s("mask", "fb")?,
             global,
@@ -851,10 +959,114 @@ impl AnimPose {
             frozen: false,
         })
     }
+
+    fn rdr2(p: &mut P) -> Result<AnimPoseRdr2, Error> {
+        let global = [p.f("stiffness", -1.0)?, p.f("damping", 1.0)?, p.f("muscleStiffness", -1.0)?, p.f("gravityCompensation", -1.0)?];
+        let mask = match p.s("effectorMask", "")? {
+            m if m.is_empty() => p.s("mask", "fb")?,
+            m => m,
+        };
+        let mut limbs = [[-1.0, 1.0, -1.0]; 7];
+        for (l, name) in limbs.iter_mut().zip(["LeftArm", "RightArm", "Spine", "LeftLeg", "RightLeg", "LeftAnkle", "RightAnkle"]) {
+            *l = [p.f(&format!("stiffness{name}"), -1.0)?, p.f(&format!("damping{name}"), 1.0)?, p.f(&format!("muscleStiffness{name}"), -1.0)?];
+        }
+        let mut grav = [-1.0; 5];
+        for (g, name) in grav.iter_mut().zip(["LeftArm", "RightArm", "Spine", "LeftLeg", "RightLeg"]) {
+            *g = p.f(&format!("gravComp{name}"), -1.0)?;
+        }
+        let _ = (p.b("useZMPGravityCompensation", true)?, p.i("dampenSideMotionInstanceHandle", 0)?);
+        Ok(AnimPoseRdr2 {
+            global, mask, limbs, grav,
+            over: [p.b("overideHeadlook", false)?, p.b("overidePointArm", false)?, p.b("overidePointGun", false)?],
+            connected: [p.i("connectedLeftHand", 0)?, p.i("connectedRightHand", 0)?, p.i("connectedLeftFoot", -2)?, p.i("connectedRightFoot", -2)?],
+            source: p.i("animSource", 0)?,
+        })
+    }
+
+    /// RDR2's tick (rdr2_animpose.md section 4, biped): the global stiffness on effectorMask (if >= 0); the limbs
+    /// that meet effectorMask driven to the incoming animation (animSource < 3); the global gravity opposition on
+    /// effectorMask (if >= 0); each limb's own stiffness on its fixed mask (even outside effectorMask); a connected
+    /// hand or foot (1, or -1 with its end part touching) gets its wrist or ankle at (16, 1, muscle 12); each limb's
+    /// own gravity opposition. The overrides make headLook and pointArm yield (nm.rs); animPose drives those joints.
+    /// Ours or left out: Delirium has one incoming pose, so every animSource below 3 reads it, and without one the
+    /// limbs go to the pose he was in when he went ragdoll (the effectors' zero); no instances, so no side-motion
+    /// damping (dampenSideMotionInstanceHandle); the ZMP gravity-compensation flag and the connected-joint flags have
+    /// no reader in Delirium.
+    fn tick_rdr2(&mut self, c: &mut Ctx) {
+        self.r2_on = true;
+        let r = &self.rdr2;
+        let mine = Character::mask(&r.mask);
+        let [s, d, ms, g] = r.global;
+        if s >= 0.0 {
+            for &j in &mine {
+                c.ch.eff[j].set_stiffness(s, d, (ms >= 0.0).then_some(ms));
+            }
+        }
+        if r.source < 3 {
+            let m = (!c.incoming.is_empty()).then(|| crate::nmrs::incoming_rows(&c.b.doll.links, c.incoming));
+            for l in ["ul", "ur", "ll", "lr", "uk"].map(Character::mask) {
+                if !l.iter().any(|j| mine.contains(j)) {
+                    continue;
+                }
+                for j in l {
+                    c.ch.eff[j].desired = match &m {
+                        Some(m) => c.ch.incoming_angle(j, m),
+                        None => c.ch.eff[j].zero,
+                    };
+                }
+            }
+        }
+        if g >= -1e-5 {
+            for &j in &mine {
+                c.ch.eff[j].oppose_gravity = g;
+            }
+        }
+        for i in [0, 1, 3, 4, 5, 6, 2] {
+            let [s, d, ms] = r.limbs[i];
+            if s >= 0.0 {
+                for j in rdr2_limb(RDR2_LIMBS[i]) {
+                    c.ch.eff[j].set_stiffness(s, d, (ms >= 0.0).then_some(ms));
+                }
+            }
+        }
+        for (i, &v) in r.connected.iter().enumerate() {
+            // limbs 0..3 are the left and right arm, then the left and right leg: the hand or foot is the last part
+            let l = crate::nmshot::limb(i);
+            if v == 1 || (v == -1 && c.b.doll.collided(&[l.p[3]])) {
+                c.ch.eff[l.e[3]].set_stiffness(16.0, 1.0, Some(12.0));
+            }
+        }
+        for (i, m) in ["ul", "ur", "us", "ll", "lr"].into_iter().enumerate() {
+            if r.grav[i] >= -1e-5 {
+                for j in Character::mask(m) {
+                    c.ch.eff[j].oppose_gravity = r.grav[i];
+                }
+            }
+        }
+    }
 }
 
 impl Extra for AnimPose {
+    fn stop(&mut self, c: &mut Ctx) {
+        // RDR2's deactivate: gravity opposition off on effectorMask (and the ZMP flag back on, which has no reader)
+        if self.r2_on {
+            for j in Character::mask(&self.rdr2.mask) {
+                c.ch.eff[j].oppose_gravity = 0.0;
+            }
+        }
+    }
+
+    fn anim_pose_yield(&self) -> Option<[bool; 3]> {
+        let r = &self.rdr2;
+        let mine = Character::mask(&r.mask);
+        let owns = |m: Vec<usize>| m.iter().any(|j| mine.contains(j));
+        self.r2_on.then(|| [r.over[0] && owns((*NECK()).to_vec()), r.over[1] && owns(Character::mask("ul")), r.over[1] && owns(Character::mask("ur"))])
+    }
+
     fn tick(&mut self, c: &mut Ctx, _dt: f32) {
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c);
+        }
         let mine = Character::mask(&self.mask);
         if !self.frozen {
             self.frozen = true;
@@ -1032,6 +1244,8 @@ pub struct Twist {
     always: bool,
     twisting: Option<bool>,
     out: Vec<String>,
+    /// RDR2 core: RDR2's spineTwist (nmst.rs), started on the first tick
+    r2: Option<crate::nmst::SpineTwist>,
 }
 
 impl Twist {
@@ -1039,7 +1253,24 @@ impl Twist {
         Ok(Twist { pos: p.v("pos", Vec3::ZERO)?, offset: p.f("offset", 0.0)?,
                    vel: Vec3::new(p.f("velX", 0.0)?, p.f("velY", 0.0)?, p.f("velZ", 0.0)?), excess: p.f("spineTwistExcess", delirium_data::kv!(140))?,
                    k: (p.f("spStrength", delirium_data::kv!(21))?, p.f("spDamping", 2.0)?), clav: p.b("twistClavicles", true)?,
-                   always: p.b("allwaysTwist", false)?, twisting: None, out: vec![] })
+                   always: p.b("allwaysTwist", false)?, twisting: None, out: vec![], r2: None })
+    }
+
+    /// RDR2 core: RDR2's spineTwist has no message (other behaviours drive it), so this one drives it with the
+    /// message's target, its velocity (led, not moved: RDR2 moves no target), offset, twistClavicles and
+    /// allwaysTwist. RDR2's limit excess is a fixed 0.35 and it sets no stiffness, so spineTwistExcess, spStrength
+    /// and spDamping are not used.
+    fn tick_rdr2(&mut self, c: &mut Ctx) {
+        let (pos, vel, offset, arms, always) = (self.pos, self.vel, self.offset, self.clav, self.always);
+        let st = self.r2.get_or_insert_with(Default::default);
+        (st.pos, st.vel, st.offset, st.arms, st.always) = (pos, vel, offset, arms, always);
+        st.activate(c.ch);
+        st.tick(c.ch, c.b);
+        let on = st.twisting;
+        if self.twisting != Some(on) {
+            self.twisting = Some(on);
+            self.out.push(format!("#say spineTwist {}", if on { "twisting" } else { "stopped" }));
+        }
     }
 }
 
@@ -1047,6 +1278,9 @@ impl Extra for Twist {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
         if self.pos == Vec3::ZERO {
             self.pos = pos(c, CHEST()) + Vec3::Z.cross(facing(c)) * delirium_data::kv!(12) - facing(c) * 0.5;
+        }
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c);
         }
         self.pos += self.vel * dt;
         let p = c.b.part(0);

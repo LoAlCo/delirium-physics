@@ -335,6 +335,8 @@ pub struct Ctx<'a, 'b> {
     pub bb_on: bool,
     /// the extras running this step, by message name (RDR2's behaviours read whether staggerFall runs)
     pub extras_on: Vec<&'static str>,
+    /// RDR2 core: the incoming animation's part frames (empty: none), which animPose drives the limbs to
+    pub incoming: &'a [Transform],
 }
 
 /// What the shot's default arms read of RDR2's reachForWound, per hand: in a reach with the hand placed, how long
@@ -368,7 +370,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
         Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed,
-              dbm: None, shot_on: false, rfw: None, bb_on: false, extras_on: vec![] }
+              dbm: None, shot_on: false, rfw: None, bb_on: false, extras_on: vec![], incoming: &[] }
     }
 
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.

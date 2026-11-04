@@ -58,6 +58,8 @@ pub fn slot(message: &str) -> u32 {
         "shotSnap" | "shotSpin" | "shotFromBehind" | "shotInGuts" | "shotInjuredLeg" | "shotInjuredArm" | "shotFallToKnees" => 0x38,
         "staggerFall" => 0x48,
         "teeter" => 0x50,
+        "spineTwist" => 0x68,
+        "animPose" => 0xd8,
         "meleeReact" => 0x40,
         "armsWindmill" => 0x58,
         "handsAndKnees" => 0x70,
