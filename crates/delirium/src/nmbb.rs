@@ -706,7 +706,8 @@ impl BodyBalance {
         for i in Character::mask("ub") {
             blend(&mut ch.eff[i].desired, [0.0; 3], w);
         }
-        ch.stabilise = Some((2.0, delirium_data::kv!(223)));
+        // RDR2's bodyBalance has no stayUpright step (rdr2_bodybalance.md): GTA IV's stabiliser stays off
+        ch.stabilise = None;
         out
     }
 }
