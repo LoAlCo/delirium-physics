@@ -2455,7 +2455,12 @@ impl Agent {
         drive.muscles = &m;
         self.nm_gr.hold_points(|k, at| self.doll.grip_local(k, at));
         self.doll.grips = self.nm_gr.grips();
-        self.doll.contact_off = self.nm_gr.contact_off;
+        // RDR2 core's sit: its seat constraints, as grips
+        for &(k, at, to, len, strength) in &self.extras.ropes {
+            let local = self.doll.grip_local(k, at);
+            self.doll.grips.push((k, local, to, len, strength));
+        }
+        self.doll.contact_off = self.nm_gr.contact_off | self.extras.contact_off;
         if let Some(pairs) = crate::nmrs::SELF[build.nm].get().filter(|_| build.parts.len() == delirium_data::nm_asset::PARTS.len()) {
             let legs = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).is_some_and(|d| d.held);
             let hands = self.nm_fl.hands_off;

@@ -4088,7 +4088,9 @@ impl Sim {
         };
         let (seat, up, fwd, st) = h.saddle();
         let v = |p: Vec3| format!("{},{},{}", p.x, p.y, p.z);
-        self.send(&format!("rdr2Sit start=true mountTime=1.2 seatPos={} seatUp={} seatForward={} stirrupL={} stirrupR={}", v(seat), v(up), v(fwd), v(st[0]), v(st[1])));
+        // RDR2 core: RDR2's sit holds him to the seat only with constrain 2 (its default is none)
+        let held = if self.rdr2_core { " constrain=2" } else { "" };
+        self.send(&format!("rdr2Sit start=true mountTime=1.2 seatPos={} seatUp={} seatForward={} stirrupL={} stirrupR={}{held}", v(seat), v(up), v(fwd), v(st[0]), v(st[1])));
         self.riding = true;
     }
 
@@ -9891,6 +9893,10 @@ fn headless(mut sim: Sim, n: usize) {
     // from their pose printed every half second; at 2 s, HORSE_DIE kills it, HORSE_SHOOT=k,k,... hits those parts (40
     // damage and a 40 N s push each; two on a leg lame it); HORSE_SET=name=value,... sets its quadrupedbase settings
     if let Ok(f) = std::env::var("HORSE_TEST") {
+        // HORSE_CORE: with the RDR2 core
+        if std::env::var("HORSE_CORE").is_ok() {
+            sim.button("rdr2 core");
+        }
         sim.horse_file = f;
         sim.horse_frag = std::env::var("HORSE_FRAG").unwrap_or_default();
         sim.spawn_horse();
@@ -9901,13 +9907,24 @@ fn headless(mut sim: Sim, n: usize) {
         }
         for i in 0..n {
             // HORSE_RIDE: Homer gets on at 0.5 s; =throw throws him off at 4 s, =push shoves his chest sideways then,
-            // =drag gets on with drag=true and throws him off at 4 s
+            // =drag gets on with drag=true and throws him off at 4 s; with the core, =dead sends health=0 at 4 s,
+            // =slump gets on with slump=true and does the same, =shot sends a bullet's impulse into his chest then
             if let Ok(r) = std::env::var("HORSE_RIDE") {
                 if i == 30 {
                     if r == "drag" {
                         sim.param_edits.insert(("rdr2Sit", "drag"), Value::Bool(true));
                     }
+                    if r == "slump" {
+                        sim.param_edits.insert(("rdr2Sit", "slump"), Value::Bool(true));
+                    }
                     sim.ride();
+                }
+                if i == 240 && matches!(r.as_str(), "dead" | "slump") {
+                    sim.send("rdr2Sit health=0");
+                }
+                if i == 240 && r == "shot" {
+                    let at = sim.agent.doll.frames().nth(10).map_or(Vec3::ZERO, |f| f.translation);
+                    sim.send(&format!("applyBulletImpulse start=true partIndex=10 hitPoint={},{},{} impulse=0,40,0", at.x, at.y, at.z));
                 }
                 if i == 240 && matches!(r.as_str(), "throw" | "drag") {
                     sim.send("rdr2Sit throw=true");
@@ -9951,8 +9968,9 @@ fn headless(mut sim: Sim, n: usize) {
                 }
             }
         }
+        let core = std::env::var("HORSE_CORE").is_ok();
         for (t, l, _) in &sim.log {
-            if l.contains("horse") || l.contains("rdr2Sit") || l.contains("ride") { eprintln!("{t:.2} {}", l.chars().take(160).collect::<String>()); }
+            if l.contains("horse") || l.contains("rdr2Sit") || l.contains("ride") || (core && l.contains("MSG")) { eprintln!("{t:.2} {}", l.chars().take(160).collect::<String>()); }
         }
         return;
     }
