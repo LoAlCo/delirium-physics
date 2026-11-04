@@ -18,10 +18,13 @@
 //! - RDR2's per-joint scale layer (the shot's looseness law lowering strength, the lowest wins) is not here: the GTA
 //!   IV shot writes strengths, not looseness scales, and taking the lowest undid the balancer's leg stiffness.
 //!
-//! Priorities: RDR2's behaviours open their requests at a priority their constructor sets, numbered in the order of
-//! their behaviour slot (balancer 0x18 first, then bodyBalance 0x20, braceForImpact 0x28, shot 0x38 ... keyframe
-//! 0x120); the core's own requests come after all of them. That the queue runs in that order (lowest number first)
-//! is our reading: the code that sorts it hasn't been found. Here a priority is the RDR2 slot.
+//! Priorities: RDR2's tick runner opens each behaviour's context at its id (+0xc; the constructors set it: balancer
+//! 1, bodyBalance 2, braceForImpact 3, shot 5 ... keyframe 0x22) and the core messages' at 0x27, above every id
+//! (rdr2_exporter_design.md 2.2; the base init's +0x10 = 0x27 is the starter id, which the constructors reset to -1).
+//! Here a priority is the behaviour's slot, 8 id + 0x10, the same order, and the core's 0x138 stays above them all.
+//! RDR2's limb update sorts the queue highest priority first, stable (limbOrderReversed). In Delirium the game's core
+//! messages are written straight into the joints when they arrive, before the first mark, so they are the baseline
+//! the behaviours change rather than requests.
 
 use crate::nmrs::Effector;
 
@@ -45,7 +48,7 @@ fn set(e: &mut Effector, k: usize, v: f32) {
 /// The shot's slot.
 pub const SHOT: u32 = 0x38;
 
-/// The core's own requests (setStiffness and the like, sent by the game) come after every behaviour.
+/// The core's own requests (RDR2: 0x27, above every behaviour id) rank above every behaviour.
 pub const CORE: u32 = 0x138;
 
 /// RDR2's behaviour slot for a message an extra handles (the core's for those with none).
@@ -122,8 +125,10 @@ impl Requests {
     }
 
     /// RDR2's resolution: per channel, the requests in priority order, each filling what is left; every request here
-    /// has weight 1, so the highest-priority one fills it. Within one priority the latest write counts, as it does
-    /// within one behaviour.
+    /// has weight 1, so the highest-priority one fills it. Within one priority the latest write counts: one
+    /// behaviour's marks share its priority, and RDR2 runs a behaviour's whole tick in one context, whose record a
+    /// later write overwrites (the shot: rdr2_shot_core.md section 4). RDR2's stable sort (the first pushed wins a
+    /// tie) only matters between separate contexts at one priority, which these marks don't make.
     /// `reversed`: the highest slot first instead (the other reading of the queue order, for comparison).
     pub fn resolve(mut self, eff: &mut [Effector], reversed: bool) {
         if reversed {
