@@ -23,6 +23,11 @@ pub(crate) struct Limb {
     pub p: [usize; 4],
 }
 
+/// The chest part (RDR2's part 10), whose frame armsWindmill's circles are fixed to.
+pub(crate) fn chest_part() -> usize {
+    SP()[4]
+}
+
 pub(crate) fn limb(i: usize) -> Limb {
     if i < 2 {
         let c = (*CLAVICLE())[i];
@@ -1690,21 +1695,7 @@ struct DefaultArms {
     release_t: [f32; 2],
     release: [bool; 2],
     hold: [[f32; 7]; 2],
-    aw: Option<Windmill>,
-}
-
-/// RDR2's armsWindmill as the shot runs it: each arm's phase, the shot's radius, speed, stiffness and phase
-/// additions, which arms it drives, and whether each hand is still clear of contact (disableOnImpact).
-#[derive(Clone, Copy, Debug, Default)]
-struct Windmill {
-    theta: [f32; 2],
-    delta: [f32; 2],
-    speed_add: [f32; 2],
-    ks_add: f32,
-    ke_add: f32,
-    phase_add: f32,
-    on: [bool; 2],
-    live: [bool; 2],
+    aw: Option<crate::nmwm::Windmill>,
 }
 
 /// One armsWindmill circle as the shot configures it: centre in the chest's frame, the frame's three turns (rad),
@@ -1726,10 +1717,6 @@ const AW_CIRCLES: [Circle; 2] = [
 const AW_STIFFNESS: f32 = 9.0;
 const AW_PHASE: f32 = 60.0;
 const AW_ELBOW_MIN: f32 = 0.5;
-
-fn wrap_2pi(x: f32) -> f32 {
-    x.rem_euclid(std::f32::consts::TAU)
-}
 
 impl Shot {
     fn arms_enter(&mut self, c: &mut Ctx) {
@@ -1950,98 +1937,29 @@ impl Shot {
         window
     }
 
-    /// RDR2's armsWindmill as the shot runs it: started with each arm's phase from where its hand is, the circles'
-    /// radii, speeds, stiffness and phase gap grown with how fast he goes back; each arm circles its hand on an
-    /// ellipse in the chest's frame (the right one mirrored from the left), the two kept a phase apart, and stops
+    /// RDR2's armsWindmill as the shot runs it (nmwm.rs): started with each arm's phase from where its hand is, the
+    /// circles' radii, speeds, stiffness and phase gap grown with how fast he goes back; each arm circles its hand on
+    /// an ellipse in the chest's frame (the right one mirrored from the left), the two kept a phase apart, and stops
     /// for good once its hand touches something.
     fn windmill(&mut self, c: &mut Ctx, r: ShotRdr2, u: f32, spd: f32, dt: f32) {
         let leg = (c.b.joint_pos((*HIP())[0]) - c.b.joint_pos((*ANKLE())[0])).length().max(0.1);
-        let chest = c.b.part(SP()[4]).m;
-        let circle = |i: usize| -> ([Vec3; 3], Vec3) {
-            let l = &AW_CIRCLES[0];
-            let mut f = [chest.a, chest.b, chest.c];
-            let turn = |f: &mut [Vec3; 3], p: usize, q: usize, ang: f32| {
-                let (s, co) = ang.sin_cos();
-                let (x, y) = (f[p], f[q]);
-                (f[p], f[q]) = (x * co + y * s, y * co - x * s);
-            };
-            turn(&mut f, 0, 1, std::f32::consts::FRAC_PI_2);
-            turn(&mut f, 2, 0, l.turn.y);
-            turn(&mut f, 0, 1, l.turn.z);
-            turn(&mut f, 1, 2, l.turn.x);
-            let mut centre = l.centre;
-            if i == 1 {
-                centre.y = -centre.y;
-                for row in f.iter_mut() {
-                    *row -= chest.b * (2.0 * row.dot(chest.b));
-                }
-            }
-            (f, world(&chest, centre))
+        let k = &AW_CIRCLES;
+        let p = crate::nmwm::Params {
+            normal: [k[0].turn, k[1].turn], centre: [k[0].centre, k[1].centre],
+            radius: [[k[0].radii[0] * leg, k[0].radii[1] * leg], [k[1].radii[0] * leg, k[1].radii[1] * leg]],
+            speed: [k[0].speed, k[1].speed], shoulder: (AW_STIFFNESS, 1.0), elbow: (AW_STIFFNESS, 1.0), phase_offset: AW_PHASE,
+            elbow_min: [AW_ELBOW_MIN; 2], use_arm: self.da.wm, ..Default::default()
         };
-        let hands = [limb(0).p[3], limb(1).p[3]];
-        let mut aw = self.da.aw.unwrap_or_else(|| {
-            let theta = [0, 1].map(|i| {
-                let (f, o) = circle(i);
-                let d = c.b.part(hands[i]).m.d - o;
-                wrap_2pi(f[2].dot(d).atan2(f[1].dot(d)))
-            });
-            Windmill { theta, live: [true; 2], ..Default::default() }
-        });
-        aw.on = self.da.wm;
+        let mut aw = self.da.aw.unwrap_or_else(|| crate::nmwm::Windmill::start(c, &p));
         let e = spd - 0.5;
         let rad = 0.3 * (e * r.aw_radius_mult).clamp(0.0, 1.5);
-        aw.delta = [rad * leg, rad];
-        let sign = [AW_CIRCLES[0].speed, AW_CIRCLES[1].speed].map(|k| if k > 0.0 { 1.0 } else { -1.0 });
+        aw.delta = [[rad * leg; 2], [rad; 2]];
+        let sign = [k[0].speed, k[1].speed].map(|k| if k > 0.0 { 1.0 } else { -1.0 });
         aw.speed_add = [sign[0] * (e * r.aw_speed_mult).clamp(0.0, 1.5), sign[1] * (e * r.aw_speed_mult).clamp(0.0, 1.7)];
         aw.ks_add = 2.2222 * rad * r.aw_stiffness_add * u - (1.0 - u) * AW_STIFFNESS;
         aw.ke_add = (u - 1.0) * AW_STIFFNESS;
         aw.phase_add = 30.0 * c.m.a.dot(c.up);
-        let (ks, ke) = (AW_STIFFNESS + aw.ks_add, AW_STIFFNESS + aw.ke_add);
-        let speed = [AW_CIRCLES[0].speed + aw.speed_add[0], AW_CIRCLES[1].speed + aw.speed_add[1]];
-        for i in 0..2 {
-            if aw.on[i] {
-                let l = limb(i);
-                c.ch.eff[l.e[0]].set_stiffness(ks, 1.0, None);
-                c.ch.eff[l.e[1]].set_stiffness(ks, 1.0, None);
-                c.ch.eff[l.e[2]].set_stiffness(ke, 1.0, None);
-            }
-        }
-        // forceSync: the right arm kept phaseOffset behind the left, each one's step sped up or slowed by up to half
-        let mut step = [dt; 2];
-        if aw.on == [true; 2] {
-            let tau = std::f32::consts::TAU;
-            let (tl, tr) = (aw.theta[0], aw.theta[1]);
-            let phi = wrap_2pi(tr - (AW_PHASE + aw.phase_add).to_radians());
-            let (mut d1, mut d2) = if phi > tl { (phi - tl, tau - phi + tl) } else { (tau - tl + phi, tl - phi) };
-            if AW_CIRCLES[0].speed < 0.0 && AW_CIRCLES[1].speed < 0.0 {
-                (d1, d2) = (d2, d1);
-            }
-            let m = (0.5 * d1.min(d2)).clamp(0.0, 0.5);
-            step = if d1 > d2 { [dt * (1.0 - m), dt * (1.0 + m)] } else { [dt * (1.0 + m), dt * (1.0 - m)] };
-        }
-        for i in 0..2 {
-            if aw.live[i] && c.b.doll.collided(&[hands[i]]) {
-                aw.live[i] = false;
-            }
-            if !(aw.on[i] && aw.live[i]) {
-                continue;
-            }
-            let l = limb(i);
-            let (f, o) = circle(i);
-            aw.theta[i] = wrap_2pi(aw.theta[i] + std::f32::consts::TAU * step[i] * speed[i]);
-            let k = &AW_CIRCLES[i];
-            let (s, co) = aw.theta[i].sin_cos();
-            let p = o + f[1] * ((k.radii[0] * leg + aw.delta[i]) * co) + f[2] * ((k.radii[1] * leg + aw.delta[i]) * s);
-            let side = if i == 0 { 1.0 } else { -1.0 };
-            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], p, 0.0, 0.0, side, 1.0, Vec3::ZERO, None);
-            let a = c.actual(l.e[2])[0];
-            if a < AW_ELBOW_MIN {
-                let floor = a + (AW_ELBOW_MIN - a) * (5.0 * dt).clamp(0.0, 1.0);
-                let e = &mut c.ch.eff[l.e[2]].desired[0];
-                *e = e.max(floor);
-            }
-            c.ch.eff[l.e[3]].desired = [0.0; 3];
-        }
+        aw.tick(c, &p, dt);
         self.da.aw = Some(aw);
     }
 }

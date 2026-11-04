@@ -130,6 +130,7 @@ pub mod nmrs;
 pub mod nmru;
 pub mod nmscript;
 pub mod nmshot;
+pub mod nmwm;
 pub mod nmsit;
 pub mod nmst;
 pub mod playerctl;

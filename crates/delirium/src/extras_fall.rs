@@ -165,17 +165,21 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "glanceSpinDecayMult", kind: Kind::Float, used: true, doc: "its decay per 0.1 s (0.8)" },
     ] },
     Message { name: "injuredOnGround", params: &[
-        Param { name: "numInjuries", kind: Kind::Int, used: true, doc: "wounds to reach for, 0 to 2 (0: one on the left of the belly)" },
+        Param { name: "numInjuries", kind: Kind::Int, used: true, doc: "wounds to reach for, 0 to 2 (0: one on the left of the belly); RDR2 core: one, 0 the belly" },
         Param { name: "injury1LocalPosition", kind: Kind::Vec3, used: true, doc: "wound 1, in its body part's frame, m (zero)" },
-        Param { name: "injury1LocalNormal", kind: Kind::Vec3, used: true, doc: "its outward normal, the hand stops this far off (zero)" },
+        Param { name: "injury1LocalNormal", kind: Kind::Vec3, used: true, doc: "its outward normal, the hand stops this far off (zero); RDR2 core: not read, the position's direction" },
         Param { name: "injury1Component", kind: Kind::Int, used: true, doc: "its body part index (7, the lower spine)" },
-        Param { name: "injury2LocalPosition", kind: Kind::Vec3, used: true, doc: "wound 2, as wound 1 (zero)" },
-        Param { name: "injury2LocalNormal", kind: Kind::Vec3, used: true, doc: "its outward normal (zero)" },
-        Param { name: "injury2Component", kind: Kind::Int, used: true, doc: "its body part index (7, the lower spine)" },
-        Param { name: "attackerPos", kind: Kind::Vec3, used: true, doc: "where he looks (zero: 2 m beyond his head, along the ground)" },
+        Param { name: "injury2LocalPosition", kind: Kind::Vec3, used: true, doc: "wound 2, as wound 1 (zero); RDR2 core: not read" },
+        Param { name: "injury2LocalNormal", kind: Kind::Vec3, used: true, doc: "its outward normal (zero); RDR2 core: not read" },
+        Param { name: "injury2Component", kind: Kind::Int, used: true, doc: "its body part index (7, the lower spine); RDR2 core: not read" },
+        Param { name: "attackerPos", kind: Kind::Vec3, used: true, doc: "where he looks (zero: 2 m beyond his head, along the ground); RDR2 core: what the trapped push braces against (he looks at the wound)" },
         Param { name: "dontReachWithLeft", kind: Kind::Bool, used: true, doc: "the left hand stays off the wounds (false)" },
         Param { name: "dontReachWithRight", kind: Kind::Bool, used: true, doc: "the right hand stays off the wounds (false)" },
-        Param { name: "strongRollForce", kind: Kind::Bool, used: true, doc: "roll about twice as hard (false)" },
+        Param { name: "strongRollForce", kind: Kind::Bool, used: true, doc: "roll about twice as hard (false); not RDR2's" },
+        Param { name: "relaxTimeMin", kind: Kind::Float, used: true, doc: "RDR2 core only: rest between rolls, s, at least (3)" },
+        Param { name: "relaxTimeMax", kind: Kind::Float, used: true, doc: "RDR2 core only: and at most (5)" },
+        Param { name: "useConstraints", kind: Kind::Bool, used: true, doc: "RDR2 core only: pin the chest and pelvis lying on his back (false)" },
+        Param { name: "trapped", kind: Kind::Bool, used: true, doc: "RDR2 core only: push against what is towards attackerPos instead of reaching for the wound (false)" },
     ] },
     Message { name: "learnedCrawl", params: &[
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "(10)" },
@@ -1331,6 +1335,8 @@ pub struct Injured {
     pedalling: bool,
     state: u8,
     out: Vec<String>,
+    /// the RDR2 core's settings and state
+    rd: IogRdr2,
 }
 const LYING: [&str; 5] = ["upright", "face down", "face up", "on left side", "on right side"];
 impl Injured {
@@ -1343,11 +1349,26 @@ impl Injured {
         }
         Ok(Injured { n: p.i("numInjuries", 0)?.clamp(0, 2), wounds: w, attacker: p.v("attackerPos", Vec3::ZERO)?,
                      no_reach: [p.b("dontReachWithLeft", false)?, p.b("dontReachWithRight", false)?],
-                     strong: p.b("strongRollForce", false)?, t: 0.0, pedal_cd: delirium_data::kv!(12), pedalling: false, state: 0, out: vec![] })
+                     strong: p.b("strongRollForce", false)?, t: 0.0, pedal_cd: delirium_data::kv!(12), pedalling: false, state: 0, out: vec![],
+                     rd: IogRdr2 { relax: (p.f("relaxTimeMin", 3.0)?, p.f("relaxTimeMax", 5.0)?), use_constraints: p.b("useConstraints", false)?,
+                                   trapped: p.b("trapped", false)?, ..Default::default() } })
     }
 }
 impl Extra for Injured {
+    fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
+        if c.ch.rdr2 {
+            self.probe_rdr2(c, world, obs);
+        }
+    }
+
+    fn constraints(&self) -> Vec<(usize, Option<Vec3>, Option<bevy_math::Quat>)> {
+        self.rd.pins.iter().map(|&(k, at)| (k, Some(at), None)).collect()
+    }
+
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            return self.tick_rdr2(c, dt);
+        }
         let first = self.t == 0.0;
         self.t += dt;
         let t = self.t;
@@ -1437,6 +1458,408 @@ impl Extra for Injured {
 
     fn lines(&mut self) -> Vec<String> {
         std::mem::take(&mut self.out)
+    }
+}
+
+/// injuredOnGround's RDR2-core settings (relaxTimeMin / Max, useConstraints, trapped) and state: started, the time,
+/// the roll's direction (0 none, 1, 2), the arms' reach mode (3 both), the wound-reach timer and its hold, the trapped
+/// push's timer, its start value and rest, the relax timer, roll time and duration, the pedal timer, the roll torque,
+/// whether a tick has run, the pins, the arms' search poses, which helpers it has started (pedalLegs,
+/// reachForWound, headLook) and the trapped push's probe hit (point, direction).
+#[derive(Clone, Default)]
+struct IogRdr2 {
+    relax: (f32, f32), use_constraints: bool, trapped: bool,
+    started: bool, time: f32, dir: u8, mode: u8, reach_t: f32, reach_hold: f32, push_t: f32, push_start: f32, push_rest: f32,
+    relax_t: f32, roll_t: f32, roll_dur: f32, pedal_t: f32, torque: f32, ticked: bool,
+    pins: Vec<(usize, Vec3)>, pose: [Option<[f32; 6]>; 2], pedalling: bool, rfw: bool, looking: bool, hit: Option<(Vec3, Vec3)>,
+}
+
+/// injuredOnGround's roll parameters whose message names RDR2's table doesn't give reliably: the default roll
+/// duration (s), the draw above which it is random instead, the roll torque's cap, its start (0: 20 for the first
+/// roll) and its ramp rate.
+const IOG_ROLL: (f32, f32, f32, f32, f32) = (5.0, 0.3, 30.0, 0.0, 60.0);
+/// The default wound's depth in front of the spine (ours: RDR2 takes half the part's bound length and half a body
+/// length whose values aren't known; this is reachForWound's surface offset for the trunk).
+const IOG_WOUND_DEPTH: f32 = 0.18;
+
+/// Delirium's parts as RDR2's masks: a leg (0xf6), an arm (0xfd800), the pelvis (0x9) and the trunk with the head
+/// (0x709 / 0x2709).
+fn iog_leg(k: usize) -> bool {
+    (1..=6).contains(&k)
+}
+fn iog_arm(k: usize) -> bool {
+    (13..=20).contains(&k)
+}
+fn iog_trunk(k: usize) -> bool {
+    k == 0 || (7..=12).contains(&k)
+}
+
+impl Injured {
+    /// The trapped push's probe, before the tick: from the chest 0.7 m towards attackerPos.
+    fn probe_rdr2(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
+        let r = &mut self.rd;
+        r.hit = None;
+        if !r.trapped || !r.started || r.push_t <= 0.0 {
+            return;
+        }
+        let chest = c.b.part((*SPINE())[3] + 1).m.d;
+        let e = (self.attacker - chest).normalize_or_zero();
+        if let Some((t, _, _)) = crate::nmcf::cast(world, obs, chest, e, 0.7) {
+            r.hit = Some((chest + e * t, e));
+        }
+    }
+
+    /// RDR2's injuredOnGround (rdr2_injuredground.md): lying hurt, he rests, then rolls towards his side or back by a
+    /// torque about his body's long axis that ramps up while the roll is slow, his spine twisting and the far leg
+    /// pushing; on his side the upper spine is flattened. He pedals his legs (not face down, not rolling, not a
+    /// wounded leg), one or both hands hold the wound (a leg wound through reachForWound, on and off) while he looks at
+    /// it, free arms rest bent, and with `trapped` he braces against what is towards attackerPos. Every joint's
+    /// stiffness is capped at 9. Ours: Delirium's arm search for RDR2's hand placement and IK requests, the brace
+    /// service as both free hands to the brace point. Left out: arm friction 0.5 (no per-part friction), the joint
+    /// mode and the shoulder and wrist floors (fields not identified).
+    fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        // the joint stiffness cap (RDR2's tick runs it on the joints before this frame's requests land)
+        for e in c.ch.eff.iter_mut() {
+            if e.strength.max(0.0).sqrt() > 9.0 {
+                e.set_stiffness(9.0, 1.0, None);
+            }
+        }
+        if !self.rd.started {
+            self.start_rdr2(c);
+        }
+        crate::nmcf::spin_reduction(c, 0.5);
+        self.rd.time += dt;
+        // pose analysis: up made square to the body's long axis
+        let (a, b, cc, up) = (c.m.a, c.m.b, c.m.c, c.up);
+        let s = b.cross(up).normalize_or_zero();
+        let u = s.cross(b).normalize_or_zero();
+        let prone = u.dot(cc) > 0.5;
+        let supine = u.dot(cc) < -0.6;
+        let sigma = a.dot(u);
+        let side = (sigma > 0.5, sigma < -0.5);
+        // the base pose
+        let q2 = sigma * sigma;
+        for (j, x) in [(SPINE()[3], 0.4 * q2), (SPINE()[2], 0.4 * q2), (SPINE()[1], 0.2 * q2), (NECK()[0], 0.2 * q2)] {
+            c.ch.eff[j].desired[0] = x;
+        }
+        for i in 0..2 {
+            c.ch.eff[HIP()[i]].desired[0] = 1.0;
+            c.ch.eff[KNEE()[i]].desired[0] = -1.0;
+            (c.ch.eff[SHOULDER()[i]].desired[0], c.ch.eff[SHOULDER()[i]].desired[2]) = (0.785, -0.15);
+            c.ch.eff[ELBOW()[i]].desired[0] = 1.0;
+            let k = &mut c.ch.eff[ANKLE()[i]];
+            (k.strength, k.damping, k.desired[0]) = (20.0, 5.0, -0.5);
+        }
+        if !(self.rd.use_constraints && supine) {
+            self.roll_rdr2(c, dt, (s, u, sigma), prone, supine, side);
+        }
+        self.pedal_rdr2(c, dt);
+        let mut used = [false; 2];
+        if !(self.rd.trapped && self.push_rdr2(c, dt, &mut used)) {
+            self.reach_rdr2(c, dt, &mut used);
+        }
+        self.arms_rdr2(c, prone, sigma, &mut used);
+        // the head looks at the wound
+        if !prone {
+            let (k, local) = (self.wounds[0].2, self.wounds[0].0);
+            let m = c.b.part(k).m;
+            let x = crate::vm4(m.a, m.b, m.c, m.d, local);
+            if !self.rd.looking {
+                self.rd.looking = true;
+                self.out.push(format!("headLook start=true alwaysLook=true pos={},{},{}", x.x, x.y, x.z));
+            } else {
+                self.out.push(format!("headLook pos={},{},{}", x.x, x.y, x.z));
+            }
+        }
+        self.rd.ticked = true;
+    }
+
+    /// RDR2's activate: the reach and trapped-push timers, the first roll's duration and torque, both arms.
+    fn start_rdr2(&mut self, c: &mut Ctx) {
+        let r = &mut self.rd;
+        r.started = true;
+        r.mode = 3;
+        r.time = 0.0;
+        r.reach_t = if r.trapped { c.ch.random() + 0.5 } else { 2.0 * c.ch.random() - 0.5 };
+        r.reach_hold = c.ch.random() + 0.5;
+        r.push_t = c.ch.random() + 2.0;
+        r.push_start = r.push_t;
+        r.push_rest = c.ch.random() + 2.5;
+        (r.roll_dur, r.relax_t, r.roll_t) = (IOG_ROLL.0, 0.0, 0.0);
+        if c.ch.random() > IOG_ROLL.1 {
+            r.roll_dur = 0.2 + 2.8 * c.ch.random();
+        }
+        (r.pedal_t, r.torque) = (0.0, -20.0);
+    }
+
+    /// RDR2's roll: resting, the body stiff 5 (neck and head 10) and on a side the upper spine flattened; when the
+    /// rest runs out a roll starts the way his side says, for its duration (or until he is over, side value past
+    /// 0.9), with its torque about the long axis ramping while the roll is slow, the spine twisting, and the leg
+    /// on the far side pushed by IK while the near hip opens.
+    #[allow(clippy::too_many_arguments)]
+    fn roll_rdr2(&mut self, c: &mut Ctx, dt: f32, (s, u, sigma): (Vec3, Vec3, f32), prone: bool, supine: bool, side: (bool, bool)) {
+        let (a, b) = (c.m.a, c.m.b);
+        let chest = (*SPINE())[3] + 1;
+        // the pins: as read they need him lying on his back, when this isn't run with useConstraints
+        if self.rd.use_constraints && self.rd.pins.is_empty() && supine && c.b.doll.collided(&[chest]) && c.b.doll.collided(&[0]) {
+            self.rd.pins = vec![(chest, c.b.part(chest).m.d), (0, c.b.part(0).m.d)];
+        }
+        let r = &mut self.rd;
+        if r.dir == 0 {
+            c.ch.set_stiffness(5.0, 1.0, "fb", None);
+            c.ch.set_stiffness(10.0, 1.0, "un", None);
+            if side.0 || side.1 {
+                let t = a.cross(if side.0 { u } else { -u });
+                for (k, f) in [(1, 20.0), (2, 40.0), (3, 60.0)] {
+                    c.out.torque((*SPINE())[k] + 1, t * f);
+                }
+            }
+            r.relax_t -= dt;
+            if r.relax_t >= 0.0 {
+                return;
+            }
+            r.dir = if side.0 { 2 } else if side.1 { 1 } else if sigma < 0.0 { 2 } else { 1 };
+            let span = r.relax.1 - r.relax.0;
+            r.relax_t = r.relax.0 + c.ch.random() * span;
+            (r.roll_dur, r.roll_t) = (IOG_ROLL.0, 0.0);
+            if c.ch.random() > IOG_ROLL.1 {
+                r.roll_dur = 0.2 + 2.8 * c.ch.random();
+            }
+            if prone {
+                r.roll_dur = r.roll_dur.max(1.2);
+            }
+            if r.roll_dur < 2.0 {
+                r.relax_t = 0.5 * r.relax.0 + c.ch.random() * 0.5 * span;
+            }
+            r.torque = if IOG_ROLL.3 == 0.0 && r.torque < 0.0 { 20.0 } else { IOG_ROLL.3 };
+            let _ = c.ch.random();
+            return;
+        }
+        r.roll_t += dt;
+        let tau = r.roll_t;
+        if tau > r.roll_dur {
+            r.dir = 0;
+            return;
+        }
+        c.ch.set_stiffness(7.0, 1.0, "fb", None);
+        c.ch.set_stiffness(5.0, 1.0, "ua", None);
+        let w = c.angvel.dot(b);
+        let rate = IOG_ROLL.4;
+        r.torque += if (r.dir == 2 && w > -1.46) || (r.dir == 1 && w < 1.46) { 0.5 * rate * dt } else { -3.5 * rate * dt };
+        r.torque = r.torque.clamp(0.0, IOG_ROLL.2);
+        let (k1, k2, k3, q0) = ((10.0 * tau).clamp(3.0, 9.0), (10.0 * tau).clamp(3.0, 5.5), (10.0 * tau).clamp(7.0, 11.0), (5.0 * tau).clamp(0.0, 5.0));
+        c.ch.set_stiffness(k3, 1.0, "uk", None);
+        // dir 1 pushes with the right leg and opens the left hip; dir 2 the mirror
+        let (sg, push, open) = if r.dir == 1 { (1.0, 3, 2) } else { (-1.0, 2, 3) };
+        for &j in SPINE().iter() {
+            c.ch.eff[j].desired[2] = sg * q0;
+        }
+        if sg * w < 2.1 {
+            for k in [0, (*SPINE())[0] + 1, (*SPINE())[1] + 1, (*SPINE())[2] + 1] {
+                c.out.torque(k, b * (sg * r.torque));
+            }
+        }
+        if !prone {
+            let near = if r.dir == 1 { side.1 } else { side.0 };
+            let q = if near && !supine { -0.3 } else { 0.1 * ((8.0 * r.time).cos() - 1.0) - 0.4 };
+            let l = crate::nmshot::limb(push);
+            let target = c.b.part(0).m.d - s * (0.3 * sg) - b * 0.4 + u * q;
+            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], target, 0.0, 0.0, if push == 2 { 1.0 } else { -1.0 }, 1.0, Vec3::ZERO, None);
+            c.ch.set_stiffness(k1, 1.0, if push == 2 { "ll" } else { "lr" }, None);
+            let f = if r.dir == 1 { 2.0 * sigma.clamp(-0.9, -0.4) + 1.8 } else { 1.8 - 2.0 * sigma.clamp(0.4, 0.9) };
+            let o = crate::nmshot::limb(open);
+            let lerp = |x: f32, y: f32| x + (y - x) * f;
+            c.ch.eff[o.e[1]].desired = [lerp(0.0, 0.2), lerp(-0.5, -1.0), lerp(0.0, -0.4)];
+            // (RDR2's knee value here is a zero-pose blend read from the character, [P]: the knee's zero pose)
+            c.ch.eff[o.e[2]].desired[0] = c.ch.eff[o.e[2]].zero[0];
+            c.ch.set_stiffness(k2, 1.0, if open == 2 { "ll" } else { "lr" }, None);
+        }
+        if (r.dir == 1 && sigma > 0.9) || (r.dir == 2 && sigma < -0.9) {
+            r.dir = 0;
+        }
+    }
+
+    /// RDR2's pedalling: pedalLegs runs while he isn't rolling or face down, sparing a wounded leg, its backPedal,
+    /// radiusVariance and legAngleVariance drawn again every 1..3 s. (Its other parameters stay as last sent: Delirium
+    /// keeps a message's settings, RDR2 resets them.)
+    fn pedal_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let r = &mut self.rd;
+        if r.dir != 0 || c.m.c.dot(c.up) > 0.5 {
+            if r.pedalling {
+                r.pedalling = false;
+                self.out.push("pedalLegs start=false".into());
+            }
+            return;
+        }
+        let k = self.wounds[0].2;
+        if !r.pedalling {
+            r.pedalling = true;
+            let (back, rv, av) = (c.ch.random() > 0.5, c.ch.random(), c.ch.random());
+            let _ = c.ch.random();
+            self.out.push(format!("pedalLegs start=true pedalLeftLeg={} pedalRightLeg={} legStiffness=4 backPedal={back} radiusVariance={rv} \
+                                   legAngleVariance={av} angularSpeed=2 centreUp=0.1 centreForwards=0.1", !(1..=3).contains(&k), !(4..=6).contains(&k)));
+            r.pedal_t = 1.0 + 2.0 * c.ch.random();
+            return;
+        }
+        r.pedal_t -= dt;
+        if r.pedal_t < 0.0 {
+            r.pedal_t = 1.0 + 2.0 * c.ch.random();
+            let (back, rv, av) = (c.ch.random() > 0.5, c.ch.random(), c.ch.random());
+            self.out.push(format!("pedalLegs backPedal={back} radiusVariance={rv} legAngleVariance={av} angularSpeed=2"));
+        }
+    }
+
+    /// RDR2's trapped push: on for 2..3 s, off for 2.5..3.5 s; while on and something is within 0.7 m of the chest
+    /// towards attackerPos, the hands brace on it, nearer as the push runs out. RDR2's brace service decides the
+    /// hands and their placement (not read): ours, both free hands by IK to the brace point, stiffness 11. Returns
+    /// whether it acted (then there is no wound reach).
+    fn push_rdr2(&mut self, c: &mut Ctx, dt: f32, used: &mut [bool; 2]) -> bool {
+        let r = &mut self.rd;
+        r.push_t -= dt;
+        if r.push_t < -r.push_rest {
+            r.push_t = 2.0 + c.ch.random();
+            r.push_start = r.push_t;
+            r.push_rest = 2.5 + c.ch.random();
+        }
+        if r.push_t <= 0.0 {
+            return false;
+        }
+        let Some((hit, e)) = r.hit else { return false };
+        let f = if r.push_t >= r.push_start - 0.7 { 1.0 } else { r.push_t / (r.push_start - 0.7) };
+        let at = hit + e * ((1.0 - f) * 0.25 - 0.2);
+        for i in 0..2 {
+            if c.ch.busy[i] {
+                continue;
+            }
+            let l = crate::nmshot::limb(i);
+            c.ch.set_stiffness(11.0, 1.0, ["ul", "ur"][i], None);
+            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], at, 0.0, 0.0, if i == 0 { 1.0 } else { -1.0 }, 1.0, Vec3::ZERO, None);
+            c.ch.eff[l.e[3]].desired = [0.0; 3];
+            used[i] = true;
+        }
+        true
+    }
+
+    /// RDR2's wound reach: one wound (by default on the belly, an arm's or the pelvis's moved to the spine, one on the
+    /// back of the trunk brought round to its front); the hands hold it a little apart (Delirium's arm search for
+    /// RDR2's hand placement, without its pull), an arm whose shoulder is within 0.22 m of it left off; a leg wound
+    /// goes to reachForWound, on and off on random timers. The clavicles' lean2 is zeroed.
+    fn reach_rdr2(&mut self, c: &mut Ctx, dt: f32, used: &mut [bool; 2]) {
+        let spine1 = (*SPINE())[1] + 1;
+        let (mut local, _, mut k) = self.wounds[0];
+        if self.n == 0 || iog_arm(k) {
+            (self.n, k, local) = (1, spine1, Vec3::new(0.0, 0.0, -IOG_WOUND_DEPTH));
+        } else if k == 0 {
+            k = spine1;
+        }
+        if iog_trunk(k) && local.z > 0.0 {
+            local.z = -local.z;
+        }
+        let normal = local.normalize_or_zero();
+        self.wounds[0] = (local, normal, k);
+        let m = c.b.part(k).m;
+        let x = crate::vm4(m.a, m.b, m.c, m.d, local);
+        let r = &mut self.rd;
+        if !r.ticked {
+            if self.no_reach[0] && r.mode == 1 {
+                r.mode = 2;
+            }
+            if self.no_reach[1] && r.mode == 2 {
+                r.mode = 1;
+            }
+            for i in 0..2 {
+                if (c.b.joint_pos((*SHOULDER())[i]) - x).length() < 0.22 {
+                    self.no_reach[i] = true;
+                }
+            }
+        }
+        let leg = iog_leg(k);
+        let mut leg_reach = false;
+        if leg {
+            r.reach_t -= dt;
+            leg_reach = r.reach_t > 0.0;
+            if r.reach_t < -r.reach_hold {
+                r.reach_t = 0.5 + c.ch.random();
+                r.reach_hold = if r.trapped { 0.2 + 0.3 * c.ch.random() } else { 0.5 + c.ch.random() };
+            }
+        } else {
+            let rolling = r.dir != 0;
+            for i in 0..2 {
+                let mode_ok = if i == 0 { r.mode == 1 || r.mode == 3 } else { r.mode == 2 || r.mode == 3 };
+                if self.no_reach[i] || !(mode_ok || rolling) || c.ch.busy[i] {
+                    continue;
+                }
+                let mut at = local;
+                if r.mode == 3 && iog_trunk(k) {
+                    at.x += if i == 0 { 0.05 } else { -0.05 };
+                }
+                let t = crate::vm4(m.a, m.b, m.c, m.d, at);
+                let n = crate::vm4(m.a, m.b, m.c, Vec3::ZERO, normal);
+                crate::extras_rdr2::hand_place(c, i, t, n, &mut r.pose[i], None, 0.0);
+                used[i] = true;
+            }
+        }
+        if !leg_reach && r.rfw {
+            r.rfw = false;
+            self.out.push("reachForWound start=false".into());
+        } else if leg_reach && !r.rfw {
+            r.rfw = true;
+            self.out.push(format!("reachForWound start=true hitPart={k} hitPoint={},{},{} allowInjuredThighReach=true allowInjuredLowerLegReach=true \
+                                   reachWithOneHand=false reachFalling=1 reachOnFloor=1 timeBeforeReachForWound=0 legStiffness=5 armStiffness=6 \
+                                   spineStiffness=8", x.x, x.y, x.z));
+        }
+        // (RDR2 reads which hands reachForWound has on the wound; ours: both while it runs)
+        if r.rfw {
+            *used = [true; 2];
+        }
+        for i in 0..2 {
+            c.ch.eff[(*CLAVICLE())[i]].desired[1] = 0.0;
+        }
+    }
+
+    /// RDR2's arm stiffness and idle arms: arms stiff 10 (wrist muscle 10), the arm on the side he rolls towards
+    /// softened through the end of the roll; face down and rolling, a hand caught above the back is pulled in; an
+    /// arm with nothing to do rests bent (8, damping 0.8).
+    fn arms_rdr2(&mut self, c: &mut Ctx, prone: bool, sigma: f32, used: &mut [bool; 2]) {
+        let dir = self.rd.dir;
+        let s = [
+            if dir == 1 { 4.0 - 6.666667 * (sigma.clamp(-1.0, -0.85) + 0.85) * 6.0 } else { 10.0 },
+            if dir == 2 { 4.0 + (6.666667 * sigma.clamp(0.85, 1.0) - 5.666667) * 6.0 } else { 10.0 },
+        ];
+        for i in [1, 0] {
+            let l = crate::nmshot::limb(i);
+            for j in l.e {
+                c.ch.eff[j].set_stiffness(s[i], 1.0, Some(1.0));
+            }
+            c.ch.eff[l.e[3]].muscle_stiffness = 10.0;
+        }
+        if prone && dir != 0 {
+            let leg = (c.b.joint_pos(HIP()[0]) - c.b.joint_pos(KNEE()[0])).length() + (c.b.joint_pos(KNEE()[0]) - c.b.joint_pos(ANKLE()[0])).length();
+            let i = if dir == 2 { 0 } else { 1 };
+            let l = crate::nmshot::limb(i);
+            let back = c.b.part((*SPINE())[2] + 1).m.d;
+            let above = |p: Vec3| (p - back).dot(c.m.c) > 0.1 * leg;
+            if above(c.b.part(l.p[3]).m.d) || above(c.b.joint_pos(l.e[2])) {
+                for j in l.e {
+                    c.ch.eff[j].set_stiffness(6.4, 0.64, Some(0.5));
+                }
+                c.ch.eff[l.e[1]].desired = [1.0, 1.0, 0.0];
+                c.ch.eff[l.e[2]].desired[0] = 0.2;
+                used[i] = true;
+            }
+        }
+        for i in 0..2 {
+            if used[i] || c.ch.busy[i] {
+                continue;
+            }
+            let l = crate::nmshot::limb(i);
+            for j in l.e {
+                c.ch.eff[j].set_stiffness(8.0, 0.8, Some(0.5));
+            }
+            c.ch.eff[l.e[0]].desired = [0.0; 3];
+            c.ch.eff[l.e[1]].desired = [0.5, 1.0, 1.0];
+            c.ch.eff[l.e[2]].desired[0] = 0.6;
+        }
     }
 }
 
