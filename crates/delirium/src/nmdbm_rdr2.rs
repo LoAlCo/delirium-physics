@@ -88,6 +88,8 @@ pub struct Params {
     /// on a slope, the share of the pelvis's height over what a leg reaches to both feet it gives up, between steps /
     /// stepping downhill (slopeDrop2 / slopeDrop1: RDR2's two unnamed values)
     pub slope_drop: [f32; 2],
+    /// The pitch integrator's centre (bal+0x28c; GTA IV's pitch centre, which GTA IV's standing balance sets itself)
+    pub ankle_equilibrium: f32,
     pub legs_apart_restep: f32,
     /// both feet down and further apart than this (plus their minimum spread and extraFeetApart), they are drawn in
     /// toward the predicted COM
@@ -161,7 +163,7 @@ impl Default for Params {
     fn default() -> Params {
         Params { max_steps: 100, max_balance_time: 50.0, max_still_time: 50.0, balance_indefinitely: false, giveup_height: 0.5,
                  fall_type: 0, fall_mult: 1.0, step_height_inc4_step: 0.1, ankle_balance: true, start_flat: 0.1, end_flat: 0.3,
-                 slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.7, 1.8], legs_apart_restep: 0.2,
+                 slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.7, 1.8], ankle_equilibrium: 0.0, legs_apart_restep: 0.2,
                  legs_apart_max: 2.0, legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
                  always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
                  taper_knee_strength_run: false, limp_scale: 1.0, limb_requests: true, limb_order_reversed: true,
@@ -197,6 +199,7 @@ impl Params {
             "slopeMoveFoot" => self.slope_move_foot = v,
             "slopeDrop2" => self.slope_drop[0] = v,
             "slopeDrop1" => self.slope_drop[1] = v,
+            "ankleEquilibrium" => self.ankle_equilibrium = v,
             "legsApartRestep" => self.legs_apart_restep = v,
             "legsApartMax" => self.legs_apart_max = v,
             "legsTogetherRestep" => self.legs_together_restep = v,
@@ -254,6 +257,9 @@ impl Params {
 
 /// The ankles' support test: fail when 2.4 x the COM's height over them is less than its distance from them.
 pub const ANKLE_ABORT: f32 = 2.4;
+/// The ankle's height above the sole (the character's foot block, ctx+0x47c4): half of it lifts each probed contact
+/// and is added to the leg scale (bal+0x220, bal+0x210).
+pub const FOOT_HEIGHT: f32 = 0.075;
 /// Floor of the draining leg and hip strength (x the character's stiffness scale, 1 here).
 const LEG_FLOOR: f32 = 2.0;
 const HIP_FLOOR: f32 = 4.0;
@@ -611,14 +617,15 @@ impl Rdr2 {
         self.p.fall_reduce_gravity_comp.then(|| 1.0 / ((0.4 + self.asym) * self.p.fall_mult * t + 1.1))
     }
 
-    /// Crouch start, at his first step: `h` the COM's height over the lower foot, `leg` the leg length, `hip` the hips'
-    /// pitch now; `legs` whether both shins lie (which vetoes it) and the thighs' turn-out, asked only when it would
-    /// start. The turn-out (clamped to 0.35) becomes the legs' twist rest offset.
-    pub fn crouch_start(&mut self, h: f32, leg: f32, hip: f32, legs: impl FnOnce() -> (bool, f32)) {
+    /// Crouch start, at his first step: `h` the COM's height over the lower foot, `leg` the leg scale, `straight` his
+    /// standing leg straightness, `hip` the hips' pitch now; `legs` whether both shins lie (which vetoes it) and the
+    /// thighs' turn-out, asked only when it would start. The turn-out (clamped to 0.35) becomes the legs' twist rest
+    /// offset.
+    pub fn crouch_start(&mut self, h: f32, leg: f32, straight: f32, hip: f32, legs: impl FnOnce() -> (bool, f32)) {
         if std::mem::replace(&mut self.started, true) || !self.p.crouch {
             return;
         }
-        let c = (0.99 - h / (leg - 0.5 * 0.075)) * 0.79235;
+        let c = (straight - h / (leg - 0.5 * FOOT_HEIGHT)) * 0.79235;
         if c > self.p.crouch_bend_thresh && c < self.p.crouch_bend_max {
             let (lying, turn_out) = legs();
             if lying {
