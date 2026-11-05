@@ -1723,7 +1723,7 @@ impl Shot {
         self.run(c, HIT(), Some(|s, _| s.new_hit), Some(Shot::hit_enter), Some(Shot::hit_tick), Some(|s, _| !s.new_hit), None, dt);
         self.wound = world(&c.b.part(p.body_part).m, self.hit_local);
         c.module(HIT() as u32);
-        let stepped = self.spine_rdr2(c, dt);
+        self.spine_rdr2(c, dt);
         c.module(100);
         self.shock_spin(c, dt);
         c.module(101);
