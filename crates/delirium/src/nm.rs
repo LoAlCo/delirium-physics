@@ -1653,7 +1653,10 @@ impl Agent {
                 if matches!(dbm.lean.mode, crate::nmdbm::LeanMode::None) {
                     self.lean = None;
                 }
-                ch.up = dbm.p.up;
+                // RDR2 core: behaviours read gravity's up (ctx+0xfc0); the lean up (bal+0xf0) stays the balancer's own
+                if dbm.p.rdr2.is_none() {
+                    ch.up = dbm.p.up;
+                }
                 let failed = match tick {
                     Some(s) => {
                         dbm.apply(&s, ch);
