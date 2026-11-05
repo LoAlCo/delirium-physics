@@ -2026,6 +2026,11 @@ impl Ragdoll {
         self.held[k].iter().map(|r| (if r.age == 1 { r.world } else { crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) }, r.n, r.gap)).collect()
     }
 
+    /// NMX_DUMP: a part's own angular momentum.
+    pub fn nmx_spin(&self, k: usize) -> Vec3 {
+        (self.bodies[k].tensor() * self.bodies[k].w.as_dvec3()).as_vec3()
+    }
+
     pub fn motion(&self, k: usize) -> (Vec3, Vec3) {
         (self.bodies[k].v, self.bodies[k].w)
     }

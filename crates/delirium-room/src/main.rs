@@ -10093,7 +10093,7 @@ mod nmx {
             let _ = writeln!(frames, "frame,t,com_x,com_y,com_z,comv_x,comv_y,comv_z,com_speed,fwd_x,fwd_y,fwd_z,up_x,up_y,up_z,tilt_deg,lowest_part_z,head_z,mass,bal_steps,bal_foot,health,active");
             let _ = writeln!(joints, "frame,t,joint,des0,des1,des2,act0,act1,act2,muscle_stiffness,strength,damping,oppose_gravity,injury");
             let mut parts = std::io::BufWriter::new(std::fs::File::create(format!("{p}.parts.csv")).unwrap());
-            let _ = writeln!(parts, "frame,part,mass,cx,cy,cz,qx,qy,qz,qw,vx,vy,vz,wx,wy,wz,touch,contacts");
+            let _ = writeln!(parts, "frame,part,mass,cx,cy,cz,qx,qy,qz,qw,vx,vy,vz,wx,wy,wz,touch,contacts,lx,ly,lz");
             Dump { frames, joints, parts }
         }
         pub fn frame(&mut self, sim: &Sim, i: usize) {
@@ -10114,7 +10114,7 @@ mod nmx {
             for k in 0..n {
                 let (c, q, (v, w)) = (d.centre(k), fr[k].rotation, d.motion(k));
                 let cs: Vec<String> = d.nmx_contacts(k).iter().map(|(a, n, g)| format!("{:.4} {:.4} {:.4} {:.3} {:.3} {:.3} {:.4}", a.x, a.y, a.z, n.x, n.y, n.z, g)).collect();
-                let _ = writeln!(self.parts, "{i},{k},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}", d.part_mass(k), c.x, c.y, c.z, q.x, q.y, q.z, q.w, v.x, v.y, v.z, w.x, w.y, w.z, d.touch[k], cs.join(";"));
+                let _ = writeln!(self.parts, "{i},{k},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}", d.part_mass(k), c.x, c.y, c.z, q.x, q.y, q.z, q.w, v.x, v.y, v.z, w.x, w.y, w.z, d.touch[k], cs.join(";"), d.nmx_spin(k).x, d.nmx_spin(k).y, d.nmx_spin(k).z);
             }
             let t = (i + 1) as f32 / 60.0;
             let _ = writeln!(self.frames, "{i},{t},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{m},{steps},{foot},{},{}",
