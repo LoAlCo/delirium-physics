@@ -1723,7 +1723,7 @@ impl Shot {
         self.run(c, HIT(), Some(|s, _| s.new_hit), Some(Shot::hit_enter), Some(Shot::hit_tick), Some(|s, _| !s.new_hit), None, dt);
         self.wound = world(&c.b.part(p.body_part).m, self.hit_local);
         c.module(HIT() as u32);
-        let stepped = self.spine_rdr2(c, dt);
+        self.spine_rdr2(c, dt);
         c.module(100);
         self.shock_spin(c, dt);
         c.module(101);
@@ -1747,8 +1747,6 @@ impl Shot {
         self.run(c, MELEE(), Some(|s, _| s.p.melee && s.new_hit), Some(Shot::melee_enter), Some(Shot::melee_tick),
                  Some(|s, _| s.failed() || s.new_hit), Some(|_, c| c.out.spine_twist_stop = true), dt);
         c.module(MELEE() as u32);
-        if !stepped {
-        }
         c.module(102);
         self.new_hit = false;
     }
@@ -1939,10 +1937,12 @@ impl Shot {
         let dir = if b >= 0.0 { nr1 * a + nr2 * cc - up } else { r0 * (0.5 * a) + lr2 * cc - up };
         let sh = c.b.joint_pos(l.e[1]);
         let el = c.b.joint_pos(l.e[2]);
-        let len = (el - sh).length() + (c.b.joint_pos(l.e[3]) - el).length();
+        // the arm's length to the hand (limb +0x3a8, recorded 0.626; +0x3ac, to the wrist, is 0.558), and the IK's lead 1 with
+        // the velocity of its own root part, which leaves the lead's turning term
+        let len = (el - sh).length() + (c.b.part(l.p[3]).m.d - el).length();
         let target = sh + dir.normalize_or_zero() * (rho * len).min(dir.length());
         let side = if i == 0 { 1.0 } else { -1.0 };
-        crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], target, 0.2, 0.0, side, 1.0, Vec3::ZERO, None);
+        crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], target, 0.2, 1.0, side, 1.0, c.b.part(l.p[0]).v, None);
         let e = &mut c.ch.eff[l.e[2]].desired[0];
         *e = e.max(0.3);
         if b < 0.0 {
