@@ -357,6 +357,8 @@ pub struct Ctx<'a, 'b> {
     pub shot_slot: u32,
     /// the balancer is running and balancing him (RDR2's bal+0x48 = 0); only the RDR2 core's extras read it
     pub upright: bool,
+    /// headLook is running; only the RDR2 core's duck reads it
+    pub head_look_on: bool,
     /// RDR2 core: what the balancer is doing, for the extras that read it (staggerFall); None without a balancer
     pub dbm: Option<DbmView>,
     /// RDR2 core: the shot behaviour is running (staggerFall leaves the fall to it)
@@ -411,7 +413,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
     pub fn new(ch: &'a mut Character, b: &'a Body<'b>, out: &'a mut Out, dbm_failed: bool) -> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
-        Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed,
+        Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed, head_look_on: false,
               dbm: None, shot_on: false, rfw: None, bb_on: false, extras_on: vec![], incoming: &[], shot_scale: 1.0 }
     }
 

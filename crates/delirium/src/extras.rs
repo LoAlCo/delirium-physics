@@ -107,6 +107,16 @@ pub trait Extra: Send + Sync {
     }
     /// The RDR2 core's pointGun: controlledFall's writes.
     fn pg_set(&mut self, _time_warp_scale: f32) {}
+    /// The RDR2 core's duck: what it writes into pointGun's +0x7b7 each step (arms neutral), None if not running.
+    fn pg_duck(&self) -> Option<bool> {
+        None
+    }
+    /// The RDR2 core's pointGun: duck's write.
+    fn pg_duck_set(&mut self, _on: bool) {}
+    /// RDR2 core's limb requests: joints this one's tick wrote at another rank than its slot's.
+    fn marks(&self) -> Vec<(u32, Vec<usize>)> {
+        vec![]
+    }
     /// RDR2 core's sit: distance constraints for the solver, (part, the point on it, world; the other end, world;
     /// the most they may be apart; breaking strength, less than 0 never), as the grab's grips.
     fn ropes(&self) -> Vec<(usize, bevy_math::Vec3, bevy_math::Vec3, f32, f32)> {
@@ -241,6 +251,9 @@ impl Extras {
             }
             e.tick(c, dt);
             if let Some(r) = reqs.as_deref_mut() {
+                for (rank, joints) in e.marks() {
+                    r.mark_joints(&c.ch.eff, rank, &joints);
+                }
                 r.mark(&c.ch.eff, crate::limbreq::slot(n));
             }
             self.outbox.extend(e.lines());
@@ -261,6 +274,10 @@ impl Extras {
         // RDR2 core: controlledFall writes into a running pointGun (here after both have ticked)
         for s in self.on.iter().filter_map(|(_, e)| e.pg_coupling()).collect::<Vec<_>>() {
             self.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.pg_set(s));
+        }
+        // RDR2 core: duck writes into a running pointGun
+        for s in self.on.iter().filter_map(|(_, e)| e.pg_duck()).collect::<Vec<_>>() {
+            self.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.pg_duck_set(s));
         }
         self.take_off(|_, e| e.done());
     }

@@ -34,7 +34,7 @@ pub static MESSAGES: [Message; 1] = [
         Param { name: "spineDamping", kind: Kind::Float, used: true, doc: "(1)" },
         Param { name: "surfacePoint", kind: Kind::Vec3, used: true, doc: "ours, Delirium's water (RDR2 reads the core's water plane): a point on the surface (zero: no water, he only balances)" },
         Param { name: "surfaceNormal", kind: Kind::Vec3, used: true, doc: "ours: the water's up (0 0 1)" },
-        Param { name: "swimDirection", kind: Kind::Vec3, used: true, doc: "ours: the way he swims, world (RDR2's game sets it; its reset value 0 0 1)" },
+        Param { name: "swimDirection", kind: Kind::Vec3, used: true, doc: "ours: where his spine aims, world (RDR2's game may set it; its reset value 0 0 1; the arms' stroke always takes 0 0 1)" },
     ] },
 ];
 
@@ -46,6 +46,19 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
 }
 
 // ---- shared ----
+
+/// With RDR2_TRACE set in the environment, these ports say what they did (proof they ran; no effect on the physics).
+pub(crate) fn trace() -> bool {
+    static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *T.get_or_init(|| std::env::var_os("RDR2_TRACE").is_some())
+}
+
+/// A trace line, to stderr.
+pub(crate) fn note(s: std::fmt::Arguments) {
+    if trace() {
+        eprintln!("{s}");
+    }
+}
 
 /// RDR2's part i, ours.
 pub(crate) fn rp(i: usize) -> usize {
@@ -71,7 +84,7 @@ pub(crate) fn rp(i: usize) -> usize {
 }
 
 /// An RDR2 part mask, our parts.
-fn parts(bits: u32) -> Vec<usize> {
+pub(crate) fn parts(bits: u32) -> Vec<usize> {
     (0..21).filter(|i| bits >> i & 1 != 0).map(rp).collect()
 }
 
@@ -134,6 +147,12 @@ fn set_k(c: &mut Ctx, js: &[usize], s: f32, d: f32, muscle: Option<f32>) {
 fn arm_ik(c: &mut Ctx, i: usize, to: Vec3, twist: f32, vel: Vec3) {
     let l = limb(i);
     crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], to, twist, 0.0, 1.0 - 2.0 * i as f32, 1.0, vel, None);
+}
+
+/// The arm IK with RDR2's dragReduction (the target led by his motion against `vel`, 0x2a37370).
+fn arm_ik_drag(c: &mut Ctx, i: usize, to: Vec3, twist: f32, drag: f32, vel: Vec3) {
+    let l = limb(i);
+    crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], to, twist, drag, 1.0 - 2.0 * i as f32, 1.0, vel, None);
 }
 
 fn arm_len(c: &Ctx, i: usize) -> f32 {
@@ -1068,11 +1087,61 @@ struct Stroke {
     timer: f32,
     done: bool,
     reach: Vec3,
+    timeout: f32,
+    dist: f32,
+    speed: f32,
+    offset: Vec3,
+    dir: Vec3,
 }
 
-/// RDR2's swim (rdr2_swim.md): the water plane picks plunge (sinking faster than 2.5 m/s: foetal and writhe), swim
-/// (the balancer, armsWindmillAdaptive, an alternating three-phase arm stroke, the spine aimed along the swim
-/// direction, headLook above the chest) or wade (pedalLegs, the windmill, headLook ahead); none, out of the water.
+/// The nearest point on an ellipse of half axes (a, b) to (x, y), outside it (0x2a248a0): Newton on the half-angle
+/// tangent, at most 100 steps.
+fn ellipse_nearest(x: f32, y: f32, a: f32, b: f32) -> (f32, f32) {
+    let (sx, sy) = (if x < 0.0 { -1.0 } else { 1.0 }, if y < 0.0 { -1.0 } else { 1.0 });
+    let (px, py) = (x.abs(), y.abs());
+    let (ia, ka, kb) = (1.0 / a, a / b, b / a);
+    let (cx, cy) = (px.min(a), py.min(b));
+    let e = (cx * cx / (a * a) + cy * cy / (b * b)).sqrt();
+    let (mut qx, mut qy) = (cx / e, cy / e);
+    let mut t = ((1.0 - ia * qx) / (ia * qx + 1.0)).max(0.0).sqrt();
+    for _ in 0..100 {
+        let f = 2.0 * ((px - qx) * ka * qy - (py - qy) * kb * qx);
+        let d = f / ((2.0 * qy * qy * ka * ka + 2.0 * qx * qx * kb * kb + 2.0 * qx * (px - qx) + 2.0 * qy * (py - qy)) * (ia * qx + 1.0) - qy / b * f);
+        t = (t - d).clamp(0.0, 1.0);
+        let w = 1.0 / (t * t + 1.0);
+        (qx, qy) = ((1.0 - t * t) * w * a, 2.0 * t * w * b);
+        if d.abs() <= 1e-7 {
+            break;
+        }
+    }
+    (qx * sx, qy * sy)
+}
+
+/// RDR2's joint limit clamp (0x2a23d60 at scale 1) on raw angles [twist, lean1, lean2], limit-centred: the twist per
+/// axis, the two leans inside their ellipse (per axis when a half-range is under 0.001).
+fn clamp_cone(raw: [f32; 3], limits: &[(f32, f32); 3]) -> [f32; 3] {
+    let half = |k: usize| (limits[k].1 - limits[k].0) * 0.5;
+    let (h1, h2, ht) = (half(0), half(1), half(2));
+    let tw = raw[0].clamp(-ht, ht);
+    if h1 < 0.001 || h2 < 0.001 {
+        return [tw, raw[1].clamp(-h1, h1), raw[2].clamp(-h2, h2)];
+    }
+    let (mut l1, mut l2) = (raw[1], raw[2]);
+    if ((l2 / h2).powi(2) + (l1 / h1).powi(2)).sqrt() - 1.0 > 0.0 {
+        (l1, l2) = ellipse_nearest(l1, l2, h1, h2);
+    }
+    [tw, l1, l2]
+}
+
+/// RDR2's swim (rdr2_swim.md, read through the code): the water plane picks wade (chest under, head out: pedalLegs, the
+/// windmill, headLook ahead), swim (chest and head under, the balancer, armsWindmillAdaptive, an alternating
+/// three-phase arm stroke, the spine aimed along the swim direction, headLook above the chest) or plunge (chest and
+/// head under, sinking faster than 2.5 m/s: foetal and writhe); none, with the chest out. As in RDR2 a state change
+/// starts things and stops only what the note lists: pedalLegs and the windmill run on until swim stops.
+/// RDR2's state change writes constants into the strokes (no offset, reach 0.63, 4 m/s, direction 0 0 1), so swimOffset,
+/// extendDist, extendSpeed and swimDirection never reach the arms there; only the spine reads the direction.
+/// Ours: the plane comes with the message (RDR2's core water state, ctx+0x10c4..+0x10c8, is worked out here); no pole for
+/// the retract's IK (Delirium's IK takes none; RDR2's is the target itself); bodyBalance stands for RDR2's balancer.
 pub struct Swim {
     offset: Vec3, twist: f32, dist: f32, speed: f32, close2: f32, enough2: f32, timeout: f32,
     arm: (f32, f32), leg: (f32, f32), spine: (f32, f32), surface: Vec3, normal: Vec3, dir: Vec3,
@@ -1095,7 +1164,7 @@ impl Swim {
         })
     }
 
-    /// The chest's frame (the arm limb's root part, [P]) and the recovery point's local offset.
+    /// The chest's frame (the arm limb's +0x430, [P] the spine's top part) and the recovery point's local offset.
     fn frame(c: &Ctx) -> crate::nmdbm::M34 {
         c.b.part(spine_part(4)).m
     }
@@ -1107,25 +1176,38 @@ impl Swim {
 
     /// The stroke's phase change (0x2aaae80): into the reach (0), its end point, kept relative to the chest.
     fn phase_to(&mut self, c: &Ctx, i: usize, p: u8) {
-        let s = &mut self.strokes[i];
-        (s.phase, s.timer, s.done) = (p, 0.0, false);
-        if p != 0 {
+        if self.strokes[i].phase == p {
             return;
         }
-        let m = Self::frame(c);
-        let d = self.dir.normalize_or(Vec3::Z);
-        let a = m.b * arm_len(c, i);
-        let k = a.cross(d);
-        let beta = k.length().clamp(-1.0, 1.0).asin();
-        let mut t = if beta <= 1.3 { d } else { Quat::from_axis_angle(k.normalize_or(Vec3::X), -1.3) * a };
-        t += m.a * self.offset.x + m.b * self.offset.y + m.c * self.offset.z;
-        let t = t.normalize_or_zero() * self.dist;
-        s.reach = c.b.joint_pos(limb(i).e[0]) + t - m.d;
+        let timeout = self.timeout;
+        let s = &mut self.strokes[i];
+        (s.phase, s.timer, s.done, s.timeout) = (p, 0.0, false, timeout);
+        if p == 0 {
+            let m = Self::frame(c);
+            let d = s.dir;
+            let a = m.b * arm_len(c, i);
+            let k = a.cross(d);
+            let beta = k.length().clamp(-1.0, 1.0).asin();
+            let mut t = if beta <= 1.3 { d } else { Quat::from_axis_angle(k.normalize_or(Vec3::X), -1.3) * a };
+            t += m.a * s.offset.x + m.b * s.offset.y + m.c * s.offset.z;
+            let t = t.normalize_or_zero() * s.dist;
+            s.reach = c.b.joint_pos(limb(i).e[0]) + t - m.d;
+        }
+        note(format_args!("swim: arm {i} phase {p}"));
     }
 
+    /// Activate: both strokes retracting with the message's values, the right one then reaching.
+    fn strokes_start(&mut self, c: &Ctx) {
+        let (offset, dist, speed, timeout) = (self.offset, self.dist, self.speed, self.timeout);
+        self.strokes = [Stroke { phase: 2, offset, dist, speed, timeout, dir: Vec3::Z, ..Stroke::default() }; 2];
+        self.phase_to(c, 1, 0);
+    }
+
+    /// A state change's reset (inline in 0x2aa81b4): RDR2 writes constants here, not the message's values.
     fn strokes_reset(&mut self, c: &Ctx) {
-        for i in 0..2 {
-            self.phase_to(c, i, 2);
+        for s in &mut self.strokes {
+            (s.phase, s.timer, s.done) = (2, 0.0, false);
+            (s.offset, s.dist, s.speed, s.timeout, s.dir) = (Vec3::ZERO, 0.63, 4.0, 1.0, Vec3::Z);
         }
         self.phase_to(c, 1, 0);
     }
@@ -1134,7 +1216,7 @@ impl Swim {
     fn stroke(&mut self, c: &mut Ctx, i: usize, dt: f32, force: bool) {
         let s = self.strokes[i];
         let timer = s.timer + dt;
-        let done = s.done || timer > self.timeout;
+        let done = s.done || timer > s.timeout;
         self.strokes[i].timer = timer;
         self.strokes[i].done = done;
         if done && !(s.phase == 2 && !force) {
@@ -1148,9 +1230,9 @@ impl Swim {
             0 => {
                 let end = m.d + s.reach;
                 let e = end - q;
-                let k = if e.length() > 0.0 { (self.speed * s.timer / e.length()).clamp(0.0, 1.0) } else { 1.0 };
+                let k = if e.length() > 0.0 { (s.speed * s.timer / e.length()).clamp(0.0, 1.0) } else { 1.0 };
                 let to = q + e * k;
-                arm_ik(c, i, to, self.twist, c.vel);
+                arm_ik_drag(c, i, to, self.twist, 1.0, c.vel);
                 let ed = e.normalize_or_zero();
                 let off = to - hand;
                 let along = off.dot(ed).max(0.0);
@@ -1160,7 +1242,9 @@ impl Swim {
                 }
             }
             2 => {
-                arm_ik(c, i, q, self.twist, c.vel);
+                arm_ik_drag(c, i, q, self.twist, 1.0, c.vel);
+                // the request's hand normal: against the stroke's direction
+                crate::nmshot::Shot::wrist(c, limb(i), q, -s.dir, 1.0 - 2.0 * i as f32);
                 if (q - hand).length() < 0.1 {
                     self.strokes[i].done = true;
                 }
@@ -1169,17 +1253,21 @@ impl Swim {
         }
     }
 
-    /// The spine aimed along the swim direction (0x2aa31c4): each spine joint's z axis turned onto it, within its limits.
-    fn spine_aim(&self, c: &mut Ctx) {
+    /// The spine aimed along the swim direction (0x2aa31c4): each spine joint's z axis turned onto it, inside its limits.
+    fn spine_aim(&mut self, c: &mut Ctx) {
         let d = self.dir.normalize_or(Vec3::Z);
+        let mut clamped = 0;
         for &j in SPINE().iter() {
             let m = c.b.eff3(j).m;
             let local = Vec3::new(m.a.dot(d), m.b.dot(d), m.c.dot(d)).normalize_or(Vec3::Z);
-            let [tw, l1, l2] = crate::nmrs::angles(Quat::from_rotation_arc(Vec3::Z, local));
+            let raw = crate::nmrs::angles(Quat::from_rotation_arc(Vec3::Z, local));
             let jd = &c.ch.joints[j];
-            let e = crate::nmrs::effector_angles([l1, l2, tw], &jd.limits, jd.flip);
-            let l = c.ch.limits(j);
-            c.ch.eff[j].desired = [0, 1, 2].map(|k| e[k].clamp(l[2 * k], l[2 * k + 1]));
+            let [tw, l1, l2] = clamp_cone(raw, &jd.limits);
+            clamped += (tw != raw[0] || l1 != raw[1] || l2 != raw[2]) as u32;
+            c.ch.eff[j].desired = crate::nmrs::effector_angles([l1, l2, tw], &jd.limits, jd.flip);
+        }
+        if clamped > 0 {
+            note(format_args!("swim: spine aim, {clamped} joints clamped to their cones"));
         }
     }
 
@@ -1196,6 +1284,7 @@ impl Swim {
         if self.state == 2 {
             self.strokes_reset(c);
         }
+        note(format_args!("swim: state {} -> {to}, sinking {:.2} m/s", self.state, -self.normal.normalize_or_zero().dot(c.vel)));
         match to {
             1 => {
                 self.kids.stop("armsWindmillAdaptive");
@@ -1217,9 +1306,6 @@ impl Swim {
             }
             _ => {}
         }
-        if self.state == 3 && to != 3 {
-            self.kids.stop("pedalLegs");
-        }
         self.state = to;
     }
 }
@@ -1228,16 +1314,15 @@ impl Extra for Swim {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
         if !self.started {
             self.started = true;
-            self.strokes_reset(c);
+            self.strokes_start(c);
             self.kids.start("bodyBalance", "bodyBalance start=true".into());
         }
-        // the water plane: Delirium's (the room's pool sends it), [G] in the water with a foot under it, deep with the
-        // COM under it
+        // the water plane (0x2a5dd58 keeps these): in the water is spine part 9 under it, deep the head part 20 [C]
         let n = self.normal.normalize_or_zero();
         let state = if self.surface != Vec3::ZERO && n != Vec3::ZERO {
             let under = |p: Vec3| (p - self.surface).dot(n) < 0.0;
-            let in_water = under(pos(c, limb(2).p[3])) || under(pos(c, limb(3).p[3]));
-            let deep = under(c.com);
+            let in_water = under(pos(c, rp(9)));
+            let deep = under(pos(c, rp(20)));
             if !in_water { 0 } else if !deep { 3 } else if -n.dot(c.vel) <= 2.5 { 2 } else { 1 }
         } else {
             0
@@ -1250,14 +1335,15 @@ impl Extra for Swim {
         let chest = pos(c, spine_part(4));
         match state {
             2 => {
-                let (l2, r2) = (self.strokes[0].phase == 2, self.strokes[1].phase == 2);
+                let r2 = self.strokes[1].phase == 2;
                 self.stroke(c, 0, dt, r2);
-                let l2 = l2 || self.strokes[0].phase == 2;
+                let l2 = self.strokes[0].phase == 2;
                 self.stroke(c, 1, dt, l2);
                 self.spine_aim(c);
                 self.look.to(&mut self.kids.out, chest + c.up, 11.0);
             }
             3 => {
+                // the record's channel bit 2 (value 4) at +0x14: the twist
                 for &j in WRIST().iter() {
                     c.ch.eff[j].desired[2] = 0.4;
                 }
@@ -1266,7 +1352,7 @@ impl Extra for Swim {
             }
             _ => {}
         }
-        // (the water handler's per-part flags, ctx+0x2eb8..+0x2ec4, have no reader here)
+        // (ctx+0x2eb8, +0x2ebc, +0x2ec0: nothing in the NM code reads what these write, so they are for the game [C])
     }
 
     fn lines(&mut self) -> Vec<String> {
@@ -1274,6 +1360,7 @@ impl Extra for Swim {
     }
 
     fn stop(&mut self, _c: &mut Ctx) {
+        note(format_args!("swim: deactivate, stopping {:?}", self.kids.on));
         for n in ["armsWindmillAdaptive", "pedalLegs", "bodyWrithe", "bodyFoetal"] {
             self.kids.stop(n);
         }
@@ -1324,6 +1411,32 @@ pub struct KeyframeRdr2 {
     count: Vec<i32>,
     err: f32,
     hold: Vec<(usize, Option<Vec3>, Option<Quat>)>,
+    logged: u8,
+    seen_incoming: bool,
+}
+
+/// The shortest rotation's axis times its angle.
+fn turn(q: Quat) -> Vec3 {
+    (if q.w < 0.0 { -q } else { q }).to_scaled_axis()
+}
+
+fn clamp3(v: Vec3, l: Vec3) -> Vec3 {
+    Vec3::new(v.x.clamp(-l.x, l.x), v.y.clamp(-l.y, l.y), v.z.clamp(-l.z, l.z))
+}
+
+/// The tracking's braking along the way to the target (twice in 0x2a1c45c, for the velocity and the turn): if he
+/// comes at it faster than its own speed and can't slow in the distance left at these limits, the wanted speed along
+/// the way is what he can still shed.
+fn brake(want: Vec3, now: Vec3, own: Vec3, way: Vec3, dist: f32, lim: Vec3) -> Vec3 {
+    let (cur, anim) = (now.dot(way), own.dot(way));
+    if anim < cur {
+        let t = dist / (cur - anim);
+        let can = t * (lim.x * way.x.abs() + lim.y * way.y.abs() + lim.z * way.z.abs()) + anim;
+        if can < cur {
+            return want + way * (can - want.dot(way));
+        }
+    }
+    want
 }
 
 impl KeyframeRdr2 {
@@ -1344,7 +1457,7 @@ impl KeyframeRdr2 {
             momentum: p.b("softpreservemomentum", false)?, forces: p.b("useForces", false)?, target_vel: p.b("usetargetvel", false)?,
             spikes: p.i("spikes", 0)?, cool: p.i("spikecooldown", 3)?, spike_ang: p.v("spikeangaccel", Vec3::splat(1000.0))?,
             started: false, failed: false, ramp: (0.0, 0.0), pose: vec![], angles: vec![], prev: vec![], count: vec![], err: 0.0,
-            hold: vec![],
+            hold: vec![], logged: 0, seen_incoming: false,
         })
     }
 
@@ -1359,14 +1472,25 @@ impl KeyframeRdr2 {
     }
 
     /// The pose tracked: the incoming animation when the agent has one in world space, else the pose at the start.
-    fn targets(&self, c: &Ctx) -> (Vec<Transform>, Vec<[f32; 3]>) {
+    fn targets(&mut self, c: &Ctx) -> (Vec<Transform>, Vec<[f32; 3]>) {
         let n = c.b.frames.len();
         if c.incoming.len() >= n && c.incoming.iter().any(|t| t.translation != Vec3::ZERO) {
+            if trace() && self.logged & 1 != 0 && !self.seen_incoming {
+                self.seen_incoming = true;
+                eprintln!("keyframe: tracking the incoming buffer");
+            }
             let m = crate::nmrs::incoming_rows(&c.b.doll.links, c.incoming);
             let a = (0..c.ch.eff.len()).map(|j| c.ch.incoming_angle(j, &m)).collect();
             return (c.incoming[..n].to_vec(), a);
         }
         (self.pose.clone(), self.angles.clone())
+    }
+
+    fn say(&mut self, bit: u8, s: String) {
+        if trace() && self.logged & bit == 0 {
+            self.logged |= bit;
+            eprintln!("{s}");
+        }
     }
 
     pub fn tick(&mut self, c: &mut Ctx, dt: f32) {
@@ -1378,7 +1502,8 @@ impl KeyframeRdr2 {
             self.pose = c.b.frames.to_vec();
             self.angles = (0..c.ch.eff.len()).map(|j| c.ch.actual(j, c.b.frames)).collect();
             self.count = vec![0; self.pose.len()];
-            // (ctx+0x4800, +0x47fd, +0x4802, +0x2b54: the balancer-side extras it turns off [G], none here)
+            // activate: the foot yaw hold off and its latches let go, ZMP gravity compensation off (ctx+0x47fd, +0x4800, +0x2b54)
+            (c.ch.core.foot_hold, c.ch.core.foot_unlatch, c.ch.core.zmp) = (false, true, false);
             if !self.hard.is_empty() && self.grav > 0.0 {
                 for &k in self.soft.iter().chain(&self.alt) {
                     if k > 0 {
@@ -1386,10 +1511,11 @@ impl KeyframeRdr2 {
                     }
                 }
             }
+            self.say(1, format!("keyframe: activate, hard {} soft {} alt {} muscle {} active {}, foot hold and ZMP off",
+                                   self.hard.len(), self.soft.len(), self.alt.len(), self.muscle.len(), self.active.len()));
         }
         let (target, angles) = self.targets(c);
-        let (src, prev_src) = self.src;
-        let _ = (src, prev_src);
+        let _ = self.src;
         // desired from the incoming pose on every keyed joint
         let mut m: Vec<usize> = self.active.clone();
         m.extend(self.hard.iter().chain(&self.soft).chain(&self.alt).filter(|&&k| k > 0).map(|&k| k - 1));
@@ -1398,30 +1524,44 @@ impl KeyframeRdr2 {
                 c.ch.eff[j].desired = *a;
             }
         }
-        // the hard keyed parts: the game keyframes them (ours [G]: held on the pose by Delirium's hard constraints)
+        // the hard keyed parts: 0x2a1b1a4 sets their pose from the buffer and their velocities to nothing while the mode
+        // is 3 (ours: Delirium's hard constraints on the pose)
         self.hold = self.hard.iter().filter_map(|&k| target.get(k).map(|t| (k, Some(t.translation), Some(t.rotation)))).collect();
         if !self.failed {
             if self.brk >= 0.0 && self.brk < self.err {
                 self.failed = true;
+                self.err = 0.0;
                 c.out.send(FAILURE(), "keyframe", 0.0);
+                self.say(2, format!("keyframe: break, tracking error over {}", self.brk));
             } else {
                 self.soft_track(c, &target, up, dt);
+                // the hard record's writer: 15 stiff on the muscle key mask, only while soft keying hasn't failed
+                set_k(c, &self.muscle, 15.0, 1.0, Some(1.0));
             }
         }
-        // the muscle key: 15 stiff, the target the pose's angles within the limits
-        set_k(c, &self.muscle, 15.0, 1.0, Some(1.0));
-        for &j in &self.muscle {
+        // 0x2a186d0: the muscle target of the masked joints is the pose's angles (3-DOF inside the limits), without the
+        // hard keyed parts' joints. Its loop starts at joint 1, so the left hip is never overridden [C]
+        let (hard, knee_elbow): (Vec<usize>, Vec<usize>) = (self.hard.iter().filter(|&&k| k > 0).map(|&k| k - 1).collect(), KNEE().iter().chain(ELBOW().iter()).copied().collect());
+        let mut kept = 0;
+        for &j in self.muscle.iter().filter(|j| !hard.contains(j) && **j != HIP()[0]) {
             if let Some(a) = angles.get(j) {
                 let l = c.ch.limits(j);
-                c.ch.eff[j].desired = [0, 1, 2].map(|k| a[k].clamp(l[2 * k], l[2 * k + 1]));
+                c.ch.eff[j].desired = if knee_elbow.contains(&j) { *a } else { [0, 1, 2].map(|k| a[k].clamp(l[2 * k], l[2 * k + 1])) };
+                kept += 1;
             }
+        }
+        if !self.muscle.is_empty() {
+            self.say(128, format!("keyframe: muscle key overrides {kept} of {} joints, failed {}", self.muscle.len(), self.failed));
         }
         self.prev = target;
     }
 
-    /// The soft keying (rdr2_keyframe.md 4.1/4.2 [P]): each soft part's velocity driven at the pose, the linear and
-    /// angular accelerations clamped per axis by the part's weight (angular in the COM frame), with the spike allowance.
-    /// RDR2 sets the parts' velocities (or forces with useForces); here both are forces over the step.
+    /// The soft keying (0x2a1c45c): each soft part's velocity and turn driven at the pose, braked to what the limits can
+    /// still shed, the accelerations clamped per axis by the part's weight (angular in the COM frame, with the spike
+    /// allowance). RDR2 sets the parts' velocities unless useForces; here both are forces over the step.
+    /// softpreservemomentum as the code has it: the tracked parts' mean velocity before the step added to each after [C].
+    /// useForces: what the parts' forces leave of the trunk's own tracking is shared out by mass (ours [P]: the frame's
+    /// rotations are the parts', not relative to their rest; the inertia is taken about the axis of the turn).
     fn soft_track(&mut self, c: &mut Ctx, target: &[Transform], up: Vec3, dt: f32) {
         let mut w = self.w.0;
         if self.blend.0 {
@@ -1441,77 +1581,160 @@ impl KeyframeRdr2 {
             if let Some(x) = weight.get_mut(k) { *x = wa; }
         }
         let rows = [c.m.a, c.m.b, c.m.c];
-        let (mut sum, mut n) = (0.0, 0);
+        let (mut sum, mut n, mut mass, mut mv) = (0.0, 0, 0.0, Vec3::ZERO);
         let mut push: Vec<(usize, Vec3, Vec3)> = vec![];
+        let (mut last_a, mut last_w) = (Vec3::ZERO, Vec3::ZERO);
+        let (mut sum_f, mut sum_t) = (Vec3::ZERO, Vec3::ZERO);
+        let (mut spiked, mut braked) = (0, 0);
+        let moved = self.target_vel || self.forces;
         for k in 0..target.len().min(c.b.frames.len()) {
             let wk = weight[k];
             if wk <= 0.0 || self.hard.contains(&k) {
                 continue;
             }
             let part = c.b.part(k);
+            let pm = c.b.doll.part_mass(k);
+            (mass, mv) = (mass + pm, mv + part.v * pm);
             let now = c.b.frames[k];
             let t = target[k];
-            let mut v = (t.translation - now.translation) / dt;
-            let qe = t.rotation * now.rotation.inverse();
-            let qe = if qe.w < 0.0 { -qe } else { qe };
-            let mut wv = qe.to_scaled_axis() / dt;
-            if (self.target_vel || self.forces) && let Some(p) = self.prev.get(k) {
-                v += (t.translation - p.translation) / dt;
-                let qp = t.rotation * p.rotation.inverse();
-                wv += (if qp.w < 0.0 { -qp } else { qp }).to_scaled_axis() / dt;
+            let (lim_a, lim_w) = (self.accel * wk, self.ang * wk);
+            // the linear half
+            let gap = t.translation - now.translation;
+            let dist = gap.length();
+            let p = self.prev.get(k).copied().unwrap_or(t);
+            let own = (t.translation - p.translation) / dt;
+            let mut v = gap / dt;
+            if moved {
+                v += own;
             }
+            let way = gap.normalize_or_zero();
+            let v2 = brake(v, part.v, own, way, dist, lim_a);
+            braked += (v2 != v) as u32;
             let g = if self.forces { 0.0 } else { self.grav };
-            let mut a = (v - part.v) / dt + up * (9.8 * g);
-            a = Vec3::new(a.x.clamp(-self.accel.x * wk, self.accel.x * wk), a.y.clamp(-self.accel.y * wk, self.accel.y * wk),
-                          a.z.clamp(-self.accel.z * wk, self.accel.z * wk));
+            // the gravity share after the clamp (RDR2's fixed vector (0, -9.8, 0), read here as along his up)
+            let a = clamp3((v2 - part.v) / dt, lim_a) + up * (9.8 * g);
+            // the angular half
+            let err = turn(t.rotation * now.rotation.inverse());
+            let ang = err.length();
+            let own_w = turn(t.rotation * p.rotation.inverse()) / dt;
+            let mut wv = err / dt;
+            if moved {
+                wv += own_w;
+            }
+            let wv = brake(wv, part.w, own_w, err.normalize_or_zero(), ang, lim_w);
             let al = (wv - part.w) / dt;
-            let mut lc = Vec3::new(rows[0].dot(al), rows[1].dot(al), rows[2].dot(al));
-            let lim = self.ang * wk;
-            let over = lc.x.abs() > lim.x || lc.y.abs() > lim.y || lc.z.abs() > lim.z;
+            let lc = Vec3::new(rows[0].dot(al), rows[1].dot(al), rows[2].dot(al));
+            let over = lc.x.abs() > lim_w.x || lc.y.abs() > lim_w.y || lc.z.abs() > lim_w.z;
+            // the spikes: past them the counter runs up and comes round to 0, then an over-limit step may spike again
             let cnt = &mut self.count[k];
+            if self.spikes <= *cnt {
+                *cnt += 1;
+            }
+            if self.spikes + self.cool <= *cnt {
+                *cnt = 0;
+            }
             let lim = if *cnt < self.spikes && over {
                 *cnt += 1;
+                spiked += 1;
                 self.spike_ang
             } else {
-                if *cnt >= self.spikes {
-                    *cnt += 1;
-                    if *cnt >= self.spikes + self.cool {
-                        *cnt = 0;
-                    }
-                }
-                lim
+                lim_w
             };
-            lc = Vec3::new(lc.x.clamp(-lim.x, lim.x), lc.y.clamp(-lim.y, lim.y), lc.z.clamp(-lim.z, lim.z));
+            let lc = clamp3(lc, lim);
             let al = rows[0] * lc.x + rows[1] * lc.y + rows[2] * lc.z;
+            (last_a, last_w) = (lim_a, lim);
+            sum_f += a * pm;
+            sum_t += al * c.b.doll.inertia(k, al.normalize_or(Vec3::Z));
             push.push((k, a, al));
-            sum += (t.translation - now.translation).length();
+            sum += dist;
             n += 1;
         }
         self.err = if n > 0 { sum / n as f32 } else { 0.0 };
-        if self.momentum && !push.is_empty() {
-            // [P] the tracked parts' momentum kept: the mass-weighted mean acceleration taken out
-            let (mut mv, mut ms) = (Vec3::ZERO, 0.0);
-            for &(k, a, _) in &push {
-                let m = c.b.doll.part_mass(k);
-                (mv, ms) = (mv + a * m, ms + m);
-            }
-            let mean = mv / ms.max(1e-6);
-            push.iter_mut().for_each(|p| p.1 -= mean);
+        if push.is_empty() {
+            return;
+        }
+        self.say(4, format!("keyframe: soft tracking {n} parts, mean error {:.3} m, weight {w:.2}/{wa:.2}", self.err));
+        if braked > 0 {
+            self.say(8, format!("keyframe: braking along the way on {braked} parts"));
+        }
+        if spiked > 0 {
+            self.say(16, format!("keyframe: {spiked} parts spiked"));
+        }
+        let mut extra = (Vec3::ZERO, Vec3::ZERO);
+        if self.forces {
+            extra = self.trunk(c, target, dt, (last_a, last_w), (sum_f, sum_t), n as f32);
+        } else if self.momentum {
+            let mean = mv / mass.max(1e-6);
+            push.iter_mut().for_each(|p| p.1 += mean / dt);
+            self.say(32, format!("keyframe: momentum, {:.3} m/s added", mean.length()));
         }
         for (k, a, al) in push {
-            c.out.force(k, a * c.b.doll.part_mass(k));
+            let pm = c.b.doll.part_mass(k);
+            c.out.force(k, a * pm + extra.0 * (pm / mass.max(1e-6)));
             let l = al.length();
-            if l > 1e-6 {
-                c.out.torque(k, al * c.b.doll.inertia(k, al / l));
-            }
+            let tq = if l > 1e-6 { al * c.b.doll.inertia(k, al / l) } else { Vec3::ZERO };
+            c.out.torque(k, tq + extra.1 * (pm / mass.max(1e-6)));
         }
+    }
+
+    /// useForces' second half of 0x2a1c45c: the trunk (RDR2's mask 0x102709) tracked as one body. The force and torque it
+    /// would take, less what the parts already got, a share for each tracked part.
+    fn trunk(&mut self, c: &mut Ctx, target: &[Transform], dt: f32, lim: (Vec3, Vec3), got: (Vec3, Vec3), n: f32) -> (Vec3, Vec3) {
+        let trunk = parts(0x102709);
+        let (mut m, mut pc, mut pi, mut v, mut wc) = (0.0, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+        for &k in &trunk {
+            let (pm, part) = (c.b.doll.part_mass(k), c.b.part(k));
+            m += pm;
+            pc += c.b.frames[k].translation * pm;
+            pi += target[k].translation * pm;
+            v += part.v * pm;
+            wc += part.w * pm;
+        }
+        let m = m.max(1e-6);
+        let (pc, pi, v, wc) = (pc / m, pi / m, v / m, wc / m);
+        let frame = |rot: &dyn Fn(usize) -> Quat| {
+            let (mut x, mut y) = (Vec3::ZERO, Vec3::ZERO);
+            for &k in &trunk {
+                let pm = c.b.doll.part_mass(k);
+                x += rot(k) * Vec3::X * pm;
+                y += rot(k) * Vec3::Y * pm;
+            }
+            let x = x.normalize_or(Vec3::X);
+            let z = x.cross(y).normalize_or(Vec3::Z);
+            Quat::from_mat3(&bevy_math::Mat3::from_cols(x, z.cross(x), z))
+        };
+        let (rc, ri, rp_) = (frame(&|k| c.b.frames[k].rotation), frame(&|k| target[k].rotation),
+                             frame(&|k| self.prev.get(k).unwrap_or(&target[k]).rotation));
+        let total: f32 = (0..c.b.frames.len()).map(|k| c.b.doll.part_mass(k)).sum();
+        let a = clamp3(((pi - pc) / dt - v) / dt, lim.0);
+        let force = (a * total - got.0) / n;
+        let err = turn(ri * rc.inverse());
+        let own = turn(ri * rp_.inverse()) / dt;
+        let wv = brake(err / dt + own, wc, own, err.normalize_or_zero(), err.length(), Vec3::splat(180.0));
+        let al = (wv - wc) / dt;
+        let (ra, rb, rcc) = (rc * Vec3::X, rc * Vec3::Y, rc * Vec3::Z);
+        let lc = clamp3(Vec3::new(ra.dot(al), rb.dot(al), rcc.dot(al)), lim.1);
+        let al = ra * lc.x + rb * lc.y + rcc * lc.z;
+        let axis = al.normalize_or(Vec3::Z);
+        let inertia: f32 = (0..c.b.frames.len()).map(|k| {
+            let r = c.b.frames[k].translation - pc;
+            c.b.doll.inertia(k, axis) + c.b.doll.part_mass(k) * axis.cross(r).length_squared()
+        }).sum();
+        let torque = (al * inertia - got.1) / n * 0.9;
+        self.say(64, format!("keyframe: useForces trunk force {:.1} N, torque {:.1} Nm", force.length(), torque.length()));
+        (force, torque)
     }
 
     pub fn constraints(&self) -> Vec<(usize, Option<Vec3>, Option<Quat>)> {
         self.hold.clone()
     }
 
-    pub fn stop(&mut self) {
+    /// Deactivate: hard keying off; with the core, the foot yaw hold and ZMP gravity compensation back on.
+    pub fn stop(&mut self, c: &mut Ctx) {
         self.hold.clear();
+        if self.started && c.ch.rdr2 {
+            (c.ch.core.foot_hold, c.ch.core.zmp) = (true, true);
+            note(format_args!("keyframe: deactivate, foot hold and ZMP on"));
+        }
     }
 }

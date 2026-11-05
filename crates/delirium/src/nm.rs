@@ -2094,6 +2094,7 @@ impl Agent {
                 self.extras.outbox.extend(lines);
                 if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, crate::limbreq::slot("shotFallToKnees")); }
             }
+            c.head_look_on = self.nm_head.active;
             self.extras.tick_marked(&mut c, Some(world), obstacles, dt, self.limb_reqs.as_mut());
             if c.ch.rdr2 {
                 let held = c.ch.core.ftk.friction();

@@ -10065,12 +10065,17 @@ fn headless(mut sim: Sim, n: usize) {
     // test hook: RDR2_SEND="70:shot fallingReaction=2;90:..." sends those message lines at those frames
     let sends: Vec<(usize, String)> = std::env::var("RDR2_SEND").unwrap_or_default().split(';')
         .filter_map(|x| x.split_once(':')).filter_map(|(f, l)| Some((f.trim().parse().ok()?, l.trim().to_string()))).collect();
+    let hold_incoming: Option<usize> = std::env::var("RDR2_HOLD_INCOMING").ok().and_then(|x| x.parse().ok());
     for i in 0..n {
         if i == 60 {
             sim.button("shot");
         }
         for (_, l) in sends.iter().filter(|(f, _)| *f == i) {
             sim.send(l);
+        }
+        // test hook: RDR2_HOLD_INCOMING=<frame> makes the pose at that frame the incoming animation from then on
+        if hold_incoming == Some(i) {
+            sim.agent.incoming = sim.agent.doll.frames().collect();
         }
         sim.tick();
         sim.rise(1.0 / 60.0);

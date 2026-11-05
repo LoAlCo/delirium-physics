@@ -142,6 +142,8 @@ pub struct PointGun {
     max_across: f32,
     max_away: f32,
     falling_limits: i32,
+    /// +0x7b7: duck has the arms neutral
+    duck_neutral: bool,
     limits: [f32; 4],
     error_threshold: f32,
     use_twist: bool,
@@ -198,6 +200,7 @@ impl PointGun {
             pose_unused: [p.b("poseUnusedGunArm", false)?, p.b("poseUnusedSupportArm", false)?, p.b("poseUnusedOtherArm", false)?],
             max_across: deg(p.f("maxAngleAcross", 90.0)?), max_away: deg(p.f("maxAngleAway", 90.0)?),
             falling_limits: p.i("fallingLimits", 0)?,
+            duck_neutral: false,
             limits: [deg(p.f("acrossLimit", 90.0)?), deg(p.f("awayLimit", 90.0)?), deg(p.f("upLimit", 90.0)?), deg(p.f("downLimit", 45.0)?)],
             error_threshold: p.f("errorThreshold", 0.3926)?,
             use_twist: p.b("useSpineTwist", true)?, use_turn: p.b("useTurnToTarget", false)?, use_look: p.b("useHeadLook", true)?,
@@ -298,10 +301,14 @@ impl PointGun {
         (ok, out)
     }
 
-    /// 0x2ac7aac: point (3), neutral (0xb, never here: no falling flag or probe), or the side/connect choice (7).
+    /// 0x2ac7aac: point (3), neutral (0xb: here only duck's +0x7b7, no falling flag or probe), or the side/connect
+    /// choice (7).
     fn mode(&self, c: &Ctx, i: usize, ws: [i32; 2]) -> i32 {
         if !self.enabled(i, ws) {
             return 0;
+        }
+        if self.duck_neutral {
+            return 0xb;
         }
         let dir = unit(self.arms[i].led - self.anchor(c, i));
         if self.limits_ok(c, i, dir).0 { 3 } else { 7 }
@@ -576,6 +583,13 @@ impl Extra for PointGun {
 
     fn lines(&mut self) -> Vec<String> {
         std::mem::take(&mut self.out)
+    }
+
+    fn pg_duck_set(&mut self, on: bool) {
+        if on != self.duck_neutral {
+            crate::extras_ysk_rdr2::note(format_args!("pointGun: duck's neutral arms {on}"));
+        }
+        self.duck_neutral = on;
     }
 
     /// RDR2's controlledFall: timeWarpStrengthScale from it, and the left hand off (RDR2 turns enableLeft off when

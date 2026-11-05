@@ -211,7 +211,7 @@ pub static MESSAGES: [Message; 15] = [
         Param { name: "stiffnessRightAnkle", kind: Kind::Float, used: true, doc: "RDR2 core (-1: leave it)" },
         Param { name: "dampingRightAnkle", kind: Kind::Float, used: true, doc: "RDR2 core (1)" },
         Param { name: "muscleStiffnessRightAnkle", kind: Kind::Float, used: true, doc: "RDR2 core (-1: none)" },
-        Param { name: "dampenSideMotionInstanceHandle", kind: Kind::Int, used: false, doc: "RDR2 core (not done: no instances)" },
+        Param { name: "dampenSideMotionInstanceHandle", kind: Kind::Int, used: false, doc: "RDR2 core: an obstacle's id, or -1 the world (ours), holds his COM near the plane through it and his side axis at the start (0: off)" },
     ] },
     Message { name: "armsWindmill", params: &[
         Param { name: "leftNormal", kind: Kind::Vec3, used: true, doc: "the circle's plane normal, his frame: x forward, y left, z up (0 1 0); RDR2 core: the circle's turns about the chest's X, Y, Z, rad (0 0.2 0.2)" },
@@ -993,6 +993,15 @@ struct AnimPoseRdr2 {
     connected: [i32; 4],
     source: i32,
     zmp: bool,
+    /// dampenSideMotionInstanceHandle: an obstacle's id, -1 the world (ours), 0 none
+    handle: i32,
+    /// the instance's place now, from the obstacles
+    instance: Option<(Vec3, Quat)>,
+    /// the side-motion plane, in the instance's frame: a point and a normal (+0xf0, +0x100)
+    plane: Option<(Vec3, Vec3)>,
+    /// the incoming pose last step (RDR2's second buffer, ctx+0x3638)
+    prev: Vec<bevy_transform::components::Transform>,
+    logged: u8,
 }
 
 /// RDR2's animPose limb masks, in its parameter order (the spine's stiffness mask takes the neck and head, its
@@ -1051,27 +1060,46 @@ impl AnimPose {
             *g = p.f(&format!("gravComp{name}"), -1.0)?;
         }
         let zmp = p.b("useZMPGravityCompensation", true)?;
-        let _ = p.i("dampenSideMotionInstanceHandle", 0)?;
+        let handle = p.i("dampenSideMotionInstanceHandle", 0)?;
         Ok(AnimPoseRdr2 {
-            global, mask, limbs, grav, zmp,
+            global, mask, limbs, grav, zmp, handle, instance: None, plane: None, prev: vec![], logged: 0,
             over: [p.b("overideHeadlook", false)?, p.b("overidePointArm", false)?, p.b("overidePointGun", false)?],
             connected: [p.i("connectedLeftHand", 0)?, p.i("connectedRightHand", 0)?, p.i("connectedLeftFoot", -2)?, p.i("connectedRightFoot", -2)?],
             source: p.i("animSource", 0)?,
         })
     }
 
-    /// RDR2's tick (rdr2_animpose.md section 4, biped): the global stiffness on effectorMask (if >= 0); the limbs
-    /// that meet effectorMask driven to the incoming animation (animSource < 3); the global gravity opposition on
-    /// effectorMask (if >= 0); each limb's own stiffness on its fixed mask (even outside effectorMask); a connected
-    /// hand or foot (1, or -1 with its end part touching) gets its wrist or ankle at (16, 1, muscle 12); each limb's
-    /// own gravity opposition. The overrides make headLook and pointArm yield (nm.rs); animPose drives those joints.
-    /// Ours or left out: Delirium has one incoming pose, so every animSource below 3 reads it, and without one the
-    /// limbs go to the pose he was in when he went ragdoll (the effectors' zero); no instances, so no side-motion
-    /// damping (dampenSideMotionInstanceHandle). The ZMP gravity-compensation flag and the connected hands and feet
-    /// go to the core's gravity opposition (nmdbm.rs `oppose_gravity`).
+    /// RDR2's tick (rdr2_animpose.md section 4, biped): the side-motion spring; the global stiffness on effectorMask (if
+    /// >= 0); the joints of effectorMask driven to the incoming animation (animSource 0 now, 1 last step's; RDR2's limb
+    /// handler tests each joint's bit, and writes nothing without the buffer [C]); the global gravity opposition on
+    /// effectorMask (if >= 0); each limb's own stiffness on its fixed mask (even outside effectorMask); a connected hand
+    /// or foot (1, or -1 with its end part touching something other than himself) gets its wrist or ankle at (16, 1,
+    /// muscle 12); each limb's own gravity opposition. The overrides make headLook and pointArm yield (nm.rs); animPose
+    /// drives those joints; nothing in the NM code reads overidePointGun [C, by scan]. Ours: animSource 2 has no buffer here;
+    /// the instance is an obstacle by id, or -1 for the world. The ZMP gravity-compensation flag and the connected hands
+    /// and feet go to the core's gravity opposition (nmdbm.rs `oppose_gravity`).
     fn tick_rdr2(&mut self, c: &mut Ctx) {
         self.r2_on = true;
-        let r = &self.rdr2;
+        let r = &mut self.rdr2;
+        let say = |r: &mut AnimPoseRdr2, bit: u8, s: String| {
+            if crate::extras_ysk_rdr2::trace() && r.logged & bit == 0 {
+                r.logged |= bit;
+                eprintln!("animPose: {s}");
+            }
+        };
+        if let Some((at, rot)) = r.instance {
+            // the plane through his COM and side axis when it started, carried by the instance
+            let (point, normal) = *r.plane.get_or_insert_with(|| (rot.inverse() * (c.com - at), (rot.inverse() * c.m.a).normalize_or_zero()));
+            let n = (rot * normal).normalize_or_zero();
+            let d = (c.com - (at + rot * point)).dot(n);
+            if d.abs() > 0.1 {
+                let f = n * (-300.0 * d);
+                for k in crate::extras_ysk_rdr2::parts(0x102709) {
+                    c.out.force(k, f);
+                }
+                say(r, 1, format!("side motion spring, off the plane {d:.3} m, {:.0} N a part", f.length()));
+            }
+        }
         let mine = Character::mask(&r.mask);
         let [s, d, ms, g] = r.global;
         if s >= 0.0 {
@@ -1079,20 +1107,17 @@ impl AnimPose {
                 c.ch.eff[j].set_stiffness(s, d, (ms >= 0.0).then_some(ms));
             }
         }
-        if r.source < 3 {
-            let m = (!c.incoming.is_empty()).then(|| crate::nmrs::incoming_rows(&c.b.doll.links, c.incoming));
-            for l in ["ul", "ur", "ll", "lr", "uk"].map(Character::mask) {
-                if !l.iter().any(|j| mine.contains(j)) {
-                    continue;
+        if (0..2).contains(&r.source) {
+            let buffer: &[bevy_transform::components::Transform] = if r.source == 0 { c.incoming } else { &r.prev };
+            if !buffer.is_empty() {
+                let m = crate::nmrs::incoming_rows(&c.b.doll.links, buffer);
+                for &j in &mine {
+                    c.ch.eff[j].desired = c.ch.incoming_angle(j, &m);
                 }
-                for j in l {
-                    c.ch.eff[j].desired = match &m {
-                        Some(m) => c.ch.incoming_angle(j, m),
-                        None => c.ch.eff[j].zero,
-                    };
-                }
+                say(r, 2, format!("{} joints from animation buffer {}", mine.len(), r.source));
             }
         }
+        r.prev = c.incoming.to_vec();
         if g >= -1e-5 {
             c.ch.core.zmp = r.zmp;
             for &j in &mine {
@@ -1107,11 +1132,14 @@ impl AnimPose {
                 }
             }
         }
-        for (i, &v) in r.connected.iter().enumerate() {
-            // limbs 0..3 are the left and right arm, then the left and right leg: the hand or foot is the last part
+        let connected = r.connected;
+        for (i, &v) in connected.iter().enumerate() {
+            // limbs 0..3 are the left and right arm, then the left and right leg: the hand or foot is the last part.
+            // -1: bit 2 and (4 or 0x10) of the part's contact flags, touching something other than himself
             let l = crate::nmshot::limb(i);
-            if v == 1 || (v == -1 && c.b.doll.collided(&[l.p[3]])) {
+            if v == 1 || (v == -1 && c.b.doll.hit_out[l.p[3]].is_some()) {
                 c.ch.eff[l.e[3]].set_stiffness(16.0, 1.0, Some(12.0));
+                say(r, if v == 1 { 4 } else { 8 }, format!("limb {i} connected, value {v}: its end joint at 16"));
             }
         }
         if r.grav.iter().any(|&g| g >= -1e-4) {
@@ -1138,6 +1166,15 @@ impl AnimPose {
 }
 
 impl Extra for AnimPose {
+    fn objects(&mut self, obs: &[crate::ragdoll::Obstacle]) {
+        let h = self.rdr2.handle;
+        self.rdr2.instance = match h {
+            0 => None,
+            -1 => Some((Vec3::ZERO, Quat::IDENTITY)),
+            _ => obs.iter().find(|o| o.id == h).map(|o| (o.at, o.rot)),
+        };
+    }
+
     fn stop(&mut self, c: &mut Ctx) {
         // RDR2's deactivate: gravity opposition off on effectorMask, and the ZMP flag back on
         if self.r2_on {
@@ -1502,6 +1539,12 @@ impl SoftKeyframe {
 }
 
 impl Extra for SoftKeyframe {
+    fn stop(&mut self, c: &mut Ctx) {
+        if let Some(k) = self.r2.as_mut() {
+            k.stop(c);
+        }
+    }
+
     fn tick(&mut self, c: &mut Ctx, _dt: f32) {
         if c.ch.rdr2 && let Some(k) = self.r2.as_mut() {
             return k.tick(c, _dt);
