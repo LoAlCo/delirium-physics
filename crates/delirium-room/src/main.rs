@@ -5381,7 +5381,8 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
     let (fp, ft) = world::floor_tris(room.pool, 50.0);
     world.add(&fp, &ft, &vec![concrete; ft.len()]);
     let (p, t, m) = room.triangles();
-    world.add(&p, &t, &m);
+    // comparison hook: NMX_CLEAR=1 leaves only the floor, so a long stagger meets no furniture
+    if std::env::var("NMX_CLEAR").is_err() { world.add(&p, &t, &m); }
     if let Some(i) = room.snap {
         let (p, t, m) = room.block_triangles(i);
         world.add_chunk(SNAP_CHUNK, &p, &t, &m);
