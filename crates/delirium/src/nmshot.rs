@@ -216,7 +216,6 @@ struct Reach {
     sign: f32,
 }
 
-#[derive(Clone, Debug)]
 /// RDR2's hit record (0x2a40ddc), which the new-bullet router fills once for the shot and reachForWound alike: a bullet
 /// from behind, unless in the neck or head, is moved to where it comes out of him, by a ray back along it from 0.4 m
 /// past the hit. The part and point there are the wound; the impulse keeps the entry point.
@@ -228,6 +227,7 @@ pub(crate) fn hit_record(c: &Ctx, point: Vec3, part: i32, bullet: Vec3) -> (Vec3
     c.b.doll.probe(c.b.build, far, point).map_or((point, part), |(k, x, _)| (x, k as i32))
 }
 
+#[derive(Clone, Debug)]
 pub struct Shot {
     pub p: Params,
     new_hit: bool,
