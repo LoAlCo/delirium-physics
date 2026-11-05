@@ -1699,23 +1699,6 @@ impl Shot {
         (s.tk, s.tn) = (s.tk + dt, s.tn + dt);
     }
 
-    /// RDR2's spine blend to zero: once the spine ramps stop writing, the spine (and neck) blend to the zero pose,
-    /// fading in over half a second; the balancer's own lean2 on spine joint 0 passes through.
-    fn blend_rdr2(&mut self, c: &mut Ctx) {
-        let sbz = self.p.rdr2.spine_blend_zero;
-        if sbz <= 0.0 {
-            return;
-        }
-        let delta = self.since_hit - self.rd.wrote;
-        let (v, b) = if delta > 0.0 { let d = delta.min(0.5); ((1.0 - 2.0 * d).min(1.0), 2.0 * d * sbz) } else { (0.0, 0.0) };
-        let weight = (1.0 - b) * (1.0 - v) + b;
-        let keep = c.ch.eff[(*SPINE())[0]].desired[1];
-        for j in SPINE().iter().chain(crate::nmrs::NECK().iter()) {
-            c.ch.eff[*j].blend_to_zero(weight);
-        }
-        c.ch.eff[(*SPINE())[0]].desired[1] = keep;
-    }
-
     /// RDR2's shot tick: relax U (upper) and W (lower), the falling decision, the spine ramps, the strength
     /// sub-module from the first bullet, the fall (fallingReaction) and the arm shapes, then the spine blend.
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
@@ -1765,7 +1748,6 @@ impl Shot {
                  Some(|s, _| s.failed() || s.new_hit), Some(|_, c| c.out.spine_twist_stop = true), dt);
         c.module(MELEE() as u32);
         if !stepped {
-            self.blend_rdr2(c);
         }
         c.module(102);
         self.new_hit = false;
