@@ -9950,6 +9950,8 @@ mod nmx {
         /// bodyWrithe's backStiffness (a draw in the game)
         pub back_k: f32,
         pub reach: Option<(f32, bool)>,
+        /// the part hit, Delirium's index
+        pub part: usize,
     }
     pub fn first_pose(path: &str) -> Option<Pose> {
         const JMAP: [usize; 20] = [0, 3, 6, 1, 2, 4, 5, 7, 8, 9, 12, 16, 10, 13, 14, 15, 17, 18, 19, 11];
@@ -9999,10 +10001,11 @@ mod nmx {
                 }
                 continue;
             }
-            let mut pose_ = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![], turns: vec![], far: Vec3::ZERO, hit: (Vec3::ZERO, Vec3::Y), vel: Vec3::ZERO, back_k: 13.0, reach: None };
+            let mut pose_ = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![], turns: vec![], far: Vec3::ZERO, hit: (Vec3::ZERO, Vec3::Y), vel: Vec3::ZERO, back_k: 13.0, reach: None, part: 10 };
             let mut com = Vec3::ZERO;
             let mut bullet = (Vec3::ZERO, Vec3::Y);
             let mut rage: Vec<u8> = vec![];
+            let mut shot_rec = None;
             while o + 20 <= body.len() {
                 let kind = u32::from_le_bytes(body[o..o + 4].try_into().unwrap());
                 let vt = u32::from_le_bytes(body[o + 12..o + 16].try_into().unwrap());
@@ -10021,6 +10024,7 @@ mod nmx {
                         pose_.angles[JMAP[j]] = if vt == 0x3663d98 { [f(b, 0x114), 0.0, 0.0] } else { row(b, 0x12c).to_array() };
                         j += 1;
                     }
+                    5 if b.len() > 0x680 && u32::from_le_bytes(b[0xc..0x10].try_into().unwrap()) == 5 => shot_rec = Some((row(b, 0x640), row(b, 0x670), u16::from_le_bytes(b[0x664..0x666].try_into().unwrap()) as usize)),
                     4 if b.len() >= 21 * 0x140 => {
                         let (r0, r1, r2) = (row(b, 0), row(b, 0x10), row(b, 0x20));
                         pose_.pelvis = Mat3::from_cols(Vec3::new(r0.x, r1.x, r2.x), Vec3::new(r0.y, r1.y, r2.y), Vec3::new(r0.z, r1.z, r2.z));
@@ -10042,6 +10046,13 @@ mod nmx {
             let r = nm(0) * bullet.0.x + nm(1) * bullet.0.y + nm(2) * bullet.0.z;
             let _ = (c, com);
             pose_.hit = (yaw * (pose_.rel[10] + r), yaw * bullet.1.normalize());
+            // no main bullet record at this index (the leg shot has none): the shot's own hit record, on its part
+            if let Some((l, d, game)) = shot_rec.filter(|_| bullet.0 == Vec3::ZERO) {
+                const TO_OURS: [usize; 21] = [0, 1, 4, 7, 2, 3, 5, 6, 8, 9, 10, 13, 17, 11, 14, 15, 16, 18, 19, 20, 12];
+                let nm = |i: usize| Vec3::new(f(&rage[game * 0x140..], i * 4), f(&rage[game * 0x140..], 0x10 + i * 4), f(&rage[game * 0x140..], 0x20 + i * 4));
+                pose_.hit = (yaw * (pose_.rel[game] + nm(0) * l.x + nm(1) * l.y + nm(2) * l.z), yaw * d.normalize());
+                pose_.part = TO_OURS[game];
+            }
             pose = Some(pose_);
         }
         pose
@@ -10273,7 +10284,7 @@ fn headless(mut sim: Sim, n: usize) {
                     // the recording's hit point and direction (the shooter's aim there), not the button's
                     Some(p) => {
                         let at = p.hit.0 + Vec3::Z * sim.nmx_lift;
-                        sim.fire(10, Some((at, p.hit.1, -p.hit.1)), false, &[]);
+                        sim.fire(p.part, Some((at, p.hit.1, -p.hit.1)), false, &[]);
                         if let Some(t) = sim.shot_task.as_mut() {
                             t.1 = t.1.saturating_sub(2);
                         }
