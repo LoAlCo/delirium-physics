@@ -535,6 +535,8 @@ pub struct Rdr2 {
     /// crouch start: knee bend and hip pitch it holds (letting them go), and until when
     pub crouching: Option<(f32, f32, f32)>,
     started: bool,
+    /// bal+0x468: the first tick after a reset
+    pub first_tick: bool,
     /// the legs' twist rest offset (bal+0x22c): the pelvis control relaxes the leg twists toward it, less GTA IV's base;
     /// a crouch start keeps the thighs' turn-out here
     pub twist_rest: f32,
@@ -560,7 +562,7 @@ impl Rdr2 {
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false, heading_only: false,
                leg_twist: RESET_LEG_TWIST, turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, pause: 0.0, aligned: false, landed: false, crouching: None,
-               started: false, twist_rest: 0.0, car: None, stagger: false, lead: None, lead_add: 0.0, taper: true, plane: None }
+               started: false, first_tick: true, twist_rest: 0.0, car: None, stagger: false, lead: None, lead_add: 0.0, taper: true, plane: None }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.

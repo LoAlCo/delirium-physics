@@ -1667,6 +1667,10 @@ pub struct Ragdoll {
     hinge_b: Vec<Option<f32>>,
     pub rigid: Option<(Vec<crate::rigid::Link>, Vec3, Vec<crate::nmdbm::M34>)>,
     pub rage_vo: Option<Vec<Vec3>>,
+    /// RDR2 core: the bodies move at the end of a step, so the next tick reads, and its drive starts from, where the
+    /// solve will be (rdr2_core3.md 11.1); what `begin` keeps from before the move
+    pub nm_first: bool,
+    early: Option<(Vec<Vec3>, Vec<[Vec3; 3]>, Vec<(Vec3, Mat3)>)>,
     pub inertia: Option<Vec<Vec3>>,
     pub inst: Option<[Vec3; 4]>,
     pending: Vec<(usize, Vec3, Vec3, Vec3)>,
@@ -1755,7 +1759,7 @@ impl Ragdoll {
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
         Ragdoll { nm: build.nm, links: build.links.clone(), pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], contact_off: 0, hit: vec![None; n], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
-                  sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
+                  sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
 
@@ -1763,6 +1767,9 @@ impl Ragdoll {
         let b = &mut self.bodies[k];
         (b.x, b.v, b.w) = (x - self.o, v, w);
         b.set_q(q.normalize());
+        if self.early.take().is_some() {
+            self.rage_vo = None;
+        }
         self.wake();
     }
 
@@ -3155,6 +3162,7 @@ impl Ragdoll {
         self.snapped.clear();
         self.rigid = None;
         let vo0 = self.rage_vo.take();
+        let early = self.early.take();
         self.contact_off |= self.gone;
         if self.gone != 0 {
             let g = self.gone;
@@ -3240,22 +3248,25 @@ impl Ragdoll {
         }
         let xr = self.bodies[self.order[0]].x;
         let ip = self.inst_place(&inst);
-        let seen_w: Vec<Vec3> = self.last_a.iter().map(|&a| Self::chain(a, &inst, ip)).collect();
-        let seen_r: Vec<[Vec3; 3]> = self.coll.iter().map(|(_, c)| crate::rigid::rows_mul(c, &inst)).collect();
-        let mut now: Vec<(Vec3, Mat3)> = self.coll.iter().map(|(d, c)| (xr + crate::rigid::row_mul(*d, &inst), turn(&crate::rigid::rows_mul(c, &inst)))).collect();
+        let moved_early = early.is_some();
+        let (seen_w, seen_r, mut now): (Vec<Vec3>, Vec<[Vec3; 3]>, Vec<(Vec3, Mat3)>) = early.unwrap_or_else(|| (self.last_a.iter().map(|&a| Self::chain(a, &inst, ip)).collect(),
+            self.coll.iter().map(|(_, c)| crate::rigid::rows_mul(c, &inst)).collect(),
+            self.coll.iter().map(|(d, c)| (xr + crate::rigid::row_mul(*d, &inst), turn(&crate::rigid::rows_mul(c, &inst)))).collect()));
         let mut vo: Vec<Vec3> = self.bodies.iter().map(|b| b.v - b.w.vx(b.x)).collect();
         if let Some(v0) = vo0.as_ref().and_then(|o| o.get(self.order[0])) {
             vo[self.order[0]] = *v0;
         }
-        for b in &mut self.bodies {
-            let (v, w) = (b.v, b.w);
-            b.moved(v, w, h);
+        if !moved_early {
+            for b in &mut self.bodies {
+                let (v, w) = (b.v, b.w);
+                b.moved(v, w, h);
+            }
+            self.rejoin(&joints, &pose);
         }
-        self.rejoin(&joints, &pose);
         for (k, b) in self.bodies.iter().enumerate().filter(|&(k, _)| joints[k].is_some()) {
             vo[k] = b.v - b.w.vx(b.x);
         }
-        let back = self.recentre(&mut pose);
+        let back = if moved_early { Vec3::ZERO } else { self.recentre(&mut pose) };
         for (vo, b) in vo.iter_mut().zip(&self.bodies) {
             let (w, s) = (b.w, back);
             *vo = Vec3::new(-w.y, -w.z, -w.x).mul_add(Vec3::new(s.z, s.x, s.y), Vec3::new(w.z, w.x, w.y).mul_add(Vec3::new(s.y, s.z, s.x), *vo));
@@ -3507,6 +3518,44 @@ impl Ragdoll {
         self.sleep();
         self.asleep = self.mode == 2 && lift == 0.0 && self.pins.iter().all(Option::is_none) && self.grips.is_empty() && self.joins.is_empty()
             && self.cons.iter().all(|c| c.0.is_none() && c.1.is_none());
+        if self.nm_first && !self.asleep {
+            self.move_early(&st.joints, &mut st.pose, st.h);
+        }
+    }
+
+    /// `begin`'s move, run at the end of the step before it (RDR2 core).
+    fn move_early(&mut self, joints: &[Option<Joint>], pose: &mut [Option<(Vec3, Quat)>], h: f32) {
+        let held = (self.held_inst.take(), self.ped_inst.take());
+        let inst = self.inst();
+        if self.coll.len() != self.bodies.len() {
+            self.coll = self.comp(&inst);
+        }
+        let (xr, ip) = (self.bodies[self.order[0]].x, self.inst_place(&inst));
+        let seen_w = self.last_a.iter().map(|&a| Self::chain(a, &inst, ip)).collect();
+        let seen_r = self.coll.iter().map(|(_, c)| crate::rigid::rows_mul(c, &inst)).collect();
+        let mut now: Vec<(Vec3, Mat3)> = self.coll.iter().map(|(d, c)| (xr + crate::rigid::row_mul(*d, &inst), turn(&crate::rigid::rows_mul(c, &inst)))).collect();
+        (self.held_inst, self.ped_inst) = held;
+        let mut vo: Vec<Vec3> = match self.rage_vo.take() {
+            Some(vo) => vo,
+            None => self.bodies.iter().map(|b| b.v - b.w.vx(b.x)).collect(),
+        };
+        for b in &mut self.bodies {
+            let (v, w) = (b.v, b.w);
+            b.moved(v, w, h);
+        }
+        self.rejoin(joints, pose);
+        for (k, b) in self.bodies.iter().enumerate().filter(|&(k, _)| joints[k].is_some()) {
+            vo[k] = b.v - b.w.vx(b.x);
+        }
+        let s = self.recentre(pose);
+        for (vo, b) in vo.iter_mut().zip(&self.bodies) {
+            let w = b.w;
+            *vo = Vec3::new(-w.y, -w.z, -w.x).mul_add(Vec3::new(s.z, s.x, s.y), Vec3::new(w.z, w.x, w.y).mul_add(Vec3::new(s.y, s.z, s.x), *vo));
+        }
+        now.iter_mut().for_each(|f| f.0 += s);
+        self.rage_vo = Some(vo);
+        self.rigid = None;
+        self.early = Some((seen_w, seen_r, now));
     }
 }
 
