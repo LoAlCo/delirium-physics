@@ -9949,6 +9949,7 @@ mod nmx {
         pub vel: Vec3,
         /// bodyWrithe's backStiffness (a draw in the game)
         pub back_k: f32,
+        pub reach: Option<(f32, bool)>,
     }
     pub fn first_pose(path: &str) -> Option<Pose> {
         const JMAP: [usize; 20] = [0, 3, 6, 1, 2, 4, 5, 7, 8, 9, 12, 16, 10, 13, 14, 15, 17, 18, 19, 11];
@@ -9979,6 +9980,10 @@ mod nmx {
                     if kind == 5 && b.len() > 0x310 && u32::from_le_bytes(b[0xc..0x10].try_into().unwrap()) == 2 {
                         state = Some(u32::from_le_bytes(b[0x30c..0x310].try_into().unwrap()) as u8);
                     }
+                    // reachForWound's draws, as inputs: when the recorded hand starts and which
+                    if kind == 5 && b.len() > 0x540 && u32::from_le_bytes(b[0xc..0x10].try_into().unwrap()) == 19 && p.reach.is_none() && (b[0x530] != 0 || b[0x531] != 0) {
+                        p.reach = Some((f32::NAN, b[0x530] != 0));
+                    }
                     if kind == 5 && b.len() > 0x50 && u32::from_le_bytes(b[0xc..0x10].try_into().unwrap()) == 27 {
                         p.back_k = f(b, 0x4c);
                     }
@@ -9986,10 +9991,15 @@ mod nmx {
                 if let (Some(t), Some(s)) = (t, state) {
                     let t0 = *t0.get_or_insert(t);
                     p.turns.push((t - t0, s));
+                    if p.reach.is_some_and(|r| r.0.is_nan()) {
+                        let left = p.reach.unwrap().1;
+                        p.reach = Some((t - t0, left));
+                        unsafe { std::env::set_var("NMX_RFW", format!("{} {}", t - t0, left as u8)) };
+                    }
                 }
                 continue;
             }
-            let mut pose_ = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![], turns: vec![], far: Vec3::ZERO, hit: (Vec3::ZERO, Vec3::Y), vel: Vec3::ZERO, back_k: 13.0 };
+            let mut pose_ = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![], turns: vec![], far: Vec3::ZERO, hit: (Vec3::ZERO, Vec3::Y), vel: Vec3::ZERO, back_k: 13.0, reach: None };
             let mut com = Vec3::ZERO;
             let mut bullet = (Vec3::ZERO, Vec3::Y);
             let mut rage: Vec<u8> = vec![];

@@ -2090,7 +2090,7 @@ impl ReachForWound {
         let arm_stiffness = p.f("armStiffness", 10.0)?;
         Ok(ReachForWound {
             point: p.v("hitPoint", Vec3::ZERO)?, part: p.i("hitPart", -1)?,
-            wait: p.f("timeBeforeReachForWound", 0.2)?.max(0.0), hold: p.f("grabHoldTime", 2.0)?.max(0.0),
+            wait: std::env::var("NMX_RFW").ok().and_then(|v| v.split(' ').next().and_then(|x| x.parse().ok())).map_or(p.f("timeBeforeReachForWound", 0.2)?.max(0.0), |w| { let _ = p.f("timeBeforeReachForWound", 0.2); w }), hold: p.f("grabHoldTime", 2.0)?.max(0.0),
             one_hand: p.b("reachWithOneHand", true)?, thigh: p.b("allowInjuredThighReach", true)?,
             lower_leg: p.b("allowInjuredLowerLegReach", false)?, arm_stiffness,
             spine_bend: p.f("bend2spine", 0.7)?, hip_bend: p.f("bend2hip", 0.6)?, knee_bend: p.f("bend2leg", 0.6)?,
@@ -2428,6 +2428,7 @@ impl ReachForWound {
         }
         if self.one_hand && ok == [true; 2] {
             let left = if leg { part_side(part as i32) == Some(0) } else { (point - c.com).dot(side) > 0.0 };
+            let left = std::env::var("NMX_RFW").ok().and_then(|v| v.split(' ').nth(1).map(|x| x == "1")).unwrap_or(left);
             ok = [left, !left];
         }
         let spread = ok == [true; 2] && !leg && !arm && !head;
