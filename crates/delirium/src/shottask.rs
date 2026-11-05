@@ -126,6 +126,10 @@ impl ShotTask {
                   ("shockSpinMax", F(st("shockSpinMax", delirium_data::kv!(63)))), ("shockSpinLiftForceMult", F(st("shockSpinLiftForceMult", -1.0))),
                   ("shockSpinDecayMult", F(st("shockSpinDecayMult", delirium_data::kv!(84)))), ("shockSpinScalePerComponent", F(st("shockSpinScalePerComponent", 0.5)))]);
         let mut out = vec![("shot", p)];
+        // RDR2 core: its task runs bodyBalance beside the shot, with its own defaults, from the hit on (recorded)
+        if rd && first && !melee {
+            out.push(rdr2_body_balance(hit.pos, rand));
+        }
         if hit.health >= delirium_data::kv!(26) {
             if !matches!(hit.blend_group, Some(53..=55 | 57)) {
                 out.push(if rd { rdr2_stay_upright() } else { ("stayUpright", vec![("start", B(true)), ("stiffness", F(st("shotUprightStiffness", delirium_data::kv!(5))))]) });
@@ -213,6 +217,24 @@ impl ShotTask {
 
 /// RDR2 core: the StayUpright record RDR2's shot was recorded with (rdr2_core3.md 2.1, slow set, the rest the template's).
 /// 4.002 and 5.005 are the message's 4 and 5 through its per-effector scale, which Delirium doesn't have.
+/// RDR2's bodyBalance as its shot task starts it: the values recorded on both shots, which are the behaviour's defaults
+/// (rdr2_bodybalance.md 2.1). Delirium's message defaults are GTA IV's. Its target is the world's origin, which in RDR2's
+/// map is a far point in no particular direction for its turns to or away from; ours is a far point likewise, since the
+/// room's origin is under his feet.
+fn rdr2_body_balance(at: Vec3, rand: &mut Rand) -> Msg {
+    use Value::{Bool as B, Float as F, Vec3 as V};
+    let a = rand.float_in_range(0.0, std::f32::consts::TAU);
+    let far = at.with_z(0.0) + Vec3::new(a.cos(), a.sin(), 0.0) * 1900.0;
+    ("bodyBalance", vec![("start", B(true)), ("headLookPos", V(far)), ("bodyStiffness", F(9.0)), ("damping", F(0.7)), ("elbow", F(0.9)), ("shoulder", F(1.0)),
+                         ("spineStiffness", F(10.0)), ("spineDamping", F(1.0)), ("headLookAtVelProb", F(-1.0)), ("useHeadLook", B(false)),
+                         ("somersaultAngle", F(1.0)), ("somersaultAngleThreshold", F(0.25)), ("sideSomersaultAngle", F(1.0)), ("sideSomersaultAngleThreshold", F(0.25)),
+                         ("angVelMultiplier", V(Vec3::new(4.0, 1.0, 4.0))), ("angVelThreshold", V(Vec3::new(1.2, 3.0, 1.2))),
+                         ("armsOutOnPush", B(true)), ("armsOutOnPushMultiplier", F(1.0)), ("armsOutOnPushTimeout", F(1.1)), ("returningToBalanceArmsOut", F(0.0)),
+                         ("armsOutStraightenElbows", F(0.0)), ("armsOutMinLean2", F(-9.9)), ("useBodyTurn", B(true)), ("turnOffProb", F(0.1)), ("turn2TargetProb", F(0.2)),
+                         ("turn2VelProb", F(0.3)), ("turnAwayProb", F(0.15)), ("turnLeftProb", F(0.125)), ("turnRightProb", F(0.125)), ("elbowAngleOnContact", F(1.9)),
+                         ("bendElbowsTime", F(0.3)), ("bendElbowsGait", F(0.7))])
+}
+
 fn rdr2_stay_upright() -> Msg {
     use Value::{Bool as B, Float as F, Int as I, Vec3 as V};
     ("stayUpright", vec![("start", B(true)), ("side", I(0)), ("useForces", B(true)), ("useTorques", B(true)), ("velocityBased", B(true)), ("torqueparts", B(true)),
