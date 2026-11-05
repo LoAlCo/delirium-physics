@@ -1624,6 +1624,8 @@ pub struct Ragdoll {
     pub touch: Vec<u8>,
     pub contact_off: u32,
     pub hit: Vec<Option<(Vec3, Vec3, i32)>>,
+    /// `hit` without his own parts: `hit`'s id is -1 for himself and for the static world alike (RDR2 core's BCR)
+    pub hit_out: Vec<Option<(Vec3, Vec3)>>,
     pub contact: crate::bump::ContactRecord<i32>,
     pub ob_hits: Vec<(i32, Vec3, Vec3)>,
     pub ob_hit_left: Vec<f32>,
@@ -1758,7 +1760,7 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { nm: build.nm, links: build.links.clone(), pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], contact_off: 0, hit: vec![None; n], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+        Ragdoll { nm: build.nm, links: build.links.clone(), pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
                   sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
@@ -2691,6 +2693,9 @@ impl Ragdoll {
             }
         }
         let n_self = blocks.len();
+        for (k, a) in accs.iter().enumerate().filter(|(_, a)| a.2 > 0.0) {
+            self.hit_out[k] = touch_hit(*a).map(|h| (h.0, h.1));
+        }
         for &(k, at, n, depth) in self_touch.iter().chain(&self_touch) {
             self.touch[k] |= delirium_data::kv!(95 int);
             touch_add(&mut accs[k], at, n, depth, -1);
@@ -3202,6 +3207,7 @@ impl Ragdoll {
             *t = (*t & !delirium_data::kv!(409 int)) | ((*t >> delirium_data::kv!(0 int)) & delirium_data::kv!(1 int));
         }
         self.hit.iter_mut().for_each(|h| *h = None);
+        self.hit_out.iter_mut().for_each(|h| *h = None);
         let joints: Vec<Option<Joint>> = build.parts.iter().enumerate().map(|(i, p)| p.parent.map(|j| {
             let j = Joint::new(p, j, drive.rigid.get(i));
             Joint { jc: self.jconst(build, i, &j, drive.rigid.get(i)), ..j }

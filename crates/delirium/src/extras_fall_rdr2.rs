@@ -1456,9 +1456,9 @@ impl BcrRdr2 {
             let low_foot = [2, 3].map(|i| up.dot(c.b.at(limb(i).p[3]))).into_iter().fold(f32::MAX, f32::min);
             let lows = if self.p.high { 6 } else { 5 };
             for (i, &k) in BCR_PARTS.iter().enumerate() {
-                if let Some((q, cn, id)) = c.b.doll.hit[k] {
+                if let Some((q, cn)) = c.b.doll.hit_out[k] {
                     let h = up.dot(q) - low_foot;
-                    if id != -1 && h > BCR_ABOVE_FOOT {
+                    if h > BCR_ABOVE_FOOT {
                         let high = i >= lows;
                         self.sum[high as usize] += cn;
                         if high {
