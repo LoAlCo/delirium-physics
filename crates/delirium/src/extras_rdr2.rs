@@ -1314,6 +1314,7 @@ impl Melee {
         let at = if r.local { crate::vm4(pm.a, pm.b, pm.c, pm.d, r.point) } else { r.point };
         let n = r.normal;
         if r.hit_new {
+            self.out.push(format!("#say melee blow on part {}, time since the last {:.2}", r.part, s.t));
             s.t = 0.0;
             s.back = c.m.c.dot(n) > 0.0;
         }
