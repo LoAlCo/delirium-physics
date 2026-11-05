@@ -14,7 +14,8 @@
 //!   reachForWound, and once catchFall runs the shot ranks below it;
 //! - the balancer's lean of the lowest spine joint (GTA IV's aid, which bodyBalance and the shot override by design;
 //!   in RDR2 that joint is the spine limb's, not the legs') and its ankles (set every step as defaults the shot and
-//!   the others change: with them first, he fell after a plain shot and on ramps) rank below every behaviour;
+//!   the others change: with them first, he fell after a plain shot and on ramps) rank below every behaviour
+//!   (`below`: 0 in RDR2's highest-first order; they stood at CORE, above every behaviour, in that order);
 //! - RDR2's per-joint scale layer (the shot's looseness law lowering strength, the lowest wins) is not here: the GTA
 //!   IV shot writes strengths, not looseness scales, and taking the lowest undid the balancer's leg stiffness.
 //!
@@ -50,6 +51,11 @@ pub const SHOT: u32 = 0x38;
 
 /// The core's own requests (RDR2: 0x27, above every behaviour id) rank above every behaviour.
 pub const CORE: u32 = 0x138;
+
+/// Under every behaviour, in RDR2's order (highest first; in the other, for comparison, CORE is the lowest).
+pub fn below(reversed: bool) -> u32 {
+    if reversed { 0 } else { CORE }
+}
 
 /// RDR2's behaviour slot for a message an extra handles (the core's for those with none).
 pub fn slot(message: &str) -> u32 {

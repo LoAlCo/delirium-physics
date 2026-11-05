@@ -1576,6 +1576,14 @@ impl Agent {
         if let Some(ch) = self.ch.as_mut() {
             ch.rdr2 = self.rdr2_core.is_some();
         }
+        self.doll.nm_first = self.rdr2_core.is_some();
+        // RDR2 core (rdr2_core.md 3.1, step 2c; rdr2_core3.md 11.1): the COM pass and the joints' readings are of the state
+        // this tick starts from; GTA IV's order has them from the end of the last tick
+        if let (Some(ch), true) = (self.ch.as_mut(), self.rdr2_core.is_some()) {
+            let body = crate::nmdbm::Body { ch, build, doll: &self.doll, frames: &frames };
+            let (block, read) = (body.block(), (0..ch.joints.len()).map(|j| body.read(j)).collect());
+            (ch.block, ch.read) = (Some(block), read);
+        }
         self.limb_reqs = match (self.ch.as_ref(), self.rdr2_core) {
             (Some(ch), Some(p)) if p.limb_requests && nm_tick => Some(crate::limbreq::Requests::begin(&ch.eff)),
             _ => None,
@@ -1654,8 +1662,9 @@ impl Agent {
                         }
                         if let Some(r) = self.limb_reqs.as_mut() {
                             // its lean of the lowest spine joint and its ankles are defaults the others override (limbreq.rs)
-                            r.mark_joints(&ch.eff, crate::limbreq::CORE, &[(*crate::nmrs::SPINE())[0]]);
-                            r.mark_joints(&ch.eff, crate::limbreq::CORE, &*crate::nmrs::ANKLE());
+                            let low = crate::limbreq::below(self.rdr2_core.is_some_and(|p| p.limb_order_reversed));
+                            r.mark_joints(&ch.eff, low, &[(*crate::nmrs::SPINE())[0]]);
+                            r.mark_joints(&ch.eff, low, &*crate::nmrs::ANKLE());
                             r.mark(&ch.eff, 0x18);
                         }
                         if was == 0 && dbm.f.stepping != 0 {

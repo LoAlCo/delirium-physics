@@ -960,7 +960,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         let a = if !planted {
             let sh = &leg.shin;
             let back = p.rdr2.is_some_and(|r| r.stagger)
-                && horizontal(leg.foot.v - p.gvel[i], up).normalize_or_zero().vd(horizontal(leg.foot.m.c, up).normalize_or_zero()) < -0.3;
+                && horizontal(leg.foot.v, up).normalize_or_zero().vd(horizontal(leg.foot.m.c, up).normalize_or_zero()) < -0.3;
             let a = if back {
                 sdot(sh.w, sh.m.a, b"yzx").fma(leg.ankle.damping / leg.ankle.strength.max(1e-10), sdot(sh.m.c, normal[i], b"yzx"))
             } else {
@@ -969,9 +969,11 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             match p.rdr2 {
                 // RDR2 (0x2aae0b4): the blend with the foot's side only while the foot's horizontal direction, relative to
                 // the ground, is at most 0.4 along s.m.c, otherwise the shin term alone; -0.2 only in that blend, moving
-                // forward and not staggering; and no acos(leg length) (the recorded swing pitch fits this to 0.01 rad)
+                // forward and not staggering; and no acos(leg length) (the recorded swing pitch fits this to 0.01 rad).
+                // That ground velocity is bal+0x530, the character's floor (ctx+0x4790, 0 here; nothing under him moves in
+                // Delirium), not the leg's moving contact point p.gvel, which leaps with each new step target
                 Some(r) => {
-                    let along = horizontal(leg.foot.v - p.gvel[i], up).normalize_or_zero().vd(s.m.c);
+                    let along = horizontal(leg.foot.v, up).normalize_or_zero().vd(s.m.c);
                     if along <= 0.4 {
                         let a = sdot(p.normal[i], vnorm(leg.foot.m.a.vx(up)), b"zyx").fma(0.8, a * 0.2);
                         if !r.stagger && along < 0.0 { a - 0.2 } else { a }
@@ -1527,6 +1529,13 @@ impl Dbm {
         self.tilt(b);
         let mut s = b.snap(self.p.up);
         self.last = (s.m.b, s.angvel);
+        // RDR2 (dbm stage 1, under bal+0x468, the first tick after a reset): the legs' twist states start from the hips'
+        // actual twists off their zero (joint+0x19c, the middle of the twist limits)
+        if self.p.rdr2.as_mut().is_some_and(|r| std::mem::take(&mut r.first_tick)) {
+            for i in 0..2 {
+                self.pv.yaw[i] = s.legs[i].hip.actual[2] - s.legs[i].hip.mid_twist;
+            }
+        }
         let ankles = self.p.rdr2.map(|_| (b.joint_pos((*ANKLE())[0]), b.joint_pos((*ANKLE())[1])));
         if !self.holding(&s, b.foot(0), b.foot(1), ankles) {
             return None;
