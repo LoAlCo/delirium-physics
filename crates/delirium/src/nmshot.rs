@@ -407,6 +407,8 @@ pub struct DbmView {
     pub knee: f32,
     /// a COM lean is on (bal+0x7b4)
     pub lean_on: bool,
+    /// his standing leg straightness and the leg scale (ctx+0x34d0, bal+0x210)
+    pub straight: (f32, f32),
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {

@@ -1868,7 +1868,7 @@ impl Agent {
                 stepping: d.f.stepping, planted: d.pv.planted, failing: d.p.rdr2.is_some_and(|r| r.failing.is_some()),
                 hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps), leg: d.p.pelvis_height,
                 time: d.p.rdr2.map_or(0.0, |r| r.time), quality: d.p.rdr2.map_or(0.0, |r| r.quality), knee: d.p.rdr2.map_or(0.0, |r| r.owned.knee.value),
-                lean_on: !matches!(d.lean.mode, crate::nmdbm::LeanMode::None) });
+                lean_on: !matches!(d.lean.mode, crate::nmdbm::LeanMode::None), straight: d.p.rdr2.map_or((0.99, d.p.pelvis_height), |r| r.straight) });
             if let Some(p) = self.nm_cf_msg.take() {
                 let b = walk_actives!(self);
                 start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);

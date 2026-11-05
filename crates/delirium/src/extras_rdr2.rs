@@ -656,8 +656,7 @@ const DUCK_RANGE: [f32; 7] = [0.7, 0.71, 0.688, 0.571, 0.87, 0.7, 1.135];
 /// back towards (never past) where it was for duckTime, then to nothing while the duck's weight fades over blendTime.
 /// It never ends by itself. Its requests rank at headLook's id (0x1d, not duck's own): the spine just above headLook, the
 /// neck just above until dontLookTime, then just below [C]. pointGunType 1 or 2 turns a running pointGun's arms neutral
-/// while ducking. Ours: the requests' weight as a blend of each joint's desired angle towards the duck's; the knees'
-/// bend now is measured against the balancer's standing pelvis height (RDR2's leg scale less the sole); the balancer's
+/// while ducking. Ours: the requests' weight as a blend of each joint's desired angle towards the duck's; the balancer's
 /// ownership is per step, so the dip is asked this step and its recovery the next.
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -775,8 +774,9 @@ impl DuckRdr2 {
         // the knees: their bend now (from the pelvis's height over the lower foot), dipped and recovering to it
         let zp = c.b.part(0).m.d.z;
         let zf = [2, 3].map(|i| c.b.part(crate::nmshot::limb(i).p[3]).m.d.z);
-        let leg = c.dbm.map_or(0.0, |d| d.leg);
-        let k0 = if leg > 0.1 { (0.79235 * (0.99 - (zp - zf[0]).max(zp - zf[1]) / leg)).clamp(0.0, 0.35) } else { 0.0 };
+        let (straight, scale) = c.dbm.map_or((0.99, 0.0), |d| d.straight);
+        let leg = scale - 0.5 * crate::nmdbm_rdr2::FOOT_HEIGHT;
+        let k0 = if leg > 0.1 { (0.79235 * (straight - (zp - zf[0]).max(zp - zf[1]) / leg)).clamp(0.0, 0.35) } else { 0.0 };
         let [lo, hi] = self.leg_bend;
         let dip = if hi >= 0.0 { hi } else { lo + c.ch.random() * (hi.abs() - lo) };
         let k = (dip + k0).clamp(0.0, 0.35);
@@ -789,6 +789,7 @@ impl DuckRdr2 {
         let [lo, hi] = self.hip_pitch;
         let eta = if hi >= 0.0 { hi } else { lo + c.ch.random() * (hi.abs() - lo) };
         let pitch = (h0 - eta).clamp(-1.5, 1.5);
+        crate::extras_ysk_rdr2::note(format_args!("duck: knees {k0:.3} dip to {k:.3}, hips {h0:.3} dip to {pitch:.3}, straight {straight:.4} leg {leg:.3}"));
         // owner 9 for the knees; the hips only when nobody owns them (owner 0 loses to any asker)
         c.out.dbm_crouch.extend([Crouch::Knee(9, -k, f32::INFINITY), Crouch::Hip(0, -pitch.clamp(-3.5, 3.5), f32::INFINITY)]);
         self.recover = Some((-k0, -h0.clamp(-2.0, 2.0)));
