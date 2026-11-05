@@ -10004,7 +10004,7 @@ mod nmx {
                     1 if !b.is_empty() => {
                         pose_.back = row(b, 0xf30).with_z(0.0).normalize();
                         com = row(b, 0xf40);
-                        bullet = (row(b, 0x1540), row(b, 0x1550));
+                        bullet = (row(b, 0x1560), row(b, 0x1550));
                         pose_.vel = row(b, 0xf60);
                     }
                     2 if j < 20 => {
@@ -10027,7 +10027,11 @@ mod nmx {
             let masses: Vec<f32> = rage.chunks_exact(0x140).map(|c| f(c, 0x11c)).collect();
             let m: f32 = masses.iter().sum();
             let c: Vec3 = (0..21).map(|k| pose_.rel[k] * masses[k] / m).sum();
-            pose_.hit = (yaw * (bullet.0 - (com - c)), yaw * bullet.1.normalize());
+            // record+0x150, the hit in the part's frame (0x2a197d8 puts the force there; +0x130 isn't read by it): the NM rows of part 10
+            let nm = |i: usize| Vec3::new(f(&rage[10 * 0x140..], i * 4), f(&rage[10 * 0x140..], 0x10 + i * 4), f(&rage[10 * 0x140..], 0x20 + i * 4));
+            let r = nm(0) * bullet.0.x + nm(1) * bullet.0.y + nm(2) * bullet.0.z;
+            let _ = (c, com);
+            pose_.hit = (yaw * (pose_.rel[10] + r), yaw * bullet.1.normalize());
             pose = Some(pose_);
         }
         pose
