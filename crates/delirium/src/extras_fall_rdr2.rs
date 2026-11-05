@@ -1808,8 +1808,8 @@ impl BcrRdr2 {
     }
 
     /// The slump (0x2a55ddc, from RDR2's code): the leg under the COM collapses first (the other, one time in five, by a
-    /// random part of it), then every stiffness falls at slumpLegStiffRate (slumpMode 1 always, 0 only while his kinetic
-    /// energy falls below 0.4, 2 while it falls); no new steps; after sitstarttime the legs blend to the sit pose at
+    /// random part of it), then every stiffness falls at slumpLegStiffRate (while his kinetic energy falls below 0.4;
+    /// slumpMode 1 always, 2 while it falls at all); no new steps; after sitstarttime the legs blend to the sit pose at
     /// sitrate. The friction ramps aren't here: Delirium's friction is per material.
     fn slump_core(&mut self, c: &mut Ctx, dt: f32) {
         c.out.dbm_force_balance = true;
@@ -1832,7 +1832,7 @@ impl BcrRdr2 {
             SlumpRec { t: 0.0, ke, legs }
         });
         r.t += dt;
-        if (ke <= r.ke && ke < 0.4 && self.p.slump_mode == 0) || self.p.slump_mode == 1 || (self.p.slump_mode == 2 && ke <= r.ke) {
+        if (ke <= r.ke && ke < 0.4) || self.p.slump_mode == 1 || (self.p.slump_mode == 2 && ke <= r.ke) {
             r.legs = r.legs.map(|s| s - dt * self.p.slump_rate);
         }
         r.ke = ke;
