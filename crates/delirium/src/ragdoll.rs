@@ -2020,6 +2020,12 @@ impl Ragdoll {
         self.comp(&inst).iter().map(|(_, c)| turn(&crate::rigid::rows_mul(c, &inst))).collect()
     }
 
+    /// NMX_DUMP: a part's world contacts as they stand (point, normal, gap).
+    pub fn nmx_contacts(&self, k: usize) -> Vec<(Vec3, Vec3, f32)> {
+        let (tm, bw) = (self.turns()[k], self.bound_world(k));
+        self.held[k].iter().map(|r| (if r.age == 1 { r.world } else { crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) }, r.n, r.gap)).collect()
+    }
+
     pub fn motion(&self, k: usize) -> (Vec3, Vec3) {
         (self.bodies[k].v, self.bodies[k].w)
     }

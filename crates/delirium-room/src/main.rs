@@ -10091,7 +10091,9 @@ mod nmx {
             let mut joints = std::io::BufWriter::new(std::fs::File::create(format!("{p}.joints.csv")).unwrap());
             let _ = writeln!(frames, "frame,t,com_x,com_y,com_z,comv_x,comv_y,comv_z,com_speed,fwd_x,fwd_y,fwd_z,up_x,up_y,up_z,tilt_deg,lowest_part_z,head_z,mass,bal_steps,bal_foot,health,active");
             let _ = writeln!(joints, "frame,t,joint,des0,des1,des2,act0,act1,act2,muscle_stiffness,strength,damping,oppose_gravity,injury");
-            Dump { frames, joints }
+            let mut parts = std::io::BufWriter::new(std::fs::File::create(format!("{p}.parts.csv")).unwrap());
+            let _ = writeln!(parts, "frame,part,mass,cx,cy,cz,qx,qy,qz,qw,vx,vy,vz,wx,wy,wz,touch,contacts");
+            Dump { frames, joints, parts }
         }
         pub fn frame(&mut self, sim: &Sim, i: usize) {
             let d = &sim.agent.doll;
