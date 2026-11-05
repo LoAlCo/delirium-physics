@@ -616,7 +616,7 @@ impl Extra for Duck {
     /// RDR2 core: values sent without start replace the running ones; a newHit ducks.
     fn update(&mut self, p: &mut P) -> Result<(), Error> {
         if self.core {
-            self.r = self.r.parse(p)?;
+            self.r = self.r.clone().parse(p)?;
         }
         Ok(())
     }
@@ -629,6 +629,16 @@ impl Extra for Duck {
         if self.crouch > 0.0 {
             c.out.dbm_leg_offset = Some(0.0);
         }
+    }
+
+    /// RDR2 core: duck's requests rank at headLook's id, not its own.
+    fn marks(&self) -> Vec<(u32, Vec<usize>)> {
+        self.r.marks.map_or(vec![], |[s, n]| vec![(s, SPINE().to_vec()), (n, NECK().to_vec())])
+    }
+
+    /// RDR2 core: pointGun's +0x7b7 while it runs.
+    fn pg_duck(&self) -> Option<bool> {
+        self.core.then_some(self.r.gun)
     }
 }
 
@@ -644,12 +654,12 @@ const DUCK_RANGE: [f32; 7] = [0.7, 0.71, 0.688, 0.571, 0.87, 0.7, 1.135];
 /// neck groups jump from where they are by a granted share of the room left in each (a random budget split three
 /// ways), the balancer's knees and hips dip at once and recover at their rates; after timeBeforeDuck the posture eases
 /// back towards (never past) where it was for duckTime, then to nothing while the duck's weight fades over blendTime.
-/// It never ends by itself. Ours: the requests' weight as a blend of each joint's desired angle towards the duck's;
-/// headLook isn't visible here, so the neck's flag after dontLookTime is not modelled and the end treats headLook as
-/// not running; pointGunType does nothing (Delirium has no pointGun behaviour); the knees' bend now is measured
-/// against the balancer's standing pelvis height (RDR2's leg scale less the sole); the balancer's ownership is per step,
-/// so the dip is asked this step and its recovery the next.
-#[derive(Clone, Copy)]
+/// It never ends by itself. Its requests rank at headLook's id (0x1d, not duck's own): the spine just above headLook, the
+/// neck just above until dontLookTime, then just below [C]. pointGunType 1 or 2 turns a running pointGun's arms neutral
+/// while ducking. Ours: the requests' weight as a blend of each joint's desired angle towards the duck's; the knees'
+/// bend now is measured against the balancer's standing pelvis height (RDR2's leg scale less the sole); the balancer's
+/// ownership is per step, so the dip is asked this step and its recovery the next.
+#[derive(Clone)]
 #[allow(dead_code)]
 struct DuckRdr2 {
     mag: [f32; 2], leg_bend: [f32; 2], leg_rate: f32, hip_pitch: [f32; 2], hip_rate: f32,
@@ -666,6 +676,11 @@ struct DuckRdr2 {
     owns: bool,
     /// the knee and hip targets to recover to, asked the step after the dip
     recover: Option<(f32, f32)>,
+    /// the spine's and the neck's request ranks this step, once it has written them
+    marks: Option<[u32; 2]>,
+    traced: bool,
+    /// pointGun's +0x7b7 this step
+    gun: bool,
 }
 
 impl Default for DuckRdr2 {
@@ -674,16 +689,17 @@ impl Default for DuckRdr2 {
                    ls_rate: 0.4, neck_twist_rate: 0.5, spine_twist_rate: 0.5, wait: 0.0, time: 0.5, blend: 0.5, dont_look: 0.0, point_gun: 0,
                    twist: true, forward: true, exag: false, new_hit: false, left: true,
                    ramps: [Ramp { goal: 0.0, current: 0.0, rate: 100000.0 }; 7], pre: [0.0; 7], timer: 100000.0, started: false, owns: false,
-                   recover: None }
+                   recover: None, marks: None, traced: false, gun: false }
     }
 }
 
 /// RDR2's random three-way split of a budget: None when the demands fit (each channel gets its full room), else each
 /// channel's base less its demand plus its random share of the budget.
 fn duck_split(c: &mut Ctx, budget: f32, base: [f32; 3], demand: [f32; 3], weight: [f32; 3]) -> Option<[f32; 3]> {
-    if budget <= 0.0 {
+    if budget == 0.0 {
         return Some(std::array::from_fn(|k| base[k] - demand[k]));
     }
+    // (a negative budget makes the shares negative: they fit, as in RDR2)
     let phi: [f32; 3] = std::array::from_fn(|k| demand[k] * weight[k] / budget);
     if phi.iter().sum::<f32>() <= 1.0 {
         return None;
@@ -748,9 +764,14 @@ impl DuckRdr2 {
         for k in 0..7 {
             let grant = factor[k] - (1.0 - room[k]);
             let x = if grant > 1e-4 && signed[k] <= 0.0 { 0.0 } else { signed[k] };
-            let r = &mut self.ramps[k];
-            r.current = if matches!(k, 2 | 3 | 5 | 6) { sigma * (x + grant) } else { x + grant };
+            let side = if matches!(k, 2 | 3 | 5 | 6) { sigma } else { 1.0 };
+            self.ramps[k].current = side * (x + grant);
+            // what it eases back towards is that floored posture, in the joints' own sign [C]
+            self.pre[k] = side * x;
         }
+        self.traced = false;
+        let x = self.ramps.map(|r| (r.current * 100.0).round() / 100.0);
+        crate::extras_ysk_rdr2::note(format_args!("duck: new hit, budget {m:.2}, ducked {x:?}, posture {:?}", self.pre.map(|p| (p * 100.0).round() / 100.0)));
         // the knees: their bend now (from the pelvis's height over the lower foot), dipped and recovering to it
         let zp = c.b.part(0).m.d.z;
         let zf = [2, 3].map(|i| c.b.part(crate::nmshot::limb(i).p[3]).m.d.z);
@@ -780,6 +801,7 @@ impl DuckRdr2 {
 
     /// RDR2's tick (section 4).
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        self.marks = None;
         if let Some((k, h)) = self.recover.take().filter(|_| self.owns) {
             c.out.dbm_crouch.extend([Crouch::Knee(9, k, self.leg_rate), Crouch::Hip(0, h, self.hip_rate)]);
         }
@@ -787,6 +809,7 @@ impl DuckRdr2 {
             self.hit(c);
         }
         let t = self.timer;
+        self.gun = t < self.time + self.blend && matches!(self.point_gun, 1 | 2);
         if t >= self.time + self.blend {
             self.end(c);
         } else {
@@ -825,6 +848,12 @@ impl DuckRdr2 {
                         put(j, 1, 0.5 * x[5]);
                         put(j, 2, 0.5 * x[6]);
                     }
+                    // id 0x1d's rank (slot 0xf8), flag +1 / -1 either side of headLook's
+                    self.marks = Some([0xf9, if t <= self.dont_look { 0xf9 } else { 0xf7 }]);
+                    if !self.traced || (t > self.dont_look && t - dt <= self.dont_look) {
+                        self.traced = true;
+                        crate::extras_ysk_rdr2::note(format_args!("duck: requests at {t:.2} s, weight {w:.2}, neck rank {:#x}", if t <= self.dont_look { 0xf9 } else { 0xf7 }));
+                    }
                 }
             }
             if t > self.time && self.owns {
@@ -835,7 +864,7 @@ impl DuckRdr2 {
     }
 
     /// RDR2's end of a duck (section 5): the balancer let go; stopped mid-duck, the spine's angles zeroed; the neck's
-    /// too (headLook taken as not running).
+    /// too unless headLook runs and dontLookTime is over.
     fn end(&mut self, c: &mut Ctx) {
         if !std::mem::replace(&mut self.started, false) {
             return;
@@ -849,9 +878,13 @@ impl DuckRdr2 {
                     c.ch.eff[j].desired = [0.0; 3];
                 }
             }
-            for j in NECK().iter().copied() {
-                c.ch.eff[j].desired = [0.0; 3];
+            let neck = self.timer < self.dont_look || !c.head_look_on;
+            if neck {
+                for j in NECK().iter().copied() {
+                    c.ch.eff[j].desired = [0.0; 3];
+                }
             }
+            crate::extras_ysk_rdr2::note(format_args!("duck: end at {:.2} s, neck zeroed {neck}, headLook on {}", self.timer, c.head_look_on));
         }
     }
 }
@@ -3286,17 +3319,11 @@ impl Extra for Keyframe {
     }
 
     fn stop(&mut self, c: &mut Ctx) {
-        self.r2.stop();
-        // RDR2's deactivate: ZMP gravity compensation back on
-        if c.ch.rdr2 {
-            c.ch.core.zmp = true;
-        }
+        self.r2.stop(c);
     }
 
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
         if c.ch.rdr2 {
-            // RDR2's activate turns the core's ZMP gravity compensation off (the full gravity opposed, even airborne)
-            c.ch.core.zmp = false;
             return self.r2.tick(c, dt);
         }
         self.t += dt;

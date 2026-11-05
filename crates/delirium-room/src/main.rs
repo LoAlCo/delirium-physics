@@ -10297,6 +10297,7 @@ fn headless(mut sim: Sim, n: usize) {
     // NMX_POSE=<recording>: at the first NMX_FIRE frame the doll takes the recording's first-frame pose and the shot's
     // task starts on that same frame, as RDR2's NM starts at the hit from its animated pose
     let pose = std::env::var("NMX_POSE").ok().and_then(|p| nmx::first_pose(&p));
+    let hold_incoming: Option<usize> = std::env::var("RDR2_HOLD_INCOMING").ok().and_then(|x| x.parse().ok());
     for i in 0..n {
         if let (Some(p), Some(f)) = (&pose, &fires) {
             if f.first().is_some_and(|x| x.0 == i) {
@@ -10348,6 +10349,10 @@ fn headless(mut sim: Sim, n: usize) {
         }
         for (_, l) in sends.iter().filter(|(f, _)| *f == i) {
             sim.send(l);
+        }
+        // test hook: RDR2_HOLD_INCOMING=<frame> makes the pose at that frame the incoming animation from then on
+        if hold_incoming == Some(i) {
+            sim.agent.incoming = sim.agent.doll.frames().collect();
         }
         sim.tick();
         sim.rise(1.0 / 60.0);
