@@ -217,6 +217,17 @@ struct Reach {
 }
 
 #[derive(Clone, Debug)]
+/// RDR2's hit record (0x2a40ddc), which the new-bullet router fills once for the shot and reachForWound alike: a bullet
+/// from behind, unless in the neck or head, is moved to where it comes out of him, by a ray back along it from 0.4 m
+/// past the hit. The part and point there are the wound; the impulse keeps the entry point.
+pub(crate) fn hit_record(c: &Ctx, point: Vec3, part: i32, bullet: Vec3) -> (Vec3, i32) {
+    if bullet == Vec3::ZERO || point == Vec3::ZERO || bullet.dot(c.m.c) > 0.0 || matches!(part, 11 | 12) {
+        return (point, part);
+    }
+    let far = point + bullet.normalize_or_zero() * 0.4;
+    c.b.doll.probe(c.b.build, far, point).map_or((point, part), |(k, x, _)| (x, k as i32))
+}
+
 pub struct Shot {
     pub p: Params,
     new_hit: bool,
@@ -741,8 +752,8 @@ impl Shot {
         self.since_hit = 0.0;
         self.behind = fneg(sdot(self.p.bullet_vel, c.m.c, b"yzx"));
         let (mut at, mut normal) = (self.p.hit_point, self.p.normal);
-        if self.behind >= 0.0 {
-            let far = at + self.p.bullet_vel.normalize_or_zero() * delirium_data::kv!(116);
+        if self.behind >= 0.0 && !(c.ch.rdr2 && matches!(self.p.body_part, 11 | 12)) {
+            let far = at + self.p.bullet_vel.normalize_or_zero() * if c.ch.rdr2 { 0.4 } else { delirium_data::kv!(116) };
             if let Some((k, x, n)) = c.b.doll.probe(c.b.build, far, at) {
                 (self.p.body_part, at, normal) = (k, x, n);
             }
