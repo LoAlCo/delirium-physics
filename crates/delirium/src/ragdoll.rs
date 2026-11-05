@@ -1625,7 +1625,7 @@ pub struct Ragdoll {
     pub contact_off: u32,
     pub hit: Vec<Option<(Vec3, Vec3, i32)>>,
     /// `hit` without his own parts: `hit`'s id is -1 for himself and for the static world alike (RDR2 core's BCR)
-    pub hit_out: Vec<Option<(Vec3, Vec3)>>,
+    pub hit_out: Vec<Option<(Vec3, Vec3, f32)>>,
     pub contact: crate::bump::ContactRecord<i32>,
     pub ob_hits: Vec<(i32, Vec3, Vec3)>,
     pub ob_hit_left: Vec<f32>,
@@ -2683,7 +2683,7 @@ impl Ragdoll {
         }
         let n_self = blocks.len();
         for (k, a) in accs.iter().enumerate().filter(|(_, a)| a.2 > 0.0) {
-            self.hit_out[k] = touch_hit(*a).map(|h| (h.0, h.1));
+            self.hit_out[k] = touch_hit(*a).map(|h| (h.0, h.1, a.2));
         }
         for &(k, at, n, depth) in self_touch.iter().chain(&self_touch) {
             self.touch[k] |= delirium_data::kv!(95 int);

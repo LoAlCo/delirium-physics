@@ -1134,6 +1134,20 @@ struct BcrParams {
     high: bool,
     weak_zero: f32,
     weak_ramp: f32,
+    /// the brace record's times (+0x16c..+0x178), braceDistance and bracearmstiffness (+0x17c, +0x180; order of the first
+    /// three [P])
+    predict: f32,
+    min_brace: f32,
+    back_time: f32,
+    absorb: f32,
+    brace_dist: f32,
+    brace_stiff: f32,
+    /// +0xa8: staggerFall stops with bodyBalance or the shot on when the wall is nearer than this in time
+    stagger_stop: f32,
+    /// the byte +0x1c0 (name not found): state 3's own clock runs too
+    still_clock: bool,
+    /// snap (+0x197..): the shot's snap on the impact
+    snap: Option<BcrSnap>,
 }
 
 /// A probe's hit: the point, the wall's normal there (out of it), the distance along the probe and the object's
@@ -1205,6 +1219,35 @@ pub struct BcrRdr2 {
     near: [bool; 2],
     slide: [bool; 2],
     sink: bool,
+    brace: BcrBrace,
+    /// the last probes' hits, which stay in RDR2's records past state 0
+    last_hit1: Option<Vec3>,
+    /// bodyBalance's look target was sent; state 3's own clock (+0x624)
+    bb_sent: bool,
+    t_still: f32,
+}
+
+/// What the impact's snap sends the shot's snap module (the record at ctx+0x870, 0x2aeaa50).
+#[derive(Clone, Copy, Debug)]
+struct BcrSnap {
+    mag: f32,
+    random: f32,
+    hip: i32,
+    limbs: [bool; 6],
+    phased: bool,
+    duration: f32,
+}
+
+/// The brace service's state (0x2a16654 on the record at +0x500): the smoothed predicted distance, bracing, the
+/// minimum brace timer, the brace clock, the arms bracing, the second arm's delay.
+#[derive(Clone, Copy, Debug)]
+struct BcrBrace {
+    pred: Option<f32>,
+    on: bool,
+    min_t: f32,
+    clock: f32,
+    arms: [bool; 2],
+    delay: f32,
 }
 
 /// The slump core's record (0x2a55ddc, +0x478): its clock, the last kinetic energy, the legs' stiffness ramps (hip L, R,
@@ -1251,11 +1294,25 @@ impl BcrRdr2 {
             fling: f(p, "fling2prob", 0.5)?, arm_brace: b(p, "armBrace", true)?, drape: b(p, "fallOverWallDrape", true)?,
             high: b(p, "fallOverHighWalls", false)?, weak_zero: f(p, "impactWeaknessZeroDuration", 0.2)?,
             weak_ramp: f(p, "impactWeaknessRampDuration", 0.01)?,
+            predict: f(p, "bracePredictionTime", 0.7)?, min_brace: f(p, "minBraceTime", 0.3)?, back_time: f(p, "timeToBackwardsBrace", 0.5)?,
+            absorb: f(p, "reachAbsorbtionTime", 0.15)?, brace_dist: f(p, "braceDistance", 2.0)?, brace_stiff: f(p, "bracearmstiffness", 12.0)?,
+            stagger_stop: f(p, "staggerStopTime", 0.0)?, still_clock: b(p, "stillClock", false)?,
+            snap: if b(p, "snap", false)? {
+                let (mag, random) = (f(p, "snapMag", -0.6)?, f(p, "snapDirectionRandomness", 0.3)?);
+                let mut limbs = [false; 6];
+                for (l, n) in limbs.iter_mut().zip(["snapLeftLeg", "snapRightLeg", "snapLeftArm", "snapRightArm", "snapSpine", "snapNeck"]) {
+                    *l = b(p, n, false)?;
+                }
+                Some(BcrSnap { mag, random, hip: i(p, "snapHipType", 0)?, limbs, phased: b(p, "snapPhasedLegs", false)?, duration: f(p, "snapDuration", 0.0)? })
+            } else {
+                None
+            },
         };
         Ok(BcrRdr2 { p, state: 0, hits: [None; 2], speed: 0.0, wall: None, wall_vel: Vec3::ZERO, tte: 0.0, side: -1.0, impacted: false, phase: false,
                      t_hit: 0.0, steps_at: 0, balancing: true, nonfoot: None, started: false, look: None, kind: 3, second: None, second_hit: None,
                      touch_low: false, touch_high: false, low: false, sum: [Vec3::ZERO; 2], rel: Vec3::ZERO, t_stable: 0.0, weak: 1.0005,
-                     over_t: 0.0, over_drawn: false, recovered: false, fow_mine: false, rds_on: false, roll_on: false, slump: None, fling: None, near: [false; 2], slide: [false; 2], sink: false })
+                     over_t: 0.0, over_drawn: false, recovered: false, fow_mine: false, rds_on: false, roll_on: false, slump: None, fling: None, near: [false; 2], slide: [false; 2], sink: false,
+                     brace: BcrBrace { pred: None, on: false, min_t: -100.0, clock: 0.0, arms: [false; 2], delay: 0.0 }, last_hit1: None, bb_sent: false, t_still: 0.0 })
     }
 
     /// The probes (state 0, moving faster than 0.5 m/s): spheres of 0.25 m from the pelvis and 0.1 m from the chest
@@ -1264,10 +1321,10 @@ impl BcrRdr2 {
         if let Some((from, d)) = self.second.take() {
             self.second_hit = Some(self.sweep(world, obs, from, d, 0.001, 1.0).map(|h| h.at));
         }
-        self.hits = [None; 2];
         if self.state != 0 {
             return;
         }
+        self.hits = [None; 2];
         let vh = c.vel - c.up * c.up.dot(c.vel);
         self.speed = vh.length();
         if self.speed <= BCR_PROBE_SPEED {
@@ -1334,6 +1391,7 @@ impl BcrRdr2 {
                 let n = flat(h.n);
                 if n != Vec3::ZERO {
                     (self.wall, self.wall_vel, self.tte) = (Some((h.at, n)), h.vel, h.dist / self.speed.max(1e-6));
+                    self.last_hit1 = self.hits[1].map(|h| h.at);
                     // the wall's type (0x2aee3a8): 2 with the pelvis's hit alone, else by where the chest's lies
                     self.kind = self.hits[1].map_or(2, |h1| if (h1.at - h0.at).dot(flat(h0.n)) < -0.1 { 2 } else { 1 });
                 }
@@ -1358,12 +1416,33 @@ impl BcrRdr2 {
                 if fwd.dot(c.vel) > 0.5 {
                     c.out.dbm_extra_feet = Some(0.2);
                 }
-                // coming up to it with braceWall: the head to it while more than half a second away, nearer it the
-                // spine turned from it (0x2ae9ae4 decides; the brace service it runs isn't here, see §12)
-                let bracing = self.p.brace && self.balancing && (self.state == 0 || self.kind != 2);
-                if bracing && self.tte >= 0.5 {
-                    self.look_at(at, out);
+            }
+            // braceWall (0x2ae9ae4): the brace service; while it braces, the head to the probes' hit while more than half
+            // a second away, nearer it the neck turned from it (0x2a3dff8, gain 0.9)
+            let brace_now = self.state != 12 && self.p.brace && self.balancing && (self.state == 0 || self.kind != 2) && self.brace_service(c, at, n, dt);
+            if brace_now {
+                let hit = self.hits[1].or(self.hits[0]).map_or(at, |h| h.at);
+                let chest = c.b.part(crate::nmshot::chest_part());
+                let (d, v) = (hit - chest.m.d, chest.v - self.wall_vel);
+                let speed = v.length();
+                let t = if speed > 1e-4 { d.dot(v / speed) / speed } else { 0.0 };
+                if t >= 0.5 {
+                    self.look_at(hit, out);
+                } else if t > 0.0 {
+                    let neck = *NECK();
+                    let m = c.b.part(neck[0] + 1).m;
+                    let (p, g) = (-d, 0.9);
+                    let (l1, a) = (-(m.c.dot(p)) * g, m.a.dot(p));
+                    for j in neck {
+                        c.ch.eff[j].desired[0] = l1;
+                        c.ch.eff[j].desired[1] = -(a.abs() * a) * g;
+                    }
                 }
+            }
+            // staggerFall stops if bodyBalance or the shot runs and the wall is nearer in time than +0xa8
+            let ttw = if self.impacted { 0.0 } else { self.tte };
+            if ttw < self.p.stagger_stop && (c.bb_on || c.shot_on) && c.extras_on.contains(&"staggerFall") {
+                out.push("staggerFall start=false".into());
             }
             if self.impacted {
                 // reactTime: reachForWound lets both hands go
@@ -1442,7 +1521,8 @@ impl BcrRdr2 {
         // the probe down the wall's face has answered (0x2af96cc): on the plane a full wall, off it a low wall's top
         if let Some(hit) = self.second_hit.take() {
             self.kind = match (hit, self.wall) {
-                (Some(q), Some((at, n))) => if (q - at).dot(n).abs() < 0.02 { 1 } else { 2 },
+                // the first probe's record, as the code has it: its position against the normal
+                (Some(q), Some((at, n))) => if (q - at).dot(n).abs() < 0.02 || self.last_hit1.is_some_and(|p| p.dot(n).abs() < 0.02) { 1 } else { 2 },
                 _ => 0,
             };
         }
@@ -1456,11 +1536,11 @@ impl BcrRdr2 {
             let low_foot = [2, 3].map(|i| up.dot(c.b.at(limb(i).p[3]))).into_iter().fold(f32::MAX, f32::min);
             let lows = if self.p.high { 6 } else { 5 };
             for (i, &k) in BCR_PARTS.iter().enumerate() {
-                if let Some((q, cn)) = c.b.doll.hit_out[k] {
+                if let Some((q, cn, depth)) = c.b.doll.hit_out[k] {
                     let h = up.dot(q) - low_foot;
                     if h > BCR_ABOVE_FOOT {
                         let high = i >= lows;
-                        self.sum[high as usize] += cn;
+                        self.sum[high as usize] += cn * depth;
                         if high {
                             self.touch_high = true;
                         } else {
@@ -1493,6 +1573,8 @@ impl BcrRdr2 {
                 self.side = if self.rel.dot(n) <= 0.0 { -1.0 } else { 1.0 };
                 self.wall = Some((q, n));
                 self.weak = 0.01;
+                self.snap_on_impact(n, out);
+                out.push(format!("#say bcr impact high={} low={} kind={} facing={:.2} glance={} rel={:.2} n={}", self.touch_high, self.touch_low, self.kind, c.m.c.dot(n), self.state == 5, self.rel.dot(n), v3s(n)));
                 // a high contact is a full wall; a low one asks what is above it (0x2af9c64): from above the wall's face
                 // (1.35 m over the lower foot with one down, else at the upper spine), down and into it
                 if self.touch_high {
@@ -1523,6 +1605,12 @@ impl BcrRdr2 {
                         let k = limb(i).p[1];
                         c.out.impulse.push((k, c.b.at(k), n * (-0.3 * self.p.rebound)));
                     }
+                }
+                // braceWall: bodyBalance's look target, the wall at the chest's height (its +0x60; its +0x104 braceDistance
+                // 0.5 has nothing to read it in bodyBalance's port)
+                if self.p.brace && c.bb_on && !self.bb_sent {
+                    self.bb_sent = true;
+                    out.push(format!("bodyBalance headLookPos={}", v3s(at + up * up.dot(chest - at))));
                 }
                 if self.t_hit > 0.1 && self.t_hit > self.p.to_forward {
                     if self.p.forward_mode == 1 && c.shot_on {
@@ -1586,9 +1674,114 @@ impl BcrRdr2 {
         if matches!(self.state, 2 | 3) {
             self.t_stable += dt;
         }
-        if self.state == 3 && self.t_stable >= self.p.stable {
-            self.state = 4;
+        if self.state == 3 {
+            if self.t_stable + self.t_still >= self.p.stable {
+                self.state = 4;
+            }
+            if self.p.still_clock {
+                self.t_still += dt;
+            }
         }
+    }
+
+    /// The impact's snap (0x2aeaa50): along his velocity reflected about the wall, its size by how hard he hit, through the
+    /// shot's snap module (the character's record is what both use).
+    fn snap_on_impact(&self, n: Vec3, out: &mut Vec<String>) {
+        let Some(s) = self.p.snap else { return };
+        let into = n.dot(self.rel);
+        let dir = unit(n * (2.0 * into) - self.rel);
+        let mag = s.mag * (into.abs() - 0.5).clamp(0.0, 1.0);
+        out.push(format!("shotSnap start=true snapMag={mag} snapDirectionRandomness={} snapHipType={} snapUseBulletDir=true bulletDir={} snapLeftLeg={} snapRightLeg={} snapLeftArm={} snapRightArm={} snapSpine={} snapNeck={} snapPhasedLegs={} snapDuration={}",
+                         s.random, s.hip, v3s(dir), s.limbs[0], s.limbs[1], s.limbs[2], s.limbs[3], s.limbs[4], s.limbs[5], s.phased, s.duration));
+    }
+
+    /// The core brace service on the wall (0x2ae9ae4, 0x2a16654, rdr2_brace.md §4): decides from the predicted distance
+    /// (smoothed) against braceDistance; each arm on by the target's angle round him, the farther one after a delay; the
+    /// bracing arms take bracearmstiffness and reach for the point on the wall, shortened by the closing speed. Returns
+    /// whether it braces with an arm (+0x630). Ours [P]: the reach goes through the limb IK with no wrist pose or lead; the
+    /// sideways offsets use the constructor's 0.1 (the body's range isn't read).
+    fn brace_service(&mut self, c: &mut Ctx, at: Vec3, n: Vec3, dt: f32) -> bool {
+        let s = *SPINE();
+        let up = c.up;
+        let q = c.b.at(s[2] + 1);
+        let mut t = at;
+        let chest = c.b.at(crate::nmshot::chest_part());
+        // already bracing, chest within 0.3, a hand against it and facing it: the target goes into the wall (+0x631)
+        let hands = c.b.doll.collided(&[limb(0).p[3], limb(1).p[3]]);
+        if self.brace.on && (chest - t).dot(n) < 0.3 && hands && (-c.m.c).dot(n) < 0.0 {
+            t -= n * 0.4;
+        }
+        let dist = (t - q).length();
+        let dir = unit(t - q);
+        let close = dir.dot(c.vel - self.wall_vel);
+        let raw = (dist - close * self.p.predict).max(0.1);
+        let sm = self.brace.pred.map_or(raw, |p| raw.min((1.0 - 2.0 * dt) * p + 2.0 * dt * raw));
+        self.brace.pred = Some(sm);
+        let mut on = sm < self.p.brace_dist + if self.brace.on { 0.1 } else { 0.0 };
+        if on {
+            if self.brace.min_t < -99.0 {
+                self.brace.min_t = self.p.min_brace;
+            }
+        } else if self.brace.min_t > 0.0 {
+            on = true;
+        }
+        self.brace.clock = if on { self.brace.clock + dt } else { 0.0 };
+        let h = t - c.com;
+        if on && self.brace.clock < self.p.back_time && (h - up * up.dot(h)).dot(-c.m.c) < 0.0 {
+            on = false;
+        }
+        self.brace.on = on;
+        if !on {
+            (self.brace.arms, self.brace.min_t) = ([false; 2], -100.0);
+            return false;
+        }
+        self.brace.min_t -= dt;
+        // the arms by the target's angle round the horizontal shoulder line (left: 0 means to his left)
+        let (sl, sr) = (c.b.joint_pos(limb(0).e[1]), c.b.joint_pos(limb(1).e[1]));
+        let axis = unit(sl - sr - up * up.dot(sl - sr));
+        let ang = |p: Vec3| unit(t - p - up * up.dot(t - p)).dot(axis).clamp(-1.0, 1.0).acos();
+        let was = self.brace.arms;
+        let (al, ar) = (ang(sl), ang(sr));
+        let pi = std::f32::consts::PI;
+        self.brace.arms[0] = if was[0] { al <= pi - 0.05 } else { al < pi - 0.45 };
+        self.brace.arms[1] = if was[1] { ar >= 0.05 } else { ar > 0.45 };
+        if self.brace.arms != was {
+            self.brace.delay = 0.1 + 0.2 * c.ch.random();
+        }
+        self.brace.delay -= dt;
+        let mut arms = self.brace.arms;
+        if arms[0] && arms[1] && self.brace.delay > 0.0 {
+            let far = (c.b.joint_pos(limb(0).e[3]) - t).length() > (c.b.joint_pos(limb(1).e[3]) - t).length();
+            arms[!far as usize] = false;
+        }
+        // shortening by the closing speed, between what leaves braceDistance and 0.3 m
+        let x = close * self.p.absorb;
+        let short = if x < dist - self.p.brace_dist { dist - self.p.brace_dist } else { x.min(dist - 0.3) };
+        let base = t - dir * short;
+        let side = unit((t - c.b.at(0)).cross(up));
+        let (st, both) = (self.p.brace_stiff, self.brace.arms[0] && self.brace.arms[1]);
+        for i in 0..2 {
+            if !arms[i] {
+                continue;
+            }
+            let l = limb(i);
+            c.ch.set_stiffness(st, 1.0, if i == 0 { "ul" } else { "ur" }, None);
+            let es = c.ch.eff[l.e[2]].strength.max(0.0).sqrt();
+            c.ch.eff[l.e[2]].set_stiffness(es, 0.75, None);
+            c.ch.eff[l.e[3]].set_stiffness(15.0, 1.0, None);
+            for j in l.e {
+                c.ch.eff[j].oppose_gravity = 2.0;
+            }
+            let shoulder = c.b.joint_pos(l.e[1]);
+            let len = arm_length(c, i) * if both { 0.876 + 0.159 } else { 0.876 };
+            let want = base + side * (if i == 0 { -0.1 } else { 0.1 }) - shoulder;
+            let touching = c.b.doll.collided(&[l.p[2]]);
+            let reach = (want.length() + if touching { 0.05 } else { 0.0 }).min(len);
+            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], shoulder + unit(want) * reach, 0.0, 0.0, 1.0 - 2.0 * i as f32, 1.0, Vec3::ZERO, None);
+            c.ch.eff[l.e[0]].desired[0] = 0.0;
+            c.ch.eff[l.e[0]].desired[1] = 0.0;
+        }
+        arms[0] || arms[1]
     }
 
     /// RDR2's "fall to knees" settings in the character's shot record: at once, no helper force, no lean.
