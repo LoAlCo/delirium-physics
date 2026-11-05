@@ -1581,6 +1581,7 @@ impl Dbm {
         }
         let leg_scale = self.p.leg_scale();
         if let Some(r) = self.p.rdr2.as_mut() {
+            r.straight = (c.legs.0, leg_scale);
             let low = up_low(self.p.up, b.foot(0), b.foot(1));
             let hip = (s.legs[0].hip.actual[0] + s.legs[1].hip.actual[0]) * 0.5;
             let (gup, legs) = (self.p.gup, &s.legs);

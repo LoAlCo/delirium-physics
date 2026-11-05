@@ -487,6 +487,8 @@ pub struct Rdr2 {
     pub p: Params,
     pub time: f32,
     pub still: f32,
+    /// his standing leg straightness and the leg scale (ctx+0x34d0, bal+0x210), for duck's knee measure
+    pub straight: (f32, f32),
     pub steps: u32,
     /// when the timed fail started (balance time)
     pub failing: Option<f32>,
@@ -568,7 +570,7 @@ pub struct Rdr2 {
 
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
-        Rdr2 { p, time: 0.0, still: 0.0, steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
+        Rdr2 { p, time: 0.0, still: 0.0, straight: (0.99, 1.0), steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
                since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false, heading_only: false,
