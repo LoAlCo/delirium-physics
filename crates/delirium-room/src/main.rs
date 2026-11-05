@@ -9948,7 +9948,7 @@ mod nmx {
         /// his velocity before the hit (ctx+0xf60)
         pub vel: Vec3,
         /// bodyWrithe's backStiffness (a draw in the game)
-        pub back: f32,
+        pub back_k: f32,
     }
     pub fn first_pose(path: &str) -> Option<Pose> {
         const JMAP: [usize; 20] = [0, 3, 6, 1, 2, 4, 5, 7, 8, 9, 12, 16, 10, 13, 14, 15, 17, 18, 19, 11];
@@ -9980,7 +9980,7 @@ mod nmx {
                         state = Some(u32::from_le_bytes(b[0x30c..0x310].try_into().unwrap()) as u8);
                     }
                     if kind == 5 && b.len() > 0x50 && u32::from_le_bytes(b[0xc..0x10].try_into().unwrap()) == 27 {
-                        p.back = f(b, 0x4c);
+                        p.back_k = f(b, 0x4c);
                     }
                 }
                 if let (Some(t), Some(s)) = (t, state) {
@@ -9989,7 +9989,7 @@ mod nmx {
                 }
                 continue;
             }
-            let mut pose_ = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![], turns: vec![], far: Vec3::ZERO, hit: (Vec3::ZERO, Vec3::Y), vel: Vec3::ZERO, back: 13.0 };
+            let mut pose_ = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![], turns: vec![], far: Vec3::ZERO, hit: (Vec3::ZERO, Vec3::Y), vel: Vec3::ZERO, back_k: 13.0 };
             let mut com = Vec3::ZERO;
             let mut bullet = (Vec3::ZERO, Vec3::Y);
             let mut rage: Vec<u8> = vec![];
@@ -10241,7 +10241,7 @@ fn headless(mut sim: Sim, n: usize) {
             if i > f.0 {
                 let t = (i - f.0) as f32 / 60.0;
                 let s = p.turns.iter().rev().find(|x| x.0 <= t).or(p.turns.first()).map_or(2, |x| x.1);
-                sim.agent.nmx_turn(s, p.far, p.back);
+                sim.agent.nmx_turn(s, p.far, p.back_k);
             }
         }
         match &fires {
