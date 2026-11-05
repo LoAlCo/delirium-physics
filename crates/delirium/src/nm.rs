@@ -628,6 +628,17 @@ impl Agent {
     fn body_balance_with(&mut self, build: &Build, world: &Collision, params: BodyBalance, full: Option<crate::nmbb::Params>) {
         // a balancer keeps the core it started with: while the core changes, this starts a new one
         let core = self.rdr2_core.is_some();
+        // RDR2 core: its bodyBalance starts beside the balancer the shot started, and keeps that one (rdr2_bodybalance.md 3.1)
+        if core && self.balance.as_ref().is_some_and(|b| b.bb.is_none() && b.dbm.as_ref().is_some_and(|d| d.p.rdr2.is_some())) {
+            if let Some(ch) = self.ch.as_mut() {
+                let frames: Vec<Transform> = self.doll.frames().collect();
+                let p = full.unwrap_or_default();
+                let snap = ch.clone();
+                let bb = crate::nmbb::BodyBalance::activate(p, ch, &crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames });
+                self.balance.as_mut().unwrap().bb = Some(bb);
+                return;
+            }
+        }
         if let Some(b) = self.balance.as_mut().filter(|b| b.on() && b.dbm.as_ref().is_none_or(|d| d.p.rdr2.is_some() == core)) {
             b.params = params;
             if let Some(bb) = b.bb.as_mut() {
@@ -1343,6 +1354,9 @@ impl Agent {
             }
             if let Some(v) = out.dbm_turn {
                 (d.pv.fixed_vel, d.pv.vel) = (true, v);
+                if let Some(r) = d.p.rdr2.as_mut() {
+                    r.heading_only = false;
+                }
             }
             if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
                 r.limp = x;
@@ -1668,11 +1682,17 @@ impl Agent {
                     if let Some(r) = self.limb_reqs.as_mut() {
                         r.mark(&ch.eff, 0x18);
                     }
-                    let out = bb.tick(ch, &body, obstacles, dbm.f.stepping, failed, self.catch_fall.is_some(), dt);
+                    // RDR2: bodyBalance's falling reaction waits while the shot runs
+                    let catching = self.catch_fall.is_some() || (ch.rdr2 && self.nm_shot.is_some());
+                    let out = bb.tick(ch, &body, obstacles, dbm.f.stepping, failed, catching, dt);
                     if let Some(r) = self.limb_reqs.as_mut() {
                         r.mark(&ch.eff, 0x20);
                     }
                     (dbm.pv.fixed_vel, dbm.pv.vel) = (out.turn.is_some(), out.turn.unwrap_or(Vec3::ZERO));
+                    // RDR2: its heading alone (+0x3b2, +0x360) doesn't arm the turn step; that needs a posted block (+0x5e4)
+                    if let Some(r) = dbm.p.rdr2.as_mut() {
+                        r.heading_only = out.turn.is_some();
+                    }
                     if let Some(k) = out.step_clamp {
                         self.config.step_clamp_scale = k;
                     }
@@ -1688,7 +1708,9 @@ impl Agent {
             } else if let Some(bb) = b.bb.as_mut().filter(|_| !b.idle) {
                 let snap = ch.clone();
                 let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
-                let out = bb.tick(ch, &body, obstacles, b.stepping, false, self.catch_fall.is_some(), dt);
+                // RDR2: with the balancer gone bodyBalance does nothing but its falling reaction, and that waits for the shot
+                let (failed, catching) = (ch.rdr2, self.catch_fall.is_some() || (ch.rdr2 && self.nm_shot.is_some()));
+                let out = bb.tick(ch, &body, obstacles, b.stepping, failed, catching, dt);
                 if let Some(k) = out.step_clamp {
                     self.config.step_clamp_scale = k;
                 }
@@ -2106,6 +2128,9 @@ impl Agent {
                 // a turn asked for by an extra (RDR2's shot spin and step turn): face along this
                 if let Some(v) = out.dbm_turn {
                     (d.pv.fixed_vel, d.pv.vel) = (v != Vec3::ZERO, v);
+                    if let Some(r) = d.p.rdr2.as_mut() {
+                        r.heading_only = false;
+                    }
                 }
                 // RDR2 core: shotInjuredLeg's limp
                 if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {

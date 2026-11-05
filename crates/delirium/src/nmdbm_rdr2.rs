@@ -519,6 +519,8 @@ pub struct Rdr2 {
     pub last_foot: usize,
     /// a behaviour asked the balancer to face a way (RDR2's turn step), and this step's leg-twist limits and lift
     pub turning: bool,
+    /// the heading asked this tick is bodyBalance's, which asks no turn step
+    pub heading_only: bool,
     /// this step's turn request: how closely he must face the heading to count as facing it (RDR2's 0.9 unless the
     /// requester says otherwise), and whether a behaviour forbids new steps (RDR2's force balance)
     pub turn_facing: Option<f32>,
@@ -556,7 +558,7 @@ impl Rdr2 {
         Rdr2 { p, time: 0.0, still: 0.0, steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
                since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
-               width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false,
+               width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false, heading_only: false,
                leg_twist: RESET_LEG_TWIST, turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, pause: 0.0, aligned: false, landed: false, crouching: None,
                started: false, twist_rest: 0.0, car: None, stagger: false, lead: None, lead_add: 0.0, taper: true, plane: None }
     }

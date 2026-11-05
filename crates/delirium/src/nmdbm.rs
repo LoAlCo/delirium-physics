@@ -1584,7 +1584,7 @@ impl Dbm {
             r.slope(self.p.normal[i].z);
             r.speed = s.hvel.length();
             let facing = horizontal(-s.pelvis.m.c, up).normalize_or_zero().dot(horizontal(self.pv.vel, up).normalize_or_zero());
-            r.turn(self.p.dt, self.pv.fixed_vel, facing);
+            r.turn(self.p.dt, self.pv.fixed_vel && !r.heading_only, facing);
             r.running = r.speed >= r.p.run_vel;
             if r.running {
                 (self.p.leg_stiffness, self.p.step_height) = (r.p.leg_stiffness_run, r.p.step_height_run);
