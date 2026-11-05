@@ -1214,6 +1214,8 @@ pub struct BcrRdr2 {
     /// fallOverWall was started from here (+0x633); rollDownStairs and bodyRollUp too (ours: RDR2 reads whether they run)
     fow_mine: bool,
     rds_on: bool,
+    /// fallOverWall was asked to start this tick: RDR2's start is at once, ours takes the next tick
+    fow_starting: bool,
     roll_on: bool,
     slump: Option<SlumpRec>,
     fling: Option<BcrFling>,
@@ -1313,7 +1315,7 @@ impl BcrRdr2 {
         Ok(BcrRdr2 { p, state: 0, hits: [None; 2], speed: 0.0, wall: None, wall_vel: Vec3::ZERO, tte: 0.0, side: -1.0, impacted: false, phase: false,
                      t_hit: 0.0, steps_at: 0, balancing: true, nonfoot: None, started: false, look: None, kind: 3, second: None, second_hit: None,
                      touch_low: false, touch_high: false, low: false, sum: [Vec3::ZERO; 2], rel: Vec3::ZERO, t_stable: 0.0, weak: 1.0005,
-                     over_t: 0.0, over_drawn: false, recovered: false, fow_mine: false, rds_on: false, roll_on: false, slump: None, fling: None, near: [false; 2], slide: [false; 2], sink: false,
+                     over_t: 0.0, over_drawn: false, recovered: false, fow_mine: false, rds_on: false, fow_starting: false, roll_on: false, slump: None, fling: None, near: [false; 2], slide: [false; 2], sink: false,
                      brace: BcrBrace { pred: None, on: false, min_t: -100.0, clock: 0.0, arms: [false; 2], delay: 0.0 }, last_hit1: None, bb_sent: false, t_still: 0.0 })
     }
 
@@ -1401,6 +1403,7 @@ impl BcrRdr2 {
             }
         }
         let fow_on = c.extras_on.contains(&"fallOverWall");
+        self.fow_starting = false;
         self.machine(c, dt, fow_on, out);
         let speed = (c.vel - up * up.dot(c.vel)).length();
         if let Some((at, n)) = self.wall {
@@ -1807,12 +1810,13 @@ impl BcrRdr2 {
         if self.p.drape && !fow_on {
             out.push(format!("fallOverWall start=true fallOverWallEndA={} fallOverWallEndB={} magOfForce=0.7 forceTimeOut=3 bodyStiffness=9 bodyTwist=0.9 maxTwist={} moveArms=false moveLegs=true legtwist=1 legamp=1 zAxisSpinReduction=0.2",
                              v3s(at + along), v3s(at), std::f32::consts::PI));
-            self.fow_mine = true;
+            (self.fow_mine, self.fow_starting) = (true, true);
         }
     }
 
     /// While over a low wall (0x2a2d260, called through 0x2aed504).
     fn over_supervise(&mut self, c: &mut Ctx, fow_on: bool, dt: f32, out: &mut Vec<String>) {
+        let fow_on = fow_on || self.fow_starting;
         let touching = c.b.doll.collided(&[crate::nmshot::chest_part(), limb(0).p[3], limb(1).p[3]]);
         if !fow_on {
             self.over_t += dt;
