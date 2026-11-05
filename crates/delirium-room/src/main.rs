@@ -10301,6 +10301,10 @@ fn headless(mut sim: Sim, n: usize) {
         if let (Some(p), Some(f)) = (&pose, &fires) {
             if f.first().is_some_and(|x| x.0 == i) {
                 nmx::set_pose(&mut sim, p);
+                // NMX_SEED=<n>: another random stream from the hit on, to see how far a measurement depends on it
+                if let Some(n) = std::env::var("NMX_SEED").ok().and_then(|v| v.parse::<u32>().ok()) {
+                    sim.agent.set_rng((n.wrapping_mul(2654435761) | 1, n.wrapping_mul(40503) ^ 0x5bd1e995));
+                }
             }
         }
         // ... and bodyBalance takes the recording's turn states (a random draw there), as inputs
