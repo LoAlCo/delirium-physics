@@ -1328,7 +1328,7 @@ impl Melee {
             if c.upright {
                 crate::nmshot::apply_strength(c, &crate::nmshot::Strength {
                     k: f, body_stiffness: 12.0, arm_stiffness: 12.0, spine_damping: 1.0, neck: (12.0, 1.0), upper: 1.0, lower: 1.0,
-                    looseness: r.cs_loose, k_mult_on_loose: 0.0, k_mult_4_legs: 0.3, min_legs_looseness: 0.1, min_arms_looseness: 0.1,
+                    looseness: c.ch.bcr.map_or(r.cs_loose, |b| if b.3 <= r.cs_loose { b.3 } else { r.cs_loose }), k_mult_on_loose: 0.0, k_mult_4_legs: 0.3, min_legs_looseness: 0.1, min_arms_looseness: 0.1,
                     stable_hands_and_neck: true, balancing: true }, dt);
             } else {
                 let l = (f * r.cs_loose + 1.0 - r.cs_loose).clamp(0.1, 1.0);
