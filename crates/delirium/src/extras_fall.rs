@@ -178,7 +178,7 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "braceWall", kind: Kind::Bool, used: true, doc: "RDR2 core only: look at the wall coming up to it (false)" },
         Param { name: "glanceSpinReduce", kind: Kind::Float, used: true, doc: "RDR2 core only: the spin's share per m/s along the wall (1.5)" },
         Param { name: "glanceSpinTurn", kind: Kind::Float, used: true, doc: "RDR2 core only: over 0 the glance asks the balancer to turn, 0 torques the spine (40)" },
-        Param { name: "slumpMode", kind: Kind::Int, used: true, doc: "RDR2 core only: 0 stiffness falls while kinetic energy falls below 0.4, 1 always, 2 while it falls (1)" },
+        Param { name: "slumpMode", kind: Kind::Int, used: true, doc: "RDR2 core only: stiffness falls while kinetic energy falls below 0.4; 1 always, 2 while it falls at all (1)" },
         Param { name: "sitstarttime", kind: Kind::Float, used: true, doc: "RDR2 core only: s into the slump before the legs go to the sit pose (0.3)" },
         Param { name: "sitrate", kind: Kind::Float, used: true, doc: "RDR2 core only: blend to the sit pose per s, 0 none (1)" },
         Param { name: "fling2prob", kind: Kind::Float, used: true, doc: "RDR2 core only: each arm's chance to fling at an impact over 1.25 m/s (0.5)" },
