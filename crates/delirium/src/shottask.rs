@@ -129,6 +129,7 @@ impl ShotTask {
         // RDR2 core: its task runs bodyBalance beside the shot, with its own defaults, from the hit on (recorded)
         if rd && first && !melee {
             out.push(rdr2_body_balance(hit.pos, rand));
+            out.push(rdr2_body_writhe(rand));
         }
         if hit.health >= delirium_data::kv!(26) {
             if !matches!(hit.blend_group, Some(53..=55 | 57)) {
@@ -233,6 +234,17 @@ fn rdr2_body_balance(at: Vec3, rand: &mut Rand) -> Msg {
                          ("armsOutStraightenElbows", F(0.0)), ("armsOutMinLean2", F(-9.9)), ("useBodyTurn", B(true)), ("turnOffProb", F(0.1)), ("turn2TargetProb", F(0.2)),
                          ("turn2VelProb", F(0.3)), ("turnAwayProb", F(0.15)), ("turnLeftProb", F(0.125)), ("turnRightProb", F(0.125)), ("elbowAngleOnContact", F(1.9)),
                          ("bendElbowsTime", F(0.3)), ("bendElbowsGait", F(0.7))])
+}
+
+/// RDR2's bodyWrithe beside the shot, as recorded on six shots: masked to the trunk (0x709), with no back amplitude, so all
+/// it does is hold the spine's strength and damping (over the shot's and bodyBalance's), its lean1 and twist at 0 and its
+/// lean2 on the noise. Its backStiffness differs shot to shot (6.85 to 13.35 recorded); who draws it wasn't read, so ours
+/// is that range, evenly.
+fn rdr2_body_writhe(rand: &mut Rand) -> Msg {
+    use Value::{Bool as B, Float as F};
+    ("bodyWrithe", vec![("start", B(true)), ("mask", Value::Str("us".into())), ("armStiffness", F(13.0)), ("backStiffness", F(rand.float_in_range(6.85, 13.35))),
+                        ("legStiffness", F(13.0)), ("armDamping", F(0.5)), ("backDamping", F(0.5)), ("legDamping", F(0.5)), ("armPeriod", F(1.0)), ("backPeriod", F(4.0)),
+                        ("legPeriod", F(1.0)), ("armAmplitude", F(1.0)), ("backAmplitude", F(0.0)), ("legAmplitude", F(1.0)), ("rollOverFlag", B(false)), ("applyStiffness", B(true))])
 }
 
 fn rdr2_stay_upright() -> Msg {
