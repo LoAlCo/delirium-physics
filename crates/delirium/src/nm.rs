@@ -1189,6 +1189,11 @@ impl Agent {
         self.balance.as_ref().is_some_and(|b| b.on() && b.still > delirium_data::kv!(116))
     }
 
+    /// NMX_DUMP: the balancer's two foot targets, and its centre.
+    pub fn nmx_targets(&self) -> Option<[Vec3; 3]> {
+        self.balance.as_ref().and_then(|b| b.dbm.as_ref()).map(|d| [d.f.pos[0], d.f.pos[1], d.f.centre])
+    }
+
     pub fn balance_steps(&self) -> Option<(u32, u32)> {
         self.balance.as_ref().filter(|b| b.on()).map(|b| (b.steps, b.dbm.as_ref().map_or(0, |d| d.f.stepping)))
     }
