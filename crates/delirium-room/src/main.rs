@@ -10111,6 +10111,11 @@ mod nmx {
             // trunk up: pelvis (part 0) to the top spine part (10), as RDR2's COM-matrix up row is read
             let up = (d.centre(10) - d.centre(0)).normalize_or(Vec3::Z);
             let (steps, foot) = sim.agent.balance_steps().map_or((-1, -1), |(a, b)| (a as i64, b as i64));
+            for k in 0..n {
+                let (c, q, (v, w)) = (d.centre(k), fr[k].rotation, d.motion(k));
+                let cs: Vec<String> = d.nmx_contacts(k).iter().map(|(a, n, g)| format!("{:.4} {:.4} {:.4} {:.3} {:.3} {:.3} {:.4}", a.x, a.y, a.z, n.x, n.y, n.z, g)).collect();
+                let _ = writeln!(self.parts, "{i},{k},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}", d.part_mass(k), c.x, c.y, c.z, q.x, q.y, q.z, q.w, v.x, v.y, v.z, w.x, w.y, w.z, d.touch[k], cs.join(";"));
+            }
             let t = (i + 1) as f32 / 60.0;
             let _ = writeln!(self.frames, "{i},{t},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{m},{steps},{foot},{},{}",
                 c.x, c.y, c.z, v.x, v.y, v.z, v.length(), s.fwd.x, s.fwd.y, s.fwd.z, up.x, up.y, up.z, up.z.clamp(-1.0, 1.0).acos().to_degrees(),
