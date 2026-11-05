@@ -1096,10 +1096,10 @@ const BCR_PROBE_TIME: f32 = 0.5;
 const BCR_PROBE_SPEED: f32 = 0.5;
 /// An impact this far (rad) off head-on is a glance.
 const BCR_GLANCE: f32 = 0.6;
-/// Ours [G] (RDR2's part contact probes aren't read): a part's contact is on the wall within this of its plane and
-/// with its normal this close to the wall's.
-const BCR_ON_WALL: f32 = 0.1;
-const BCR_NORMAL: f32 = 0.7;
+/// The parts whose contacts make the impact (the list 0x2aeaa50 walks, in Delirium's part order: thighs, pelvis, spine,
+/// clavicles, neck, head), and how far above the lower foot the contact has to be (0x2af9f74): no calf, foot or arm counts.
+const BCR_PARTS: [usize; 11] = [1, 4, 0, 7, 8, 9, 10, 17, 13, 11, 12];
+const BCR_ABOVE_FOOT: f32 = 0.1;
 
 #[derive(Clone, Copy, Debug)]
 struct BcrParams {
@@ -1279,11 +1279,14 @@ impl BcrRdr2 {
                     let chest = c.b.at(crate::nmshot::chest_part());
                     self.look_at(at + up * up.dot(chest - at), out);
                 }
-                // the knee bend: the spine root's height over the lower foot less 0.1, at most 0.35, at 4/s
-                if self.phase && c.dbm.is_some() {
-                    let low = [2, 3].map(|i| up.dot(c.b.at(limb(i).p[3]))).into_iter().fold(f32::MAX, f32::min);
-                    let k = (up.dot(c.b.joint_pos((*SPINE())[0])) - low - 0.1).clamp(0.0, 0.35);
-                    c.out.dbm_crouch.push(Crouch::Knee(8, -k, 4.0));
+                // on the impact's tick the knees are held at the bend they have (0x2ab617c, at most 0.35), not bent further
+                if self.phase {
+                    if let Some(d) = c.dbm {
+                        let zp = c.b.part(0).m.d.z;
+                        let zf = [2, 3].map(|i| c.b.part(limb(i).p[3]).m.d.z);
+                        let k = if d.leg > 0.1 { (0.79235 * (0.99 - (zp - zf[0]).max(zp - zf[1]) / d.leg)).clamp(0.0, 0.35) } else { 0.0 };
+                        c.out.dbm_crouch.push(Crouch::Knee(8, -k, f32::INFINITY));
+                    }
                 }
             }
         }
@@ -1320,21 +1323,25 @@ impl BcrRdr2 {
         if matches!(self.state, 6 | 12) {
             return;
         }
-        let Some((at, n)) = self.wall else { return };
-        let w = -n;
+        self.phase = false;
         if !self.impacted {
-            let hit = (0..c.b.doll.hit.len()).filter_map(|k| c.b.doll.hit[k])
-                .find(|&(q, cn, _)| (q - at).dot(n).abs() < BCR_ON_WALL && cn.dot(n).abs() > BCR_NORMAL);
-            if let Some((q, _, _)) = hit {
+            // the first impact (0x2af9f74): a listed part's contact above the lower foot, on anything but himself; the probes'
+            // wall isn't needed, and the wall is now the contacts': the last point, the normals' sum made horizontal
+            let low = [2, 3].map(|i| c.up.dot(c.b.at(limb(i).p[3]))).into_iter().fold(f32::MAX, f32::min);
+            let hits = BCR_PARTS.iter().filter_map(|&k| c.b.doll.hit[k]).filter(|&(q, _, id)| id != -1 && c.up.dot(q) - low > BCR_ABOVE_FOOT);
+            if let Some((q, sum)) = hits.fold(None, |a: Option<(Vec3, Vec3)>, (q, cn, _)| Some((q, a.map_or(cn, |x| x.1 + cn)))) {
                 (self.impacted, self.phase, self.state, self.t_hit, self.steps_at) = (true, true, 1, 0.0, steps);
-                // the impact angle: his velocity against the wall's inward direction (ours [P] on the vectors)
+                let n = unit(sum - c.up * c.up.dot(sum));
+                // the impact angle: his velocity against the wall's inward direction, past 0.6 rad a glance
                 let v = unit((c.vel - self.wall_vel) - c.up * c.up.dot(c.vel - self.wall_vel));
-                if v != Vec3::ZERO && w.dot(v).clamp(-1.0, 1.0).acos() > BCR_GLANCE {
+                if (-n).dot(v).clamp(-1.0, 1.0).acos() > BCR_GLANCE {
                     self.state = 5;
                 }
                 self.wall = Some((q, n));
             }
         }
+        let Some((at, n)) = self.wall else { return };
+        let w = -n;
         if matches!(self.state, 5 | 10) && self.t_hit > self.p.spin_time {
             self.state = 1;
         }
