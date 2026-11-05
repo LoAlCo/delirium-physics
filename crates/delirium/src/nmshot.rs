@@ -190,6 +190,12 @@ pub struct Out {
     pub dbm_leg_stiffness: Option<f32>,
     /// RDR2 core: pedalLegs' one-tick reverse flags (left, right) for its next tick, as RDR2's yanked writes them
     pub pedal_reverse: Option<[bool; 2]>,
+    /// RDR2 core, fall to knees: the balancer's balanceAbortThreshold (bal+0x294), failMustCollide (+0x6d8), kneeling
+    /// (+0x33a), from now on; and its fail now (0x2ab4b7c)
+    pub dbm_abort: Option<f32>,
+    pub dbm_must_collide: Option<bool>,
+    pub dbm_kneeling: Option<bool>,
+    pub dbm_force_fail: bool,
 }
 
 impl Out {
@@ -391,6 +397,14 @@ pub struct DbmView {
     pub steps: u32,
     /// his standing pelvis height, the leg length the balancer's crouch measures use
     pub leg: f32,
+    /// time balancing (bal+0x5ac)
+    pub time: f32,
+    /// the balance quality (bal+0x68): how far the COM 0.3 s ahead is from the nearest of his feet and their middle
+    pub quality: f32,
+    /// the crouch request's knee bend now (bal+0x58c)
+    pub knee: f32,
+    /// a COM lean is on (bal+0x7b4)
+    pub lean_on: bool,
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {
@@ -507,6 +521,10 @@ impl Shot {
             }
             c.ch.eff[j].oppose_gravity = 1.0;
         }
+        // RDR2's reset points the fall-to-knees module at the character's record and inits it (0x2a966b8)
+        if c.ch.rdr2 {
+            crate::nmftk_rdr2::init(c);
+        }
         if !s.no_balance {
             c.out.dbm = Some(true);
             if !p.chicken_arms {
@@ -550,6 +568,16 @@ impl Shot {
     /// while staggerFall runs; Delirium's shot has neither parameter, so those factors are 1 here.
     pub(crate) fn rdr2_scale(&self) -> f32 {
         if self.rd.started { self.rd.k } else { 1.0 }
+    }
+
+    /// RDR2 core: what the fall-to-knees module reads of the shot: its clock (+0x70c) and whether he's falling (+0x774).
+    pub(crate) fn ftk_view(&self) -> (f32, bool) {
+        (self.time, self.failed())
+    }
+
+    /// RDR2 core: the fall-to-knees module caps the strength factor once kneeling (+0x6e4).
+    pub(crate) fn cap_scale(&mut self, most: f32) {
+        self.rd.k = self.rd.k.min(most);
     }
 
     fn crouch_check(&self, _: &Ctx) -> bool {

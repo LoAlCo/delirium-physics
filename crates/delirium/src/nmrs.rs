@@ -600,11 +600,28 @@ pub struct CoreState {
     pub stay: [crate::nmdbm_rdr2::StayUpright; 2],
     /// the last bullet record's impulse (ctx+0x1150 + idx 0x160, +0x140), for turnTowardsBullets
     pub bullet: Option<bevy_math::Vec3>,
+    /// the fall-to-knees record (ctx+0x2e20)
+    pub ftk: crate::nmftk_rdr2::Ftk,
+    /// the foot yaw hold runs (ctx+0x47fd), and its latches are let go this step (ctx+0x4800, +0x4801)
+    pub foot_hold: bool,
+    pub foot_unlatch: bool,
+    /// what fall-to-knees sets in catchFall (+0xcb kneel, +0xcc, +0xcd arm poses) and rollDownStairs (+0xf0..+0xf7)
+    pub cf_knee: [bool; 3],
+    pub rds_knee: Option<RdsKnee>,
+}
+
+/// Fall-to-knees' overlay on rollDownStairs (its +0xf4, +0xf0, +0xf5, +0xf6, +0xf7).
+#[derive(Clone, Copy, Debug)]
+pub struct RdsKnee {
+    pub on: bool,
+    pub lean: f32,
+    pub stiff: bool,
+    pub poses: [bool; 2],
 }
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None }
+        CoreState { foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 

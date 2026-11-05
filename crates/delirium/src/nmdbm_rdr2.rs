@@ -525,6 +525,17 @@ pub struct Rdr2 {
     /// requester says otherwise), and whether a behaviour forbids new steps (RDR2's force balance)
     pub turn_facing: Option<f32>,
     pub force_balance: bool,
+    /// the balance quality (bal+0x68): 5.5556 x the least distance of the COM 0.3 s ahead from each foot 0.3 s ahead and
+    /// their middle, over the COM's height above the lower foot; it rises at once and falls by a quarter a tick
+    pub quality: f32,
+    /// balanceAbortThreshold as fall to knees wrote it (bal+0x294), over the configured one
+    pub abort: Option<f32>,
+    /// failMustCollide (bal+0x6d8): failing waits for a part off the legs to touch something
+    pub must_collide: bool,
+    /// bal+0x33a, kneeling: the pelvis control's both-feet terms are off and there's no stable feedback
+    pub kneeling: bool,
+    /// fall to knees' fail now (0x2ab4b7c)
+    pub force_fail: bool,
     pub leg_twist: (f32, f32),
     pub turn_lift: f32,
     /// the turn step's pause (s; it turns only once this runs out), whether he faced the heading last time, and
@@ -561,8 +572,21 @@ impl Rdr2 {
                since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false, heading_only: false,
-               leg_twist: RESET_LEG_TWIST, turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, pause: 0.0, aligned: false, landed: false, crouching: None,
+               leg_twist: RESET_LEG_TWIST, turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, quality: 0.0, abort: None, must_collide: false, kneeling: false, force_fail: false, pause: 0.0, aligned: false, landed: false, crouching: None,
                started: false, first_tick: true, twist_rest: 0.0, car: None, stagger: false, lead: None, lead_add: 0.0, taper: true, plane: None }
+    }
+
+    /// The balance quality's tick (the fail test's tail, 0x2abda8c), each foot's position and velocity.
+    pub fn measure(&mut self, up: bevy_math::Vec3, com: bevy_math::Vec3, vel: bevy_math::Vec3, feet: [(bevy_math::Vec3, bevy_math::Vec3); 2]) {
+        let h = up.dot(com) - up.dot(feet[0].0).min(up.dot(feet[1].0));
+        let at = com + vel * 0.3;
+        let (l, r) = (feet[0].0 + feet[0].1 * 0.3, feet[1].0 + feet[1].1 * 0.3);
+        let d = |x: bevy_math::Vec3| {
+            let o = x - at;
+            (o - up * up.dot(o)).length()
+        };
+        let x = d(l).min(d(r)).min(d((l + r) * 0.5)) * (5.5555553 / h.max(0.001));
+        self.quality = if x <= self.quality { (x - self.quality) * 0.25 + self.quality } else { x };
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.

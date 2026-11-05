@@ -1729,7 +1729,7 @@ impl BcrRdr2 {
                 }
                 if self.t_hit > 0.1 && self.t_hit > self.p.to_forward {
                     if self.p.forward_mode == 1 && c.shot_on {
-                        self.to_knees(out);
+                        self.to_knees(c, true, out);
                     } else {
                         self.state = 4;
                     }
@@ -1745,7 +1745,7 @@ impl BcrRdr2 {
                 self.state = 6;
                 match self.p.rebound_mode {
                     0 if !c.shot_on => self.state = 4,
-                    0 => self.to_knees(out),
+                    0 => self.to_knees(c, false, out),
                     // reboundMode 1: the balancer's time limit is now (bal+0x6d0 = its time balancing)
                     1 => c.out.dbm_time_up = true,
                     2 => self.state = 4,
@@ -1829,9 +1829,13 @@ impl BcrRdr2 {
         arms[0] || arms[1]
     }
 
-    /// RDR2's "fall to knees" settings in the character's shot record: at once, no helper force, no lean.
-    fn to_knees(&mut self, out: &mut Vec<String>) {
-        out.push("shotFallToKnees start=true ftkBalanceTime=0 ftkHelperForce=0 ftkLeanHelp=0".into());
+    /// RDR2's "fall to knees" settings in the character's record, for the shot's module: at once, no helper force, no
+    /// lean; `full`, the timeToForward path, also the hip angle and the pitches.
+    fn to_knees(&mut self, c: &mut Ctx, full: bool, out: &mut Vec<String>) {
+        if !c.ch.core.ftk.on {
+            out.push(format!("#say bcr fall-to-knees preset, full {full}"));
+        }
+        c.ch.core.ftk.bcr_preset(full);
     }
 
     /// Over a low wall (0x2aec2f0): state 8 or 9 by which way his hips cross it, and with fallOverWallDrape fallOverWall

@@ -563,6 +563,28 @@ impl CatchFall {
             let a = r.arm_rdr2(self, c, world, obstacles, st.twist, i);
             r.arm[i] = a;
         }
+        // fall to knees' poses (+0xcb..+0xcd)
+        let knee = c.ch.core.cf_knee;
+        if knee[0] {
+            for &j in HIP().iter() {
+                c.ch.eff[j].strength = 81.0;
+            }
+        }
+        let poses = if knee[1] {
+            Some([[0.0, 0.9, 0.7], [0.0, 0.7, 0.7]])
+        } else if knee[2] {
+            let k = r.arm[0].k.min(r.arm[1].k);
+            (r.arm[0].k, r.arm[1].k) = (k, k);
+            Some([[0.0, -0.5, -0.7], [0.0, -0.9, -0.7]])
+        } else {
+            None
+        };
+        if let Some(a) = poses {
+            for i in 0..2 {
+                c.ch.eff[crate::nmrs::SHOULDER()[i]].desired = a[i];
+                c.ch.eff[crate::nmrs::ELBOW()[i]].desired[0] = [0.9, 0.6][i];
+            }
+        }
         let look = c.b.part(HEAD()).m.d + r.dir;
         let chest = c.b.part(SPINE3());
         if p.use_head_look {

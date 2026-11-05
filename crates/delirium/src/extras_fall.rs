@@ -1098,7 +1098,12 @@ impl Extra for SmartFall {
         }
     }
 
-    fn stop(&mut self, _c: &mut Ctx) {
+    fn stop(&mut self, c: &mut Ctx) {
+        // RDR2's deactivate: fall to knees' exit
+        if c.ch.rdr2 && self.rd.as_ref().is_some_and(|r| r.state == 7) {
+            crate::nmftk_rdr2::exit(c);
+            crate::nmftk_rdr2::flags_off(c);
+        }
         if let Some(rd) = self.rd.as_mut() {
             for n in std::mem::take(&mut rd.on) {
                 self.out.push(format!("{n} start=false"));
@@ -2217,6 +2222,8 @@ impl SfParams {
 struct SfRdr2 {
     p: SfParams,
     state: u8,
+    /// logged that state 7 runs fall to knees
+    ftk_said: bool,
     /// the state's own clocks: rolling (5) and on the feet (7), and the hard landing's (6)
     t200: f32,
     t21c: f32,
@@ -2274,7 +2281,7 @@ impl SfRdr2 {
         SfRdr2 { p, state: p.initial_state, t200: 0.0, t21c: 0.0, smooth: 0.0, t: 0.0, hula: -0.1, touching: 0.0, first_floor: -1.0, peak: Vec3::ZERO,
                  start: Vec3::ZERO, leg_len: 0.9, sent: false, pd: true, height: 5.0, tti: 30.0, land_up: 0.0, landing_flat: false, class: 3,
                  class_now: 3, class_mid: 3, ground: Vec3::Z, contact: false, recoverable: true, failed: false, settled: false, back_pedal: false, first: true,
-                 on: vec![], out: vec![] }
+                 on: vec![], out: vec![], ftk_said: false }
     }
 
     fn ensure(&mut self, name: &'static str, line: String) {
@@ -2482,6 +2489,8 @@ impl SfRdr2 {
             7 => {
                 self.ensure("bodyBalance", "bodyBalance start=true".into());
                 (self.t200, self.failed) = (0.0, false);
+                // fall to knees' init on the character's record
+                crate::nmftk_rdr2::init(c);
             }
             8 => self.settled = false,
             _ => {}
@@ -2517,6 +2526,8 @@ impl SfRdr2 {
             7 => {
                 self.stop("teeter");
                 self.stop("bodyBalance");
+                crate::nmftk_rdr2::exit(c);
+                crate::nmftk_rdr2::flags_off(c);
             }
             _ => {}
         }
@@ -2623,6 +2634,15 @@ impl SfRdr2 {
                 let legs: Vec<usize> = (2..4).flat_map(|i| crate::nmshot::limb(i).p[1..].to_vec()).collect();
                 let trunk: Vec<usize> = (0..c.b.build.parts.len()).filter(|k| !legs.contains(k)).collect();
                 self.failed |= up.dot(c.m.b) < 0.5 || c.b.doll.collided(&trunk);
+                // fall to knees, if the character's record says so; catchFall and rollDownStairs get its flags
+                if c.ch.core.ftk.on {
+                    if !self.ftk_said {
+                        self.ftk_said = true;
+                        self.out.push("#say smartFall land on feet: runs fall to knees".into());
+                    }
+                    crate::nmftk_rdr2::core(c, &mut self.out, dt);
+                    crate::nmftk_rdr2::flags(c);
+                }
                 if v.length() < 0.15 {
                     let f = self.failed;
                     self.feedback(c, f);

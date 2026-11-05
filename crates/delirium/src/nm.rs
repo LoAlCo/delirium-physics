@@ -1823,9 +1823,15 @@ impl Agent {
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             c.shot_on = self.nm_shot.is_some();
             c.shot_scale = self.nm_shot.as_ref().map_or(1.0, |s| s.rdr2_scale());
+            // RDR2 core: fall to knees caps it once kneeling (the shot's +0x6e4)
+            if c.ch.rdr2 && c.ch.core.ftk.module_on && c.ch.core.ftk.kneeling {
+                c.shot_scale = c.shot_scale.min(0.35);
+            }
             c.dbm = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).filter(|_| !self.fallen).map(|d| crate::nmshot::DbmView {
                 stepping: d.f.stepping, planted: d.pv.planted, failing: d.p.rdr2.is_some_and(|r| r.failing.is_some()),
-                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps), leg: d.p.pelvis_height });
+                hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps), leg: d.p.pelvis_height,
+                time: d.p.rdr2.map_or(0.0, |r| r.time), quality: d.p.rdr2.map_or(0.0, |r| r.quality), knee: d.p.rdr2.map_or(0.0, |r| r.owned.knee.value),
+                lean_on: !matches!(d.lean.mode, crate::nmdbm::LeanMode::None) });
             if let Some(p) = self.nm_cf_msg.take() {
                 let b = walk_actives!(self);
                 start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);
@@ -2077,7 +2083,22 @@ impl Agent {
                 w.tick(&mut c, dt);
             }
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0xe8); }
+            // RDR2 core: the shot's fall-to-knees module (its runner #15), here with the extras' balancer requests
+            if c.ch.rdr2 {
+                let mut lines = vec![];
+                if crate::nmftk_rdr2::module(&mut c, self.nm_shot.as_ref().map(|s| s.ftk_view()), &mut lines, dt) {
+                    if let Some(s) = self.nm_shot.as_mut() {
+                        s.cap_scale(0.35);
+                    }
+                }
+                self.extras.outbox.extend(lines);
+                if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, crate::limbreq::slot("shotFallToKnees")); }
+            }
             self.extras.tick_marked(&mut c, Some(world), obstacles, dt, self.limb_reqs.as_mut());
+            if c.ch.rdr2 {
+                let held = c.ch.core.ftk.friction();
+                c.out.part_friction.extend(held);
+            }
             // RDR2 core: yanked's pedalLegs reverse flags for this tick
             if let Some(r) = c.out.pedal_reverse.take() {
                 self.nm_pd.set_reverse(r);
@@ -2144,6 +2165,11 @@ impl Agent {
                         }
                     }
                     r.force_balance = out.dbm_force_balance;
+                    // fall to knees: lenient while kneeling, its fail now
+                    r.abort = out.dbm_abort.or(r.abort);
+                    r.must_collide = out.dbm_must_collide.unwrap_or(r.must_collide);
+                    r.kneeling = out.dbm_kneeling.unwrap_or(r.kneeling);
+                    r.force_fail |= out.dbm_force_fail;
                     (r.stagger, r.lead) = (out.dbm_stagger, out.dbm_lead);
                     // teeter's prediction boost and exclusion plane (this step), and taperKneeStrength (until changed)
                     (r.lead_add, r.plane) = (out.dbm_lead_add, out.dbm_plane);
@@ -2289,6 +2315,7 @@ impl Agent {
                 self.locomotion_terms=Some(locomotion_drive::NativeTerms{torque:torque.clone(),push:push.clone(),yaw:ch.foot_yaw,attached:snap.attached});
             }
             ch.foot_yaw = yaw;
+            ch.core.foot_unlatch = false;
         }
         for (k, p) in push.into_iter().enumerate().filter(|(_, p)| *p != Vec3::ZERO) {
             self.doll.impulse(k, self.doll.centre(k), p);

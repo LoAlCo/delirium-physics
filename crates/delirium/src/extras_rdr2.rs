@@ -283,6 +283,28 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "ftkOnKneesArmType", kind: Kind::Int, used: true, doc: "0: arms as they are, 1: arms hang (1)" },
         Param { name: "ftkPitchForwards", kind: Kind::Bool, used: true, doc: "topple forwards (true) or back (false) at the end" },
         Param { name: "ftkPitchForce", kind: Kind::Float, used: true, doc: "push on the chest that tips him over, N (300)" },
+        Param { name: "fallToKnees", kind: Kind::Bool, used: true, doc: "RDR2 core: the shot's module on (true here, as sending the message means it; RDR2's default false)" },
+        Param { name: "ftkImpactLooseness", kind: Kind::Float, used: true, doc: "RDR2 core: upper body muscle stiffness 1.01 less this when a knee lands (0.5)" },
+        Param { name: "ftkImpactLoosenessTime", kind: Kind::Float, used: true, doc: "RDR2 core: for this long, s (0.2)" },
+        Param { name: "ftkHipBlend", kind: Kind::Float, used: true, doc: "RDR2 core: how fast the thighs come upright, a blend a tick (0.3)" },
+        Param { name: "ftkLungeProb", kind: Kind::Float, used: true, doc: "RDR2 core: chance only the landed knee's thigh comes upright (0)" },
+        Param { name: "ftkFricMult", kind: Kind::Float, used: true, doc: "RDR2 core: foot friction lost per tip of the heel up (1)" },
+        Param { name: "ftkHipAngleFall", kind: Kind::Float, used: true, doc: "RDR2 core: hip lean falling back, rad (0.5)" },
+        Param { name: "ftkPitchForwardsRad", kind: Kind::Float, used: true, doc: "RDR2 core: RDR2's ftkPitchForwards, the hip pitch moving forward, rad; here apart, as Delirium's own is a flag (0.1)" },
+        Param { name: "ftkPitchBackwards", kind: Kind::Float, used: true, doc: "RDR2 core: hip pitch unless moving forward, rad (0.1)" },
+        Param { name: "ftkFallBelowStab", kind: Kind::Float, used: true, doc: "RDR2 core: folds below this balance quality (0.5)" },
+        Param { name: "ftkFallBelowStabPerSecond", kind: Kind::Float, used: true, doc: "RDR2 core: it grows by this per s balancing (0; hash 4aca51a5, the name is ours)" },
+        Param { name: "ftkFallBelowStabPerStep", kind: Kind::Float, used: true, doc: "RDR2 core: and per step (0; hash 6c4220c1, the name is ours)" },
+        Param { name: "ftkBalanceAbortThreshold", kind: Kind::Float, used: true, doc: "RDR2 core: the balancer's while kneeling (2)" },
+        Param { name: "ftkReleaseReachForWound", kind: Kind::Float, used: true, doc: "RDR2 core: s after a knee lands reachForWound stops, below 0 never (-1)" },
+        Param { name: "ftkReachForWound", kind: Kind::Bool, used: false, doc: "RDR2 core: nothing reads it (true)" },
+        Param { name: "ftkReleasePointGun", kind: Kind::Bool, used: true, doc: "RDR2 core: pointGun stops when a knee lands (false)" },
+        Param { name: "ftkFailMustCollide", kind: Kind::Bool, used: true, doc: "RDR2 core: the balancer's while kneeling (true)" },
+        Param { name: "ftkStayUpright", kind: Kind::Bool, used: true, doc: "RDR2 core: false, StayUpright goes off when kneeling (true)" },
+        Param { name: "ftkKneeSpin", kind: Kind::Bool, used: true, doc: "RDR2 core: the foot yaw hold lets go on his knees (false)" },
+        Param { name: "ftkStiffSpine", kind: Kind::Bool, used: true, doc: "RDR2 core: rollDownStairs stiffens the spine (false)" },
+        Param { name: "ftkHelperForceOnSpine", kind: Kind::Bool, used: true, doc: "RDR2 core: the help pushes the chest too (true)" },
+        Param { name: "ftkAlwaysChangeFall", kind: Kind::Bool, used: true, doc: "RDR2 core: catchFall's kneel flag though the knees are uneven (false)" },
     ] },
     Message { name: "shotSpin", params: &[
         Param { name: "spin", kind: Kind::Float, used: true, doc: "the hit's spin, m (none: from hitPoint and bulletDir: the lever arm about his centre across the bullet)" },
@@ -1082,15 +1104,42 @@ pub struct Knees {
     balance: f32, bend_rate: f32, helper: f32, spine_bend: f32, stiffness: f32, kneel_time: f32, lean_help: f32,
     forwards: bool, pitch: f32, arms_down: bool, kneel_hip: f32,
     t: f32, phase: u8, since: f32, knee: [f32; 2], hip: [f32; 2],
+    /// With the RDR2 core the message only writes the character's record (shotFallToKnees 0x2a535a8; each message
+    /// starts from the defaults), and the shot's module runs it (nmftk_rdr2.rs).
+    rdr2: crate::nmftk_rdr2::Ftk, written: bool,
 }
 
 impl Knees {
     fn new(p: &mut P) -> Result<Knees, Error> {
+        let d = crate::nmftk_rdr2::Ftk::default();
+        // RDR2's ftkPitchForwards is a float, Delirium's own a flag
+        let pitch_forwards = match p.get("ftkPitchForwards") {
+            Some(Value::Bool(_)) | None => d.pitch_forwards,
+            Some(v) => v.f()?,
+        };
+        let pitch_forwards = p.f("ftkPitchForwardsRad", pitch_forwards)?;
+        let rdr2 = crate::nmftk_rdr2::Ftk {
+            on: p.b("fallToKnees", true)?, balance_time: p.f("ftkBalanceTime", d.balance_time)?, helper_force: p.f("ftkHelperForce", d.helper_force)?,
+            lean_help: p.f("ftkLeanHelp", d.lean_help)?, spine_bend: p.f("ftkSpineBend", d.spine_bend)?,
+            impact_looseness: p.f("ftkImpactLooseness", d.impact_looseness)?, impact_time: p.f("ftkImpactLoosenessTime", d.impact_time)?,
+            bend_rate: p.f("ftkBendRate", d.bend_rate)?, hip_blend: p.f("ftkHipBlend", d.hip_blend)?, lunge_prob: p.f("ftkLungeProb", d.lunge_prob)?,
+            fric_mult: p.f("ftkFricMult", d.fric_mult)?, hip_angle_fall: p.f("ftkHipAngleFall", d.hip_angle_fall)?, pitch_forwards,
+            pitch_backwards: p.f("ftkPitchBackwards", d.pitch_backwards)?, fall_below_stab: p.f("ftkFallBelowStab", d.fall_below_stab)?,
+            thresh_per_s: p.f("ftkFallBelowStabPerSecond", d.thresh_per_s)?, thresh_per_step: p.f("ftkFallBelowStabPerStep", d.thresh_per_step)?,
+            abort_threshold: p.f("ftkBalanceAbortThreshold", d.abort_threshold)?, release_rfw: p.f("ftkReleaseReachForWound", d.release_rfw)?,
+            arm_type: p.i("ftkOnKneesArmType", d.arm_type)?, release_point_gun: p.b("ftkReleasePointGun", d.release_point_gun)?,
+            fail_must_collide: p.b("ftkFailMustCollide", d.fail_must_collide)?, stay_upright: p.b("ftkStayUpright", d.stay_upright)?,
+            knee_spin: p.b("ftkKneeSpin", d.knee_spin)?, stiff_spine: p.b("ftkStiffSpine", d.stiff_spine)?,
+            helper_on_spine: p.b("ftkHelperForceOnSpine", d.helper_on_spine)?, always_change_fall: p.b("ftkAlwaysChangeFall", d.always_change_fall)?,
+            ..d
+        };
+        p.b("ftkReachForWound", true)?;
         Ok(Knees {
+            rdr2, written: false,
             balance: p.f("ftkBalanceTime", 0.1)?.max(0.0), bend_rate: p.f("ftkBendRate", 3.0)?.abs(),
             helper: p.f("ftkHelperForce", 0.0)?, spine_bend: p.f("ftkSpineBend", 0.1)?, stiffness: p.f("ftkStiffness", 9.0)?,
             kneel_time: p.f("ftkKneelTime", 2.0)?.max(0.0), lean_help: p.f("ftkLeanHelp", 1500.0)?,
-            forwards: p.b("ftkPitchForwards", true)?, pitch: p.f("ftkPitchForce", 300.0)?, arms_down: p.i("ftkOnKneesArmType", 1)? == 1, kneel_hip: p.f("ftkKneelHip", 0.3)?,
+            forwards: p.get("ftkPitchForwards").map_or(Ok(true), |v| if matches!(v, Value::Bool(_)) { v.b() } else { Ok(true) })?, pitch: p.f("ftkPitchForce", 300.0)?, arms_down: p.i("ftkOnKneesArmType", 1)? == 1, kneel_hip: p.f("ftkKneelHip", 0.3)?,
             t: 0.0, phase: 0, since: 0.0, knee: [0.0; 2], hip: [0.0; 2],
         })
     }
@@ -1108,7 +1157,19 @@ impl Knees {
 }
 
 impl Extra for Knees {
+    fn lines(&mut self) -> Vec<String> {
+        if self.written { vec!["#say shotFallToKnees wrote the character's record".into()] } else { vec![] }
+    }
+
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            // only the settings: what the core keeps of its own stays, and the threshold follows (ctx+0x2e30)
+            let f = &mut c.ch.core.ftk;
+            let keep = *f;
+            *f = keep.with_settings(&self.rdr2);
+            self.written = true;
+            return;
+        }
         self.t += dt;
         self.since += dt;
         let up = c.ch.up.normalize_or(Vec3::Z);
@@ -1200,7 +1261,7 @@ impl Extra for Knees {
     }
 
     fn done(&self) -> bool {
-        self.phase == 3 && self.since > 1.0
+        self.written || (self.phase == 3 && self.since > 1.0)
     }
 }
 
@@ -1288,8 +1349,7 @@ impl Melee {
     /// with 1 - T/flinchPeriod) and asks the balancer for a hip pitch and knee bend; on a new blow one snap of the
     /// hit part's joints; armsType 1 throws the arms out by the COM's jolt; rfw places the free hands 0.1 m off the
     /// spot hit; Lean asks the balancer to lean away from the blow. balancerCollisionsReaction's wall, known or hit, stops the
-    /// flinch and the lean within their abort times. Left out: the hand-over to the fall-to-knees core 0x2a2e0b4 (Delirium's
-    /// shotFallToKnees runs by itself, written from descriptions).
+    /// flinch and the lean within their abort times. Then the hand-over to the fall-to-knees core (nmftk_rdr2.rs).
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
         let r = self.rdr2;
         let mut s = match self.r2.take() {
@@ -1454,6 +1514,15 @@ impl Melee {
             self.say(11, || format!("lean amount {}", r.lean));
         } else if bcr && t_bcr <= r.lean_abort && r.lean != 0.0 && t < r.lean_period {
             self.say(12, || format!("lean aborted by the wall, time to it {t_bcr:.2}"));
+        }
+        // the hand-over to fall to knees (0x2a2e0b4, with the character's record), once the flinch is done and the balancer
+        // has failed, or if he's already kneeling
+        let flinch_over = !r.flinch || t > r.flinch_period;
+        let leaning = c.dbm.is_some_and(|d| d.lean_on);
+        let f = c.ch.core.ftk;
+        if f.on && (f.kneeling || (flinch_over && !leaning && c.vel.length() < 0.7 && c.ch.bcr.is_none_or(|b| b.0 == 0) && !c.upright)) {
+            self.say(14, || format!("hands over to fall to knees, kneeling {}, balancer running {}", f.kneeling, c.upright));
+            crate::nmftk_rdr2::core(c, &mut self.out, dt);
         }
         self.rdr2.hit_new = false;
         s.prev_vel = c.vel;
