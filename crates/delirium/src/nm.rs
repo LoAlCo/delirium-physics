@@ -2048,6 +2048,9 @@ impl Agent {
                     f.tick(&mut c, world, obstacles, &mut self.nm_head, &mut self.nm_twist, dt);
                 }
             }
+            if c.ch.cf_exclude != [false; 2] && self.nm_cf.as_ref().is_some_and(|f| f.active) {
+                self.extras.outbox.push(format!("#say catchFall leaves arms {:?} to meleeReact", c.ch.cf_exclude));
+            }
             leave_arms(c.ch, &kept, cf_excluded);
             c.ch.cf_exclude = [false; 2];
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x70); }
