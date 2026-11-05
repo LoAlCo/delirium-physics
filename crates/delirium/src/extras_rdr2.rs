@@ -1418,6 +1418,9 @@ impl Melee {
         // rfw: the free hands 0.1 m off the spot hit, unless a leg or (from behind) the trunk was hit
         let reach = !(r.rfw_not_bcr && c.ch.bcr.is_some_and(|b| b.0 != 0)) && r.rfw && r.rfw_delay < t && t < r.rfw_delay + r.rfw_period && c.upright
             && !(1..=6).contains(&r.part) && (!s.back || matches!(r.part, 11 | 12));
+        if r.rfw_not_bcr && r.rfw && c.ch.bcr.is_some_and(|b| b.0 != 0) && r.rfw_delay < t && t < r.rfw_delay + r.rfw_period {
+            self.say(13, || format!("no reach: balancerCollisionsReaction in state {}", c.ch.bcr.map_or(0, |b| b.0)));
+        }
         // p13 0.05: a further 0.05 leg lengths in along the normal (0x2a4733c's skin offset)
         let leg = |c: &Ctx| c.b.joint_pos(HIP()[0]).distance(c.b.joint_pos(KNEE()[0])) + c.b.joint_pos(KNEE()[0]).distance(c.b.joint_pos(ANKLE()[0]));
         let off = 0.1 - 0.05 * leg(c);
