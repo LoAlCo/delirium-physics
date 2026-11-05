@@ -1626,6 +1626,10 @@ pub struct Ragdoll {
     pub hit: Vec<Option<(Vec3, Vec3, i32)>>,
     /// `hit` without his own parts: `hit`'s id is -1 for himself and for the static world alike (RDR2 core's BCR)
     pub hit_out: Vec<Option<(Vec3, Vec3, f32)>>,
+    /// RDR2 core: per-part friction scales (ctx+0x3570), empty: all 1
+    pub fric: Vec<f32>,
+    /// RDR2 core: per-part joint limit half-range floors (lean1, lean2, twist), empty: none
+    pub lim_floor: Vec<[f32; 3]>,
     pub contact: crate::bump::ContactRecord<i32>,
     pub ob_hits: Vec<(i32, Vec3, Vec3)>,
     pub ob_hit_left: Vec<f32>,
@@ -1760,7 +1764,7 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { nm: build.nm, links: build.links.clone(), pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+        Ragdoll { nm: build.nm, links: build.links.clone(), pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
                   sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
@@ -1832,6 +1836,21 @@ impl Ragdoll {
             mass += m;
         }
         e / mass
+    }
+
+    /// RDR2 core: this step's per-part friction scales and joint limit floors (what isn't named is back to none).
+    pub fn set_part_scales(&mut self, fric: &[(usize, f32)], floor: &[(usize, [f32; 3])]) {
+        let n = self.touch.len();
+        self.fric.clear();
+        self.lim_floor.clear();
+        if !fric.is_empty() {
+            self.fric.resize(n, 1.0);
+            fric.iter().for_each(|&(k, x)| self.fric[k] = x);
+        }
+        if !floor.is_empty() {
+            self.lim_floor.resize(n, [0.0; 3]);
+            floor.iter().for_each(|&(k, x)| self.lim_floor[k] = x);
+        }
     }
 
     pub fn collided(&self, parts: &[usize]) -> bool {
@@ -2513,7 +2532,7 @@ impl Ragdoll {
                 self.touch[i] |= touch;
                 add(at + o, r.n, -r.gap, -1);
                 hit_ob.push((hits.len(), world_id(r.inst), at + o, r.n));
-                hits.push((i, at, r.n, r.gap, (part_friction(p) * row[0]).max(0.0), Vec3::ZERO, (PART_ELASTICITY() * row[1]).min(1.0), Some((i, k)), at));
+                hits.push((i, at, r.n, r.gap, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0), Vec3::ZERO, (PART_ELASTICITY() * row[1]).min(1.0), Some((i, k)), at));
             }
             let a_last = (last, self.seen.get(i).map_or(tm, |s| s.1));
             for ob in obstacles.iter().filter(|ob| !self.joins.iter().any(|j| j.2 == ob.id)) {
@@ -2582,7 +2601,7 @@ impl Ragdoll {
                             _ => ob.vel_at(on + o),
                         };
                         let row = ob.surface(cp);
-                        hits.push((i, at, r.n, r.gap, (part_friction(p) * row[0]).max(0.0), v, (PART_ELASTICITY() * row[1]).min(1.0), Some((car_base + s, k)), on));
+                        hits.push((i, at, r.n, r.gap, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0), v, (PART_ELASTICITY() * row[1]).min(1.0), Some((car_base + s, k)), on));
                     }
                 }
             }
@@ -3209,7 +3228,10 @@ impl Ragdoll {
         self.hit.iter_mut().for_each(|h| *h = None);
         self.hit_out.iter_mut().for_each(|h| *h = None);
         let joints: Vec<Option<Joint>> = build.parts.iter().enumerate().map(|(i, p)| p.parent.map(|j| {
-            let j = Joint::new(p, j, drive.rigid.get(i));
+            let mut j = Joint::new(p, j, drive.rigid.get(i));
+            if let (Some(f), Kind::Ball { lean, twist }) = (self.lim_floor.get(i), &mut j.kind) {
+                (lean[0], lean[1], *twist) = (lean[0].max(f[0]), lean[1].max(f[1]), twist.max(f[2]));
+            }
             Joint { jc: self.jconst(build, i, &j, drive.rigid.get(i)), ..j }
         })).collect();
         let subs = 1;

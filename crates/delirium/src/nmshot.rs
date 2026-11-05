@@ -176,6 +176,11 @@ pub struct Out {
     pub force: Vec<Vec3>,
     pub seq: Vec<(usize, Vec3, bool)>,
     pub impulse: Vec<(usize, Vec3, Vec3)>,
+    /// RDR2 core: per-part friction scales this step, part and scale (ctx+0x3570; 1 for parts not named)
+    pub part_friction: Vec<(usize, f32)>,
+    /// RDR2 core: per-joint limit half-range floors this step, child part and (lean1, lean2, twist) in rad
+    /// (the 3-DOF joint's +0x11c..+0x124, 0x2a4eaa0)
+    pub lim_floor: Vec<(usize, [f32; 3])>,
     /// RDR2 core: the default arms' releaseWound, telling reachForWound to let that hand go this step
     pub rfw_release: [bool; 2],
     /// RDR2 core: an extra (onFire) stops bodyBalance, then starts it with these (RDR2's children)

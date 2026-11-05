@@ -222,6 +222,13 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "relaxTimeMax", kind: Kind::Float, used: true, doc: "RDR2 core only: and at most (5)" },
         Param { name: "useConstraints", kind: Kind::Bool, used: true, doc: "RDR2 core only: pin the chest and pelvis lying on his back (false)" },
         Param { name: "trapped", kind: Kind::Bool, used: true, doc: "RDR2 core only: push against what is towards attackerPos instead of reaching for the wound (false)" },
+        Param { name: "attackerInstance", kind: Kind::Int, used: true, doc: "RDR2 core only: the object attackerPos is given in (-1: the world)" },
+        Param { name: "noRollOnBack", kind: Kind::Bool, used: true, doc: "RDR2 core only: no rolling while lying on his back (false; RDR2's +0xe4, its name not solved)" },
+        Param { name: "rollDuration", kind: Kind::Float, used: true, doc: "RDR2 core only: a roll's duration, s (5; RDR2's +0xa0, its table name doubtful)" },
+        Param { name: "rollRandomAbove", kind: Kind::Float, used: true, doc: "RDR2 core only: a draw above this makes the duration random, 0.2..3 s (0.3; +0xa4)" },
+        Param { name: "rollTorqueMax", kind: Kind::Float, used: true, doc: "RDR2 core only: the roll torque's cap (30; +0xa8)" },
+        Param { name: "rollTorqueStart", kind: Kind::Float, used: true, doc: "RDR2 core only: the roll torque at a roll's start, 0: 20 for the first roll (0; +0xac)" },
+        Param { name: "rollTorqueRate", kind: Kind::Float, used: true, doc: "RDR2 core only: the roll torque's ramp rate (60; +0xb0)" },
     ] },
     Message { name: "learnedCrawl", params: &[
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "(10)" },
@@ -1439,7 +1446,9 @@ impl Injured {
                      no_reach: [p.b("dontReachWithLeft", false)?, p.b("dontReachWithRight", false)?],
                      strong: p.b("strongRollForce", false)?, t: 0.0, pedal_cd: delirium_data::kv!(12), pedalling: false, state: 0, out: vec![],
                      rd: IogRdr2 { relax: (p.f("relaxTimeMin", 3.0)?, p.f("relaxTimeMax", 5.0)?), use_constraints: p.b("useConstraints", false)?,
-                                   trapped: p.b("trapped", false)?, ..Default::default() } })
+                                   trapped: p.b("trapped", false)?, attacker_ob: p.i("attackerInstance", -1)?, no_roll_back: p.b("noRollOnBack", false)?,
+                                   roll: (p.f("rollDuration", 5.0)?, p.f("rollRandomAbove", 0.3)?, p.f("rollTorqueMax", 30.0)?, p.f("rollTorqueStart", 0.0)?, p.f("rollTorqueRate", 60.0)?),
+                                   foot_fric: [1.0; 2], ..Default::default() } })
     }
 }
 impl Extra for Injured {
@@ -1449,8 +1458,14 @@ impl Extra for Injured {
         }
     }
 
-    fn constraints(&self) -> Vec<(usize, Option<Vec3>, Option<bevy_math::Quat>)> {
-        self.rd.pins.iter().map(|&(k, at)| (k, Some(at), None)).collect()
+    /// RDR2's two constraints are distance limits to where the part was (0x2a29ba8: type 1, maximum 0.3 and 0.25 m, the
+    /// strength field 10000 [P]), so they are ropes here.
+    fn ropes(&self) -> Vec<(usize, Vec3, Vec3, f32, f32)> {
+        self.rd.pins.iter().map(|&(k, now, at, len)| (k, now, at, len, 10000.0)).collect()
+    }
+
+    fn rfw_block(&self) -> Option<[bool; 2]> {
+        self.rd.rfw_block
     }
 
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
@@ -1552,26 +1567,29 @@ impl Extra for Injured {
 /// injuredOnGround's RDR2-core settings (relaxTimeMin / Max, useConstraints, trapped) and state: started, the time,
 /// the roll's direction (0 none, 1, 2), the arms' reach mode (3 both), the wound-reach timer and its hold, the trapped
 /// push's timer, its start value and rest, the relax timer, roll time and duration, the pedal timer, the roll torque,
-/// whether a tick has run, the pins, the arms' search poses, which helpers it has started (pedalLegs,
-/// reachForWound, headLook) and the trapped push's probe hit (point, direction).
+/// whether a tick has run, the pins (part, where it is, where it was pinned, the distance), the arms' search poses, which
+/// helpers it has started (pedalLegs, reachForWound, headLook), the trapped push's probe hit (point, direction), the brace
+/// service's record, the feet's friction, what reachForWound's hands are told, the first-time log marks, the wrist's
+/// floor, the object attackerPos is in, no roll on his back (+0xe4) and the roll's parameters (+0xa0..+0xb0).
 #[derive(Clone, Default)]
 struct IogRdr2 {
     relax: (f32, f32), use_constraints: bool, trapped: bool,
     started: bool, time: f32, dir: u8, mode: u8, reach_t: f32, reach_hold: f32, push_t: f32, push_start: f32, push_rest: f32,
     relax_t: f32, roll_t: f32, roll_dur: f32, pedal_t: f32, torque: f32, ticked: bool,
-    pins: Vec<(usize, Vec3)>, pose: [Option<[f32; 6]>; 2], pedalling: bool, rfw: bool, looking: bool, hit: Option<(Vec3, Vec3)>,
+    pins: Vec<(usize, Vec3, Vec3, f32)>, pose: [Option<[f32; 6]>; 2], pedalling: bool, rfw: bool, looking: bool, hit: Option<(Vec3, Vec3)>,
+    brace: crate::extras_fall_rdr2::BcrBrace, foot_fric: [f32; 2], rfw_block: Option<[bool; 2]>, said: u32,
+    attacker_ob: i32, no_roll_back: bool, roll: (f32, f32, f32, f32, f32),
 }
 
-/// injuredOnGround's roll parameters whose message names RDR2's table doesn't give reliably: the default roll
-/// duration (s), the draw above which it is random instead, the roll torque's cap, its start (0: 20 for the first
-/// roll) and its ramp rate.
-const IOG_ROLL: (f32, f32, f32, f32, f32) = (5.0, 0.3, 30.0, 0.0, 60.0);
-/// The default wound's depth in front of the spine (ours: RDR2 takes half the part's bound length and half a body
-/// length whose values aren't known; this is reachForWound's surface offset for the trunk).
+/// The trapped push's brace record (the constructor's defaults at +0x2c0, 0.5 and 11 from the push).
+const IOG_BRACE: crate::extras_fall_rdr2::BraceRecord = crate::extras_fall_rdr2::BraceRecord {
+    distance: 0.5, stiffness: 11.0, predict: 0.45, min_brace: 0.3, back_time: 1.0, absorb: 0.15 };
+/// The default wound's depth in front of the spine (ours: RDR2 takes half the part's bound's x extent and half of
+/// body+0x98, which wasn't identified; this is reachForWound's surface offset for the trunk).
 const IOG_WOUND_DEPTH: f32 = 0.18;
 
-/// Delirium's parts as RDR2's masks: a leg (0xf6), an arm (0xfd800), the pelvis (0x9) and the trunk with the head
-/// (0x709 / 0x2709).
+/// Delirium's parts as RDR2's masks: a leg (0xf6), an arm (0xfd800), the pelvis and lowest spine part (0x9), the trunk
+/// (0x709) and with the neck (0x2709).
 fn iog_leg(k: usize) -> bool {
     (1..=6).contains(&k)
 }
@@ -1579,7 +1597,7 @@ fn iog_arm(k: usize) -> bool {
     (13..=20).contains(&k)
 }
 fn iog_trunk(k: usize) -> bool {
-    k == 0 || (7..=12).contains(&k)
+    k == 0 || (7..=10).contains(&k)
 }
 
 impl Injured {
@@ -1591,7 +1609,14 @@ impl Injured {
             return;
         }
         let chest = c.b.part((*SPINE())[3] + 1).m.d;
-        let e = (self.attacker - chest).normalize_or_zero();
+        // attackerPos in its object (0x2a21218 [P])
+        let attacker = obs.iter().find(|o| o.id == r.attacker_ob && r.attacker_ob >= 0).map_or(self.attacker, |o| o.at + o.rot * self.attacker);
+        if r.attacker_ob >= 0 && r.said >> 15 & 1 == 0 {
+            r.said |= 1 << 15;
+            self.out.push(format!("#say iog attackerPos in object {}: {attacker}", r.attacker_ob));
+        }
+        let r = &mut self.rd;
+        let e = (attacker - chest).normalize_or_zero();
         if let Some((t, _, _)) = crate::nmcf::cast(world, obs, chest, e, 0.7) {
             r.hit = Some((chest + e * t, e));
         }
@@ -1601,10 +1626,10 @@ impl Injured {
     /// torque about his body's long axis that ramps up while the roll is slow, his spine twisting and the far leg
     /// pushing; on his side the upper spine is flattened. He pedals his legs (not face down, not rolling, not a
     /// wounded leg), one or both hands hold the wound (a leg wound through reachForWound, on and off) while he looks at
-    /// it, free arms rest bent, and with `trapped` he braces against what is towards attackerPos. Every joint's
-    /// stiffness is capped at 9. Ours: Delirium's arm search for RDR2's hand placement and IK requests, the brace
-    /// service as both free hands to the brace point. Left out: arm friction 0.5 (no per-part friction), the joint
-    /// mode and the shoulder and wrist floors (fields not identified).
+    /// it, free arms rest bent, and with `trapped` he braces against what is towards attackerPos through the core brace
+    /// service. Arm friction 0.5, the pushing foot's 2, and floors on the shoulders' and wrists' limit half-ranges. Every
+    /// joint's stiffness is capped at 9. Ours: Delirium's arm search for RDR2's hand placement. Left out: the Rage
+    /// joint's +0x30 = 3 at activate (only that write was found, no reader).
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
         // the joint stiffness cap (RDR2's tick runs it on the joints before this frame's requests land)
         for e in c.ch.eff.iter_mut() {
@@ -1616,7 +1641,22 @@ impl Injured {
             self.start_rdr2(c);
         }
         crate::nmcf::spin_reduction(c, 0.5);
+        // the shoulders' limit half-ranges at least (lean1, lean2, twist) (0x2a4eaa0: read in 0x2a21828's half-range)
+        for i in 0..2 {
+            c.out.lim_floor.push((SHOULDER()[i] + 1, [1.3, 0.9, 2.0]));
+        }
+        self.rd.rfw_block = None;
         self.rd.time += dt;
+        // the log: last tick's friction and floors reached the body, a shoulder went past the rig's limit
+        if let (Some(&f), Some(&g)) = (c.b.doll.fric.get(13), c.b.doll.lim_floor.get(SHOULDER()[0] + 1)) {
+            self.say(11, format!("#say iog body has arm friction {f} and shoulder limit floors {g:?}"));
+        }
+        for i in 0..2 {
+            let (a, l) = (c.ch.actual(SHOULDER()[i], c.b.frames), c.ch.limits(SHOULDER()[i]));
+            if a[2] < l[4] - 0.05 || a[2] > l[5] + 0.05 {
+                self.say(12, format!("#say iog shoulder {i} twist {:.2} past the rig's {:.2}..{:.2}", a[2], l[4], l[5]));
+            }
+        }
         // pose analysis: up made square to the body's long axis
         let (a, b, cc, up) = (c.m.a, c.m.b, c.m.c, c.up);
         let s = b.cross(up).normalize_or_zero();
@@ -1638,9 +1678,16 @@ impl Injured {
             let k = &mut c.ch.eff[ANKLE()[i]];
             (k.strength, k.damping, k.desired[0]) = (20.0, 5.0, -0.5);
         }
-        if !(self.rd.use_constraints && supine) {
+        // (the note had this as useConstraints: the tick tests +0xe4, and the pins inside the roll are +0xe2's)
+        if !(self.rd.no_roll_back && supine) {
             self.roll_rdr2(c, dt, (s, u, sigma), prone, supine, side);
+        } else {
+            self.say(9, "#say iog no roll on his back".into());
         }
+        self.rd.pins.iter_mut().for_each(|p| p.1 = c.b.part(p.0).m.d);
+        let mut fric: Vec<(usize, f32)> = (13..=20).map(|k| (k, 0.5)).collect();
+        fric.extend([(3, self.rd.foot_fric[0]), (6, self.rd.foot_fric[1])]);
+        c.out.part_friction = fric;
         self.pedal_rdr2(c, dt);
         let mut used = [false; 2];
         if !(self.rd.trapped && self.push_rdr2(c, dt, &mut used)) {
@@ -1648,7 +1695,7 @@ impl Injured {
         }
         self.arms_rdr2(c, prone, sigma, &mut used);
         // the head looks at the wound
-        if !prone {
+        if self.n > 0 && !prone {
             let (k, local) = (self.wounds[0].2, self.wounds[0].0);
             let m = c.b.part(k).m;
             let x = crate::vm4(m.a, m.b, m.c, m.d, local);
@@ -1673,11 +1720,19 @@ impl Injured {
         r.push_t = c.ch.random() + 2.0;
         r.push_start = r.push_t;
         r.push_rest = c.ch.random() + 2.5;
-        (r.roll_dur, r.relax_t, r.roll_t) = (IOG_ROLL.0, 0.0, 0.0);
-        if c.ch.random() > IOG_ROLL.1 {
+        (r.roll_dur, r.relax_t, r.roll_t) = (r.roll.0, 0.0, 0.0);
+        if c.ch.random() > r.roll.1 {
             r.roll_dur = 0.2 + 2.8 * c.ch.random();
         }
         (r.pedal_t, r.torque) = (0.0, -20.0);
+    }
+
+    /// A log line the first time a branch runs (which branches ran in a scene: `RDR2_SEND` scenes read them).
+    fn say(&mut self, bit: u32, line: String) {
+        if self.rd.said >> bit & 1 == 0 {
+            self.rd.said |= 1 << bit;
+            self.out.push(line);
+        }
     }
 
     /// RDR2's roll: resting, the body stiff 5 (neck and head 10) and on a side the upper spine flattened; when the
@@ -1688,20 +1743,30 @@ impl Injured {
     fn roll_rdr2(&mut self, c: &mut Ctx, dt: f32, (s, u, sigma): (Vec3, Vec3, f32), prone: bool, supine: bool, side: (bool, bool)) {
         let (a, b) = (c.m.a, c.m.b);
         let chest = (*SPINE())[3] + 1;
-        // the pins: as read they need him lying on his back, when this isn't run with useConstraints
-        if self.rd.use_constraints && self.rd.pins.is_empty() && supine && c.b.doll.collided(&[chest]) && c.b.doll.collided(&[0]) {
-            self.rd.pins = vec![(chest, c.b.part(chest).m.d), (0, c.b.part(0).m.d)];
+        // the pins: on his back with the chest and pelvis touching something other than himself (bit 0x10)
+        if self.rd.use_constraints && self.rd.pins.is_empty() && supine && c.b.doll.hit_out[chest].is_some() && c.b.doll.hit_out[0].is_some() {
+            let (pc, pp) = (c.b.part(chest).m.d, c.b.part(0).m.d);
+            self.rd.pins = vec![(chest, pc, pc, 0.3), (0, pp, pp, 0.25)];
+            self.say(0, format!("#say iog pins chest {pc} pelvis {pp}"));
+        }
+        if self.rd.dir == 0 {
+            self.say(1, format!("#say iog resting sigma {sigma:.2} side {side:?}"));
         }
         let r = &mut self.rd;
         if r.dir == 0 {
             c.ch.set_stiffness(5.0, 1.0, "fb", None);
-            c.ch.set_stiffness(10.0, 1.0, "un", None);
+            // mask 0x600, bit = joint index + 1: the top two spine joints [C] (the note took them for the neck and head)
+            for j in [SPINE()[2], SPINE()[3]] {
+                c.ch.eff[j].set_stiffness(10.0, 1.0, None);
+            }
             if side.0 || side.1 {
                 let t = a.cross(if side.0 { u } else { -u });
                 for (k, f) in [(1, 20.0), (2, 40.0), (3, 60.0)] {
                     c.out.torque((*SPINE())[k] + 1, t * f);
                 }
+                self.say(2, format!("#say iog flatten on a side sigma {sigma:.2}"));
             }
+            let r = &mut self.rd;
             r.relax_t -= dt;
             if r.relax_t >= 0.0 {
                 return;
@@ -1709,8 +1774,8 @@ impl Injured {
             r.dir = if side.0 { 2 } else if side.1 { 1 } else if sigma < 0.0 { 2 } else { 1 };
             let span = r.relax.1 - r.relax.0;
             r.relax_t = r.relax.0 + c.ch.random() * span;
-            (r.roll_dur, r.roll_t) = (IOG_ROLL.0, 0.0);
-            if c.ch.random() > IOG_ROLL.1 {
+            (r.roll_dur, r.roll_t) = (r.roll.0, 0.0);
+            if c.ch.random() > r.roll.1 {
                 r.roll_dur = 0.2 + 2.8 * c.ch.random();
             }
             if prone {
@@ -1719,24 +1784,27 @@ impl Injured {
             if r.roll_dur < 2.0 {
                 r.relax_t = 0.5 * r.relax.0 + c.ch.random() * 0.5 * span;
             }
-            r.torque = if IOG_ROLL.3 == 0.0 && r.torque < 0.0 { 20.0 } else { IOG_ROLL.3 };
+            r.torque = if r.roll.3 == 0.0 && r.torque < 0.0 { 20.0 } else { r.roll.3 };
             let _ = c.ch.random();
+            let line = format!("#say iog roll {} starts, {:.2} s, sigma {sigma:.2}, prone {prone}", r.dir, r.roll_dur);
+            self.out.push(line);
             return;
         }
         r.roll_t += dt;
         let tau = r.roll_t;
         if tau > r.roll_dur {
             r.dir = 0;
+            self.out.push(format!("#say iog roll ends on its time, sigma {sigma:.2}"));
             return;
         }
         c.ch.set_stiffness(7.0, 1.0, "fb", None);
         c.ch.set_stiffness(5.0, 1.0, "ua", None);
         let w = c.angvel.dot(b);
-        let rate = IOG_ROLL.4;
+        let rate = r.roll.4;
         r.torque += if (r.dir == 2 && w > -1.46) || (r.dir == 1 && w < 1.46) { 0.5 * rate * dt } else { -3.5 * rate * dt };
-        r.torque = r.torque.clamp(0.0, IOG_ROLL.2);
+        r.torque = r.torque.clamp(0.0, r.roll.2);
         let (k1, k2, k3, q0) = ((10.0 * tau).clamp(3.0, 9.0), (10.0 * tau).clamp(3.0, 5.5), (10.0 * tau).clamp(7.0, 11.0), (5.0 * tau).clamp(0.0, 5.0));
-        c.ch.set_stiffness(k3, 1.0, "uk", None);
+        c.ch.set_stiffness(k3, 1.0, "us", None);
         // dir 1 pushes with the right leg and opens the left hip; dir 2 the mirror
         let (sg, push, open) = if r.dir == 1 { (1.0, 3, 2) } else { (-1.0, 2, 3) };
         for &j in SPINE().iter() {
@@ -1754,16 +1822,19 @@ impl Injured {
             let target = c.b.part(0).m.d - s * (0.3 * sg) - b * 0.4 + u * q;
             crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], target, 0.0, 0.0, if push == 2 { 1.0 } else { -1.0 }, 1.0, Vec3::ZERO, None);
             c.ch.set_stiffness(k1, 1.0, if push == 2 { "ll" } else { "lr" }, None);
+            // the pushing foot's friction 2 (masks 0x80, 0x20); nothing but the deactivate puts it back
+            r.foot_fric[push - 2] = 2.0;
             let f = if r.dir == 1 { 2.0 * sigma.clamp(-0.9, -0.4) + 1.8 } else { 1.8 - 2.0 * sigma.clamp(0.4, 0.9) };
             let o = crate::nmshot::limb(open);
             let lerp = |x: f32, y: f32| x + (y - x) * f;
             c.ch.eff[o.e[1]].desired = [lerp(0.0, 0.2), lerp(-0.5, -1.0), lerp(0.0, -0.4)];
-            // (RDR2's knee value here is a zero-pose blend read from the character, [P]: the knee's zero pose)
-            c.ch.eff[o.e[2]].desired[0] = c.ch.eff[o.e[2]].zero[0];
+            // the knee: lerp(-0.5, -1, f) (0x2a20d48 clamps f)
+            c.ch.eff[o.e[2]].desired[0] = -0.5 - 0.5 * f.clamp(0.0, 1.0);
             c.ch.set_stiffness(k2, 1.0, if open == 2 { "ll" } else { "lr" }, None);
         }
         if (r.dir == 1 && sigma > 0.9) || (r.dir == 2 && sigma < -0.9) {
             r.dir = 0;
+            self.out.push(format!("#say iog roll over at sigma {sigma:.2}, {tau:.2} s"));
         }
     }
 
@@ -1775,6 +1846,7 @@ impl Injured {
         if r.dir != 0 || c.m.c.dot(c.up) > 0.5 {
             if r.pedalling {
                 r.pedalling = false;
+                self.say(3, "#say iog pedal stopped".into());
                 self.out.push("pedalLegs start=false".into());
             }
             return;
@@ -1787,20 +1859,21 @@ impl Injured {
             self.out.push(format!("pedalLegs start=true pedalLeftLeg={} pedalRightLeg={} legStiffness=4 backPedal={back} radiusVariance={rv} \
                                    legAngleVariance={av} angularSpeed=2 centreUp=0.1 centreForwards=0.1", !(1..=3).contains(&k), !(4..=6).contains(&k)));
             r.pedal_t = 1.0 + 2.0 * c.ch.random();
+            self.say(4, "#say iog pedal started".into());
             return;
         }
         r.pedal_t -= dt;
         if r.pedal_t < 0.0 {
             r.pedal_t = 1.0 + 2.0 * c.ch.random();
             let (back, rv, av) = (c.ch.random() > 0.5, c.ch.random(), c.ch.random());
+            self.say(5, "#say iog pedal redrawn".into());
             self.out.push(format!("pedalLegs backPedal={back} radiusVariance={rv} legAngleVariance={av} angularSpeed=2"));
         }
     }
 
     /// RDR2's trapped push: on for 2..3 s, off for 2.5..3.5 s; while on and something is within 0.7 m of the chest
-    /// towards attackerPos, the hands brace on it, nearer as the push runs out. RDR2's brace service decides the
-    /// hands and their placement (not read): ours, both free hands by IK to the brace point, stiffness 11. Returns
-    /// whether it acted (then there is no wound reach).
+    /// towards attackerPos, the core brace service braces on it (target nearer as the push runs out, stiffness 11). Returns
+    /// whether it acted (then there is no wound reach), the bracing arms marked used.
     fn push_rdr2(&mut self, c: &mut Ctx, dt: f32, used: &mut [bool; 2]) -> bool {
         let r = &mut self.rd;
         r.push_t -= dt;
@@ -1815,15 +1888,13 @@ impl Injured {
         let Some((hit, e)) = r.hit else { return false };
         let f = if r.push_t >= r.push_start - 0.7 { 1.0 } else { r.push_t / (r.push_start - 0.7) };
         let at = hit + e * ((1.0 - f) * 0.25 - 0.2);
+        let arms = crate::extras_fall_rdr2::brace_core(c, &mut r.brace, IOG_BRACE, at, Vec3::ZERO, dt);
         for i in 0..2 {
-            if c.ch.busy[i] {
-                continue;
-            }
-            let l = crate::nmshot::limb(i);
-            c.ch.set_stiffness(11.0, 1.0, ["ul", "ur"][i], None);
-            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], at, 0.0, 0.0, if i == 0 { 1.0 } else { -1.0 }, 1.0, Vec3::ZERO, None);
-            c.ch.eff[l.e[3]].desired = [0.0; 3];
-            used[i] = true;
+            used[i] |= arms[i];
+        }
+        self.say(6, format!("#say iog trapped push at {at} arms {arms:?}"));
+        if arms != [false; 2] {
+            self.say(10, format!("#say iog trapped brace arms {arms:?} at {at}"));
         }
         true
     }
@@ -1831,16 +1902,22 @@ impl Injured {
     /// RDR2's wound reach: one wound (by default on the belly, an arm's or the pelvis's moved to the spine, one on the
     /// back of the trunk brought round to its front); the hands hold it a little apart (Delirium's arm search for
     /// RDR2's hand placement, without its pull), an arm whose shoulder is within 0.22 m of it left off; a leg wound
-    /// goes to reachForWound, on and off on random timers. The clavicles' lean2 is zeroed.
+    /// goes to reachForWound, on and off on random timers. The clavicles' lean2 is zeroed. (0x2a355a0, which moves a wound
+    /// up to a part in the mask ctx+0x34e8, changes nothing here: that mask is all parts unless a weapon constraint sets it.)
     fn reach_rdr2(&mut self, c: &mut Ctx, dt: f32, used: &mut [bool; 2]) {
+        // the wrists' limit half-ranges at least (lean1, lean2, twist); lean2's floor +0x3dc is 0.6 for good
+        for i in 0..2 {
+            c.out.lim_floor.push((crate::nmrs::WRIST()[i] + 1, [0.5236, 0.6, 1.2]));
+        }
         let spine1 = (*SPINE())[1] + 1;
         let (mut local, _, mut k) = self.wounds[0];
         if self.n == 0 || iog_arm(k) {
             (self.n, k, local) = (1, spine1, Vec3::new(0.0, 0.0, -IOG_WOUND_DEPTH));
-        } else if k == 0 {
+        }
+        if k == 0 || k == (*SPINE())[0] + 1 {
             k = spine1;
         }
-        if iog_trunk(k) && local.z > 0.0 {
+        if (iog_trunk(k) || k == 11) && local.z > 0.0 {
             local.z = -local.z;
         }
         let normal = local.normalize_or_zero();
@@ -1858,6 +1935,7 @@ impl Injured {
             for i in 0..2 {
                 if (c.b.joint_pos((*SHOULDER())[i]) - x).length() < 0.22 {
                     self.no_reach[i] = true;
+                    self.out.push(format!("#say iog arm {i}'s shoulder is within 0.22 of the wound: stays off"));
                 }
             }
         }
@@ -1875,6 +1953,7 @@ impl Injured {
             for i in 0..2 {
                 let mode_ok = if i == 0 { r.mode == 1 || r.mode == 3 } else { r.mode == 2 || r.mode == 3 };
                 if self.no_reach[i] || !(mode_ok || rolling) || c.ch.busy[i] {
+                    r.pose[i] = None;
                     continue;
                 }
                 let mut at = local;
@@ -1896,9 +1975,19 @@ impl Injured {
                                    reachWithOneHand=false reachFalling=1 reachOnFloor=1 timeBeforeReachForWound=0 legStiffness=5 armStiffness=6 \
                                    spineStiffness=8", x.x, x.y, x.z));
         }
-        // (RDR2 reads which hands reachForWound has on the wound; ours: both while it runs)
-        if r.rfw {
-            *used = [true; 2];
+        // the hands reachForWound must let go (an arm used here or that shouldn't reach, R+0xdb), and those it has on it
+        if leg_reach {
+            let rolling = r.dir != 0;
+            let want = [!self.no_reach[0] && (r.mode == 1 || r.mode == 3 || rolling), !self.no_reach[1] && (r.mode == 2 || r.mode == 3 || rolling)];
+            r.rfw_block = Some([used[0] || !want[0], used[1] || !want[1]]);
+            let on = c.rfw.map_or([false; 2], |v| v.reached);
+            *used = [used[0] || on[0], used[1] || on[1]];
+            if on != [false; 2] {
+                self.say(16, format!("#say iog reachForWound has hands on the leg wound {on:?}, told to let go {:?}", self.rd.rfw_block));
+            }
+            self.say(7, format!("#say iog leg wound on part {k}: reachForWound, hands on it {on:?}"));
+        } else if !leg {
+            self.say(8, format!("#say iog hands {used:?} on the wound on part {k}, normal {}", normal));
         }
         for i in 0..2 {
             c.ch.eff[(*CLAVICLE())[i]].desired[1] = 0.0;
@@ -1934,6 +2023,7 @@ impl Injured {
                 c.ch.eff[l.e[1]].desired = [1.0, 1.0, 0.0];
                 c.ch.eff[l.e[2]].desired[0] = 0.2;
                 used[i] = true;
+                self.say(13, format!("#say iog prone, rolling: arm {i} above the back pulled in"));
             }
         }
         for i in 0..2 {
@@ -1947,6 +2037,7 @@ impl Injured {
             c.ch.eff[l.e[0]].desired = [0.0; 3];
             c.ch.eff[l.e[1]].desired = [0.5, 1.0, 1.0];
             c.ch.eff[l.e[2]].desired[0] = 0.6;
+            self.say(14, format!("#say iog arm {i} idle"));
         }
     }
 }
