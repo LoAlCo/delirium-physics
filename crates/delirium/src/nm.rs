@@ -1219,9 +1219,12 @@ impl Agent {
     }
 
     /// NMX_POSE comparison: bodyBalance's turn state and target as a recording had them.
-    pub fn nmx_turn(&mut self, state: u8, far: Vec3) {
+    pub fn nmx_turn(&mut self, state: u8, far: Vec3, back: f32) {
         if let Some(bb) = self.balance.as_mut().and_then(|b| b.bb.as_mut()) {
             bb.nmx_turn(state, far);
+        }
+        if let Some(w) = self.nm_bw.as_mut() {
+            w.back_stiffness = back;
         }
     }
 
