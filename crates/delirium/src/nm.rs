@@ -506,6 +506,7 @@ impl Agent {
         // RDR2 core: balancerCollisionsReaction stopped with them
         if let Some(ch) = self.ch.as_mut() {
             ch.bcr = None;
+            ch.bcr_probe = None;
         }
         if let Some(ch) = self.ch.as_mut().filter(|_| self.bb_on) {
             crate::nmbb::BodyBalance::deactivate(ch);
@@ -1732,6 +1733,7 @@ impl Agent {
         let mut stop_dbm = false;
         let mut hf_balance = None;
         let mut bb_req = (false, None, None);
+        let mut part_scales: (Vec<(usize, f32)>, Vec<(usize, [f32; 3])>) = (vec![], vec![]);
         if let Some(ch) = self.ch.as_mut().filter(|_| nm_tick) {
             let snap = ch.clone();
             let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
@@ -2001,13 +2003,16 @@ impl Agent {
             // RDR2 core: the arms reachForWound holds (its exclusion masks) are left as they were by catchFall and
             // bodyRollUp, for this tick only
             let excluded = c.ch.exclude_arms;
-            let kept = excluded.contains(&true).then(|| c.ch.eff.clone());
+            // (and meleeReact's +0xfc: catchFall alone)
+            let cf_excluded = [excluded[0] || c.ch.cf_exclude[0], excluded[1] || c.ch.cf_exclude[1]];
+            let kept = cf_excluded.contains(&true).then(|| c.ch.eff.clone());
             if !waits(walk_actives!(self), W_CF()) {
                 if let Some(f) = self.nm_cf.as_mut() {
                     f.tick(&mut c, world, obstacles, &mut self.nm_head, &mut self.nm_twist, dt);
                 }
             }
-            leave_arms(c.ch, &kept, excluded);
+            leave_arms(c.ch, &kept, cf_excluded);
+            c.ch.cf_exclude = [false; 2];
             if let Some(r) = self.limb_reqs.as_mut() { r.mark(&c.ch.eff, 0x70); }
             if !waits(walk_actives!(self), W_RU()) {
                 self.nm_ru.tick(&mut c, self.nm_br.active, dt);
@@ -2166,6 +2171,7 @@ impl Agent {
             stop_dbm |= out.dbm == Some(false);
             // RDR2 core: an extra (onFire) stops or starts bodyBalance and sets the balancer's leg stiffness
             bb_req = (out.bb_stop, out.bb_start.take(), out.dbm_leg_stiffness);
+            part_scales = (std::mem::take(&mut out.part_friction), std::mem::take(&mut out.lim_floor));
             // RDR2 core: an extra (teeter) runs spineTwist toward a point, from the next tick
             if let Some((pos, k)) = out.spine_twist {
                 if !self.nm_twist.active {
@@ -2291,6 +2297,9 @@ impl Agent {
         if let (true, Some(ch)) = (fall_assist > 0.0, self.ch.as_ref()) {
             let pelvis = ch.joints[(*crate::nmrs::HIP())[0]].parent;
             self.doll.impulse(pelvis, self.doll.com().0, Vec3::Z * (fall_assist * dt));
+        }
+        if self.rdr2_core.is_some() {
+            self.doll.set_part_scales(&part_scales.0, &part_scales.1);
         }
         for (v, add) in [(&mut torque, &shot_out.torque), (&mut force, &shot_out.force)] {
             if v.len() < add.len() {

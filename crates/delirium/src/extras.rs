@@ -91,6 +91,10 @@ pub trait Extra: Send + Sync {
     }
     /// The RDR2 core's reachForWound: the shot's releaseWound lets these hands go this step.
     fn rfw_release(&mut self, _hands: [bool; 2]) {}
+    /// The RDR2 core's injuredOnGround: the hands it tells a running reachForWound to let go (R+0xdb), after it ticked.
+    fn rfw_block(&self) -> Option<[bool; 2]> {
+        None
+    }
     /// The RDR2 core's animPose: whether headLook, pointArm's left arm and its right arm yield to it (its override
     /// set and its effectorMask holding those joints). None when it isn't running RDR2's way.
     fn anim_pose_yield(&self) -> Option<[bool; 3]> {
@@ -227,6 +231,9 @@ impl Extras {
         self.want.clear();
         self.ropes.clear();
         self.contact_off = 0;
+        if c.ch.rdr2 {
+            c.rfw = self.on.iter().find(|(n, _)| *n == "reachForWound").and_then(|(_, e)| e.rfw_view());
+        }
         for (n, e) in &mut self.on {
             e.objects(obs);
             if let Some(w) = world {
@@ -240,6 +247,10 @@ impl Extras {
             self.want.extend(e.constraints());
             self.ropes.extend(e.ropes());
             self.contact_off |= e.contact_off();
+        }
+        // RDR2 core: injuredOnGround's arms that a running reachForWound must let go
+        for h in self.on.iter().filter_map(|(_, e)| e.rfw_block()).collect::<Vec<_>>() {
+            self.on.iter_mut().filter(|(n, _)| *n == "reachForWound").for_each(|(_, e)| e.rfw_release(h));
         }
         // RDR2 core: controlledFall writes into a running pointGun (here after both have ticked)
         for s in self.on.iter().filter_map(|(_, e)| e.pg_coupling()).collect::<Vec<_>>() {

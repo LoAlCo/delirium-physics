@@ -265,8 +265,10 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "hitNew", kind: Kind::Bool, used: true, doc: "RDR2 core: a new blow this step, its clocks start from it (false; RDR2's own meleeReact does nothing until one comes)" },
         Param { name: "hitMag", kind: Kind::Float, used: true, doc: "RDR2 core: the flinch's bend and the balancer's hip and knee gain (1)" },
         Param { name: "hitLocal", kind: Kind::Bool, used: true, doc: "RDR2 core: hitPoint is in the hit part's frame (true, RDR2's default; false: world)" },
-        Param { name: "flinchAbortTime", kind: Kind::Float, used: true, doc: "RDR2 core: (0.5; read against balancerCollisionsReaction, which isn't modelled here)" },
-        Param { name: "leanAbortTime", kind: Kind::Float, used: true, doc: "RDR2 core: (0.5; likewise)" },
+        Param { name: "flinchAbortTime", kind: Kind::Float, used: true, doc: "RDR2 core: no flinch when balancerCollisionsReaction's wall is this close in time (0.5)" },
+        Param { name: "leanAbortTime", kind: Kind::Float, used: true, doc: "RDR2 core: no Lean when it is this close (0.5)" },
+        Param { name: "rfwNotInBcr", kind: Kind::Bool, used: true, doc: "RDR2 core: no reach while balancerCollisionsReaction is in a state other than 0 (false; RDR2's +0xf1, its name not solved)" },
+        Param { name: "rfwExcludeCatchFall", kind: Kind::Bool, used: true, doc: "RDR2 core: catchFall leaves the reaching arms alone (false; RDR2's +0xfc, its name not solved)" },
         Param { name: "useHeadLook", kind: Kind::Bool, used: true, doc: "RDR2 core: look at the spot hit while reaching for it (false)" },
     ] },
     Message { name: "shotFallToKnees", params: &[
@@ -1220,7 +1222,7 @@ pub struct Melee {
     point: Vec3, push: Vec3, part: i32, loose: f32, loose_time: f32, lean: f32, lean_time: f32, flinch: bool,
     flinch_time: f32, guard: bool, rfw: bool, rfw_delay: f32, rfw_time: f32, stiffness: f32,
     snap: Option<Snap>, t: f32, offset: Option<Vec3>,
-    rdr2: MelRdr2, r2: Option<Box<Mel2>>, look: Option<Vec3>,
+    rdr2: MelRdr2, r2: Option<Box<Mel2>>, look: Option<Vec3>, out: Vec<String>, said: u32,
 }
 
 /// RDR2's meleeReact parameters, over RDR2's defaults (its own hitPart, armsType and rfw defaults).
@@ -1228,12 +1230,12 @@ pub struct Melee {
 struct MelRdr2 {
     hit_new: bool, hit_mag: f32, point: Vec3, normal: Vec3, part: usize, local: bool, cs_period: f32, cs_loose: f32,
     snap: bool, snap_mag: f32, flinch: bool, flinch_period: f32, rfw: bool, rfw_delay: f32, rfw_period: f32,
-    lean: f32, lean_period: f32, head_look: bool, arms_type: i32,
+    lean: f32, lean_period: f32, head_look: bool, arms_type: i32, flinch_abort: f32, lean_abort: f32, rfw_not_bcr: bool, rfw_excl_cf: bool,
 }
 
 /// RDR2's meleeReact state: T (the time since the last blow, 10 until one comes), the COM velocity last tick, the
 /// blow from behind, each reaching hand's pose, the failed balancer's joint scales (what was there, what we wrote),
-/// and whether the head look was sent this reach.
+/// and whether the head look was started this reach.
 struct Mel2 {
     t: f32, prev_vel: Vec3, back: bool, pose: [Option<[f32; 6]>; 2], scaled: Vec<Option<([f32; 3], [f32; 3])>>, looked: bool,
 }
@@ -1252,14 +1254,13 @@ impl Melee {
         let arms = p.get("armsType").map(Value::i).transpose()?;
         let rfw = p.get("rfw").map(Value::b).transpose()?;
         let (rfw_delay, rfw_period) = (p.f("rfwDelay", 0.2)?, p.f("rfwPeriod", 1.0)?);
-        // read against balancerCollisionsReaction's timers, which aren't modelled here
-        p.f("flinchAbortTime", 0.5)?;
-        p.f("leanAbortTime", 0.5)?;
+        let (flinch_abort, lean_abort) = (p.f("flinchAbortTime", 0.5)?, p.f("leanAbortTime", 0.5)?);
         let rdr2 = MelRdr2 {
             hit_new: p.b("hitNew", false)?, hit_mag: p.f("hitMag", 1.0)?, point, normal,
             part: given_part.filter(|k| (1..21).contains(k)).unwrap_or(0) as usize, local: p.b("hitLocal", true)?, cs_period, cs_loose,
             snap, snap_mag, flinch, flinch_period, rfw: rfw.unwrap_or(false), rfw_delay, rfw_period, lean, lean_period,
-            head_look: p.b("useHeadLook", false)?, arms_type: arms.unwrap_or(0),
+            head_look: p.b("useHeadLook", false)?, arms_type: arms.unwrap_or(0), flinch_abort, lean_abort,
+            rfw_not_bcr: p.b("rfwNotInBcr", false)?, rfw_excl_cf: p.b("rfwExcludeCatchFall", false)?,
         };
         Ok(Melee {
             point, push, part, loose: cs_loose.clamp(0.0, 1.0), loose_time: cs_period.max(0.0),
@@ -1268,8 +1269,16 @@ impl Melee {
             rfw: rfw.unwrap_or(true), rfw_delay: rfw_delay.max(0.0), rfw_time: rfw_period.max(0.0),
             stiffness: p.f("stiffness", 10.0)?,
             snap: (snap && push != Vec3::ZERO).then(|| Snap::at(snap_mag, part, push)), t: 0.0, offset: None,
-            rdr2, r2: None, look: None,
+            rdr2, r2: None, look: None, out: vec![], said: 0,
         })
+    }
+
+    /// A log line the first time a branch runs.
+    fn say(&mut self, bit: u32, line: impl FnOnce() -> String) {
+        if self.said >> bit & 1 == 0 {
+            self.said |= 1 << bit;
+            self.out.push(format!("#say melee {}", line()));
+        }
     }
 
     /// RDR2's meleeReact (rdr2_melee.md). At its start: the desired angles off the legs zeroed, opposeGravity 1 on
@@ -1278,7 +1287,9 @@ impl Melee {
     /// runs, else the joint strengths are scaled by L; the flinch bends spine and neck by the blow's geometry (fading
     /// with 1 - T/flinchPeriod) and asks the balancer for a hip pitch and knee bend; on a new blow one snap of the
     /// hit part's joints; armsType 1 throws the arms out by the COM's jolt; rfw places the free hands 0.1 m off the
-    /// spot hit; Lean asks the balancer to lean away from the blow.
+    /// spot hit; Lean asks the balancer to lean away from the blow. balancerCollisionsReaction's wall, known or hit, stops the
+    /// flinch and the lean within their abort times. Left out: the hand-over to the fall-to-knees core 0x2a2e0b4 (Delirium's
+    /// shotFallToKnees runs by itself, written from descriptions).
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
         let r = self.rdr2;
         let mut s = match self.r2.take() {
@@ -1296,6 +1307,8 @@ impl Melee {
         };
         let up = c.up;
         let stagger = c.extras_on.contains(&"staggerFall");
+        // balancerCollisionsReaction: a wall known or hit, and the time to it
+        let (bcr, t_bcr) = c.ch.bcr_probe.unwrap_or((false, f32::MAX));
         // the hit in the world: the point through the hit part's frame when local, the normal as given
         let pm = c.b.part(r.part).m;
         let at = if r.local { crate::vm4(pm.a, pm.b, pm.c, pm.d, r.point) } else { r.point };
@@ -1322,9 +1335,11 @@ impl Melee {
                     let jd = c.ch.joints[j].clone();
                     c.ch.eff[j].reset(&jd);
                 }
+                self.say(0, || "joints reset as the looseness ends, balancer failed".into());
             }
         } else {
             let f = t / r.cs_period;
+            self.say(if c.upright { 1 } else { 2 }, || format!("looseness window, balancer running {}", c.upright));
             if c.upright {
                 crate::nmshot::apply_strength(c, &crate::nmshot::Strength {
                     k: f, body_stiffness: 12.0, arm_stiffness: 12.0, spine_damping: 1.0, neck: (12.0, 1.0), upper: 1.0, lower: 1.0,
@@ -1337,7 +1352,10 @@ impl Melee {
         }
         // the flinch: spine and neck bent by the blow's geometry, the balancer's hip pitch and knee bend
         let k = r.hit_mag;
-        if r.flinch && r.flinch_period > 1e-5 && t < r.flinch_period && h > -0.15 {
+        if bcr && t_bcr <= r.flinch_abort && r.flinch && t < r.flinch_period {
+            self.say(3, || format!("flinch aborted by the wall, time to it {t_bcr:.2}"));
+        }
+        if r.flinch && !(bcr && t_bcr <= r.flinch_abort) && r.flinch_period > 1e-5 && t < r.flinch_period && h > -0.15 {
             let g = 1.0 - t / r.flinch_period;
             let (mut a, mut b) = (nl.z.clamp(-1.0, 1.0).asin(), -nl.y.clamp(-1.0, 1.0).asin());
             if h < 0.4 {
@@ -1356,10 +1374,16 @@ impl Melee {
                     }
                 }
             }
-            if !stagger {
+            self.say(4, || format!("flinch h {h:.2} A {a:.2} B {b:.2} twist {tw:.2}"));
+            if !stagger && bcr {
+                c.out.dbm_crouch.push(Crouch::Hip(8, 0.0, 4.0));
+                c.out.dbm_crouch.push(Crouch::ReleaseKnee(4.0));
+                self.say(5, || "flinch: hip and knee let go, a wall is known".into());
+            } else if !stagger {
                 let pitch = 2.0 * k * a1.cross(up).dot(n) * g * (h - 0.4);
                 c.out.dbm_crouch.push(Crouch::Hip(8, -pitch.clamp(-2.0, 2.0), 1e5));
                 c.out.dbm_crouch.push(Crouch::Knee(5, 0.3 * pitch, 1.0));
+                self.say(6, || format!("flinch: balancer hip pitch {pitch:.2}"));
             }
         } else if !stagger {
             c.out.dbm_crouch.push(Crouch::Hip(8, 0.0, 4.0));
@@ -1371,6 +1395,7 @@ impl Melee {
                                   use_dir: true, dir: -n, part: r.part as i32, hip: 0, limbs: [false; 6], phased: false, t: 0.0, axis: None,
                                   kicked: 0.0, countered: 0.0, rdr2_part: r.part as i32 };
             snap.apply_rdr2(c, if h > 0.4 { -r.snap_mag } else { r.snap_mag });
+            self.say(7, || format!("snap part {} h {h:.2}", r.part));
         }
         // armsType 1: the arms thrown out sideways by the COM's jolt
         if r.arms_type == 1 {
@@ -1382,32 +1407,49 @@ impl Melee {
             if a > 0.03 {
                 let th = (a.min(0.5) - 0.03) * 3.34043;
                 let ax = c.b.part(sp[4]).m.c.normalize_or(up);
+                self.say(8, || format!("arms thrown by the jolt, acc {a:.3} theta {th:.2}"));
                 for (i, sign) in [(0usize, -1.0f32), (1, 1.0)] {
                     let l = crate::nmshot::limb(i);
                     let to = c.b.joint_pos(l.e[1]) + bevy_math::Quat::from_axis_angle(ax, sign * th) * -sv;
-                    crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], to, 0.0, 0.0, 1.0 - 2.0 * i as f32, 1.0, Vec3::ZERO, None);
+                    crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], to, 0.0, 2.0, 1.0 - 2.0 * i as f32, 1.0, Vec3::ZERO, None);
                 }
             }
         }
         // rfw: the free hands 0.1 m off the spot hit, unless a leg or (from behind) the trunk was hit
-        let reach = r.rfw && r.rfw_delay < t && t < r.rfw_delay + r.rfw_period && c.upright && !(1..=6).contains(&r.part)
-            && (!s.back || matches!(r.part, 11 | 12));
+        let reach = !(r.rfw_not_bcr && c.ch.bcr.is_some_and(|b| b.0 != 0)) && r.rfw && r.rfw_delay < t && t < r.rfw_delay + r.rfw_period && c.upright
+            && !(1..=6).contains(&r.part) && (!s.back || matches!(r.part, 11 | 12));
+        // p13 0.05: a further 0.05 leg lengths in along the normal (0x2a4733c's skin offset)
+        let leg = |c: &Ctx| c.b.joint_pos(HIP()[0]).distance(c.b.joint_pos(KNEE()[0])) + c.b.joint_pos(KNEE()[0]).distance(c.b.joint_pos(ANKLE()[0]));
+        let off = 0.1 - 0.05 * leg(c);
         for i in 0..2 {
             let own = if i == 0 { 13..=16 } else { 17..=20 };
             let l = crate::nmshot::limb(i);
             if reach && !own.contains(&r.part) && c.b.joint_pos(l.e[1]).distance(at) >= 0.1 {
-                hand_place(c, i, at + n * 0.1, n, &mut s.pose[i], None, 0.0);
+                hand_place(c, i, at + n * off, n, &mut s.pose[i], None, 0.0);
+                if r.rfw_excl_cf {
+                    c.ch.cf_exclude[i] = true;
+                }
+                self.say(9, || format!("reach: arm {i} to {at}"));
             } else {
                 s.pose[i] = None;
             }
         }
-        if reach && r.head_look && !s.looked {
-            self.look = Some(at);
+        // useHeadLook: its target every tick of the reach
+        if reach && r.head_look {
+            if s.looked {
+                self.out.push(format!("headLook pos={},{},{}", at.x, at.y, at.z));
+            } else {
+                self.look = Some(at);
+            }
+            self.say(10, || "head look at the spot hit".into());
         }
         s.looked = reach && r.head_look;
-        // Lean: the balancer leans him away from the blow
-        if !stagger && r.lean != 0.0 && t < r.lean_period {
+        // Lean: the balancer leans him away from the blow, unless the wall is close
+        if !(bcr && t_bcr <= r.lean_abort) && !stagger && r.lean != 0.0 && t < r.lean_period {
             c.out.lean = Some((LeanMode::Dir(-n), r.lean, false));
+            self.say(11, || format!("lean amount {}", r.lean));
+        } else if bcr && t_bcr <= r.lean_abort && r.lean != 0.0 && t < r.lean_period {
+            self.say(12, || format!("lean aborted by the wall, time to it {t_bcr:.2}"));
         }
         self.rdr2.hit_new = false;
         s.prev_vel = c.vel;
@@ -1504,7 +1546,9 @@ impl Extra for Melee {
 
     /// The RDR2 core's useHeadLook: headLook at the spot hit when the reach starts.
     fn lines(&mut self) -> Vec<String> {
-        self.look.take().map(|p| vec![format!("headLook start=true pos={},{},{}", p.x, p.y, p.z)]).unwrap_or_default()
+        let mut out = std::mem::take(&mut self.out);
+        out.extend(self.look.take().map(|p| format!("headLook start=true pos={},{},{}", p.x, p.y, p.z)));
+        out
     }
 
     /// The RDR2 core: a message while it runs is taken in (a new blow with hitNew), its clock and state kept.
@@ -1512,7 +1556,7 @@ impl Extra for Melee {
         let s = self.r2.take()?;
         match Melee::new(p) {
             Ok(n) => {
-                *self = Melee { r2: Some(s), ..n };
+                *self = Melee { r2: Some(s), said: self.said, ..n };
                 Some(Ok(()))
             }
             Err(e) => {
