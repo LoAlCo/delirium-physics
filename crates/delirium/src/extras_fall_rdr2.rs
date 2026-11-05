@@ -1100,6 +1100,8 @@ const BCR_GLANCE: f32 = 0.6;
 /// clavicles, neck, head), and how far above the lower foot the contact has to be (0x2af9f74): no calf, foot or arm counts.
 const BCR_PARTS: [usize; 11] = [1, 4, 0, 7, 8, 9, 10, 17, 13, 11, 12];
 const BCR_ABOVE_FOOT: f32 = 0.1;
+/// RDR2's ctx+0xfc0, from the world's gravity. Not `c.up`: that is the balancer's up, tilted by a lean request.
+const BCR_UP: Vec3 = Vec3::Z;
 
 #[derive(Clone, Copy, Debug)]
 struct BcrParams {
@@ -1325,7 +1327,7 @@ impl BcrRdr2 {
             return;
         }
         self.hits = [None; 2];
-        let vh = c.vel - c.up * c.up.dot(c.vel);
+        let vh = c.vel - BCR_UP * BCR_UP.dot(c.vel);
         self.speed = vh.length();
         if self.speed <= BCR_PROBE_SPEED {
             return;
@@ -1361,7 +1363,7 @@ impl BcrRdr2 {
     }
 
     pub fn tick(&mut self, c: &mut Ctx, dt: f32, out: &mut Vec<String>) {
-        let up = c.up;
+        let up = BCR_UP;
         let flat = |v: Vec3| unit(v - up * up.dot(v));
         if !self.started {
             self.started = true;
@@ -1372,6 +1374,7 @@ impl BcrRdr2 {
             }
         }
         let was = self.state;
+        let (brace_was, fling_was) = (self.brace.on, self.fling.is_some());
         if self.impacted {
             self.t_hit += dt;
         }
@@ -1499,6 +1502,12 @@ impl BcrRdr2 {
         if self.state != was {
             out.push(format!("#say bcr state {}", self.state));
         }
+        if self.brace.on != brace_was {
+            out.push(format!("#say bcr brace {} arms {:?}", self.brace.on, self.brace.arms));
+        }
+        if self.fling.is_some() != fling_was {
+            out.push(format!("#say bcr fling2 {}", self.fling.is_some()));
+        }
     }
 
     /// RDR2's state machine (0x2aeaa50).
@@ -1527,7 +1536,7 @@ impl BcrRdr2 {
             };
         }
         self.phase = false;
-        let up = c.up;
+        let up = BCR_UP;
         let over_fow = self.kind == 0 && matches!(self.state, 8 | 9) && fow_on;
         let (mut contact, mut height) = (None, 0.0);
         if (!self.touch_high && !self.low) || over_fow {
@@ -1702,7 +1711,7 @@ impl BcrRdr2 {
     /// sideways offsets use the constructor's 0.1 (the body's range isn't read).
     fn brace_service(&mut self, c: &mut Ctx, at: Vec3, n: Vec3, dt: f32) -> bool {
         let s = *SPINE();
-        let up = c.up;
+        let up = BCR_UP;
         let q = c.b.at(s[2] + 1);
         let mut t = at;
         let chest = c.b.at(crate::nmshot::chest_part());
@@ -1792,7 +1801,7 @@ impl BcrRdr2 {
     /// Over a low wall (0x2aec2f0): state 8 or 9 by which way his hips cross it, and with fallOverWallDrape fallOverWall
     /// takes it (0x2afbf58).
     fn over_low_wall(&mut self, c: &mut Ctx, at: Vec3, n: Vec3, fow_on: bool, out: &mut Vec<String>) {
-        let along = n.cross(c.up);
+        let along = n.cross(BCR_UP);
         let hips = c.b.joint_pos(limb(3).e[1]) - c.b.joint_pos(limb(2).e[1]);
         self.state = 8 + (along.dot(hips) < 0.0) as u8;
         if self.p.drape && !fow_on {
@@ -1856,7 +1865,7 @@ impl BcrRdr2 {
     fn glance_spin(&mut self, c: &mut Ctx, n: Vec3) {
         let along = (c.vel - n * n.dot(c.vel)).length();
         let g = if along > self.p.spin_min { (self.p.spin_reduce * along).min(1.0) } else { 0.0 };
-        let sign = if self.rel.cross(n).dot(c.up) < 0.0 { -1.0 } else { 1.0 };
+        let sign = if self.rel.cross(n).dot(BCR_UP) < 0.0 { -1.0 } else { 1.0 };
         let fall = ((self.p.spin_time - self.t_hit * self.p.spin_decay) / self.p.spin_time.max(1e-4)).max(0.0) * g;
         let s = *SPINE();
         let axis = unit(c.b.joint_pos(s[3]) - c.b.joint_pos(s[0]));
@@ -1908,7 +1917,7 @@ impl BcrRdr2 {
         }
         let hys = |on: bool| 0.2 - if on { 0.05 } else { 0.0 };
         let slide = [side_v > hys(self.slide[0]), -side_v > hys(self.slide[1])];
-        self.sink = -vt.dot(c.up) > hys(self.sink) && !slide[0] && !slide[1];
+        self.sink = -vt.dot(BCR_UP) > hys(self.sink) && !slide[0] && !slide[1];
         self.slide = slide;
         for i in 0..2 {
             if self.near[i] {
@@ -1933,7 +1942,7 @@ impl BcrRdr2 {
         }
         let len = arm_length(c, i).max(1e-3);
         let out_side = 1.0 - 2.0 * i as f32;
-        let tangent = unit(n.cross(c.up)) * if unit(n.cross(c.up)).dot(c.m.b) * out_side >= 0.0 { 1.0 } else { -1.0 };
+        let tangent = unit(n.cross(BCR_UP)) * if unit(n.cross(BCR_UP)).dot(c.m.b) * out_side >= 0.0 { 1.0 } else { -1.0 };
         let v0 = Quat::from_axis_angle(n, -0.5 * out_side) * tangent;
         let perp = unit(v0.cross(n));
         let a = ((d - 0.05) / len).clamp(-1.0, 1.0).acos();
