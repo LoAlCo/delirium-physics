@@ -172,6 +172,7 @@ pub static MESSAGES: [Message; 28] = [
     Message { name: "reachForWound", params: &[
         Param { name: "hitPoint", kind: Kind::Vec3, used: true, doc: "the wound, world (zero: in front of the part)" },
         Param { name: "hitPart", kind: Kind::Int, used: true, doc: "the part it is on, 0..20 (-1: the belly)" },
+        Param { name: "bulletVel", kind: Kind::Vec3, used: true, doc: "the bullet's velocity (RDR2 core: from behind, he reaches for where it came out)" },
         Param { name: "timeBeforeReachForWound", kind: Kind::Float, used: true, doc: "s before reaching (0.2)" },
         Param { name: "grabHoldTime", kind: Kind::Float, used: true, doc: "s the hand holds the wound (2)" },
         Param { name: "reachWithOneHand", kind: Kind::Bool, used: true, doc: "one hand for a trunk wound (true); false: both" },
@@ -2070,7 +2071,7 @@ fn arm_solve(c: &Ctx, l: crate::nmshot::Limb, target: Vec3, start: [f32; 6]) -> 
 /// bendTimeUp and goes over bendTimeDown. The hand is the far one for an arm wound, the same side's for a leg, the
 /// nearer one for the trunk.
 pub struct ReachForWound {
-    point: Vec3, part: i32, wait: f32, hold: f32, one_hand: bool, thigh: bool, lower_leg: bool, arm_stiffness: f32,
+    point: Vec3, part: i32, bullet: Vec3, wait: f32, hold: f32, one_hand: bool, thigh: bool, lower_leg: bool, arm_stiffness: f32,
     spine_bend: f32, hip_bend: f32, knee_bend: f32, twist: f32, up: f32, down: f32, stiffness: f32,
     t: f32, wound: Option<OnPart>, hands: [bool; 2], sign: [f32; 2], bends: Option<Bends>, arm: [Option<[f32; 6]>; 2],
     rdr2: RfwRdr2, r2: Option<Box<Rfw2>>,
@@ -2089,7 +2090,7 @@ impl ReachForWound {
         let arm_given = p.get("armStiffness").is_some();
         let arm_stiffness = p.f("armStiffness", 10.0)?;
         Ok(ReachForWound {
-            point: p.v("hitPoint", Vec3::ZERO)?, part: p.i("hitPart", -1)?,
+            point: p.v("hitPoint", Vec3::ZERO)?, part: p.i("hitPart", -1)?, bullet: p.v("bulletVel", Vec3::ZERO)?,
             wait: p.f("timeBeforeReachForWound", 0.2)?.max(0.0), hold: p.f("grabHoldTime", 2.0)?.max(0.0),
             one_hand: p.b("reachWithOneHand", true)?, thigh: p.b("allowInjuredThighReach", true)?,
             lower_leg: p.b("allowInjuredLowerLegReach", false)?, arm_stiffness,
@@ -2271,7 +2272,7 @@ impl Extra for ReachForWound {
         let mut s = self.r2.take()?;
         match ReachForWound::new(p) {
             Ok(n) => {
-                s.hits.push((n.point, n.part));
+                s.hits.push((n.point, n.part, n.bullet));
                 *self = ReachForWound { r2: Some(s), ..n };
                 Some(Ok(()))
             }
@@ -2322,7 +2323,7 @@ impl Default for ArmRec {
 /// step, and the time since each hand's reach last ended (both for the shot's default arms).
 #[derive(Clone, Default)]
 struct Rfw2 {
-    act: [ArmRec; 2], pend: [Option<ArmRec>; 2], reaching: [bool; 2], hits: Vec<(Vec3, i32)>,
+    act: [ArmRec; 2], pend: [Option<ArmRec>; 2], reaching: [bool; 2], hits: Vec<(Vec3, i32, Vec3)>,
     twist_t: f32, twist_left: bool, twist: Limiter, bend: Limiter, releasing: bool, toggle: bool, toggle_at: f32,
     hit_down: bool, len: f32, release: [bool; 2], since_stop: [f32; 2],
 }
@@ -2359,10 +2360,11 @@ impl ReachForWound {
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
         let mut s = self.r2.take().unwrap_or_else(|| {
             let len = |a: usize, b: usize| (c.b.joint_pos(a) - c.b.joint_pos(b)).length();
-            Box::new(Rfw2 { hits: vec![(self.point, self.part)], toggle: true, len: len(HIP()[0], KNEE()[0]) + len(KNEE()[0], ANKLE()[0]),
+            Box::new(Rfw2 { hits: vec![(self.point, self.part, self.bullet)], toggle: true, len: len(HIP()[0], KNEE()[0]) + len(KNEE()[0], ANKLE()[0]),
                             since_stop: [100.0; 2], ..Default::default() })
         });
-        for (point, part) in std::mem::take(&mut s.hits) {
+        for (point, part, bullet) in std::mem::take(&mut s.hits) {
+            let (point, part) = crate::nmshot::hit_record(c, point, part, bullet);
             self.intake(c, &mut s, point, part);
         }
         let window = self.wait + self.hold;
@@ -3292,7 +3294,7 @@ impl Reactions {
                 go("staggerFall", vec![]);
             }
             if !matches!(part, 3 | 6 | 11 | 12 | 16 | 20) {
-                go("reachForWound", vec![("hitPoint", V(at)), ("hitPart", I(part as i32)), ("reachWithOneHand", B(true)),
+                go("reachForWound", vec![("hitPoint", V(at)), ("hitPart", I(part as i32)), ("bulletVel", V(dir)), ("reachWithOneHand", B(true)),
                                          ("timeBeforeReachForWound", F(rand.float_in_range(0.1, 0.3))), ("grabHoldTime", F(rand.float_in_range(1.5, 3.0)))]);
             }
             return out;

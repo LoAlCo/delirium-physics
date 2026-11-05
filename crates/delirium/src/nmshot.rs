@@ -216,6 +216,17 @@ struct Reach {
     sign: f32,
 }
 
+/// RDR2's hit record (0x2a40ddc), which the new-bullet router fills once for the shot and reachForWound alike: a bullet
+/// from behind, unless in the neck or head, is moved to where it comes out of him, by a ray back along it from 0.4 m
+/// past the hit. The part and point there are the wound; the impulse keeps the entry point.
+pub(crate) fn hit_record(c: &Ctx, point: Vec3, part: i32, bullet: Vec3) -> (Vec3, i32) {
+    if bullet == Vec3::ZERO || point == Vec3::ZERO || bullet.dot(c.m.c) > 0.0 || matches!(part, 11 | 12) {
+        return (point, part);
+    }
+    let far = point + bullet.normalize_or_zero() * 0.4;
+    c.b.doll.probe(c.b.build, far, point).map_or((point, part), |(k, x, _)| (x, k as i32))
+}
+
 #[derive(Clone, Debug)]
 pub struct Shot {
     pub p: Params,
@@ -741,8 +752,8 @@ impl Shot {
         self.since_hit = 0.0;
         self.behind = fneg(sdot(self.p.bullet_vel, c.m.c, b"yzx"));
         let (mut at, mut normal) = (self.p.hit_point, self.p.normal);
-        if self.behind >= 0.0 {
-            let far = at + self.p.bullet_vel.normalize_or_zero() * delirium_data::kv!(116);
+        if self.behind >= 0.0 && !(c.ch.rdr2 && matches!(self.p.body_part, 11 | 12)) {
+            let far = at + self.p.bullet_vel.normalize_or_zero() * if c.ch.rdr2 { 0.4 } else { delirium_data::kv!(116) };
             if let Some((k, x, n)) = c.b.doll.probe(c.b.build, far, at) {
                 (self.p.body_part, at, normal) = (k, x, n);
             }
@@ -1688,23 +1699,6 @@ impl Shot {
         (s.tk, s.tn) = (s.tk + dt, s.tn + dt);
     }
 
-    /// RDR2's spine blend to zero: once the spine ramps stop writing, the spine (and neck) blend to the zero pose,
-    /// fading in over half a second; the balancer's own lean2 on spine joint 0 passes through.
-    fn blend_rdr2(&mut self, c: &mut Ctx) {
-        let sbz = self.p.rdr2.spine_blend_zero;
-        if sbz <= 0.0 {
-            return;
-        }
-        let delta = self.since_hit - self.rd.wrote;
-        let (v, b) = if delta > 0.0 { let d = delta.min(0.5); ((1.0 - 2.0 * d).min(1.0), 2.0 * d * sbz) } else { (0.0, 0.0) };
-        let weight = (1.0 - b) * (1.0 - v) + b;
-        let keep = c.ch.eff[(*SPINE())[0]].desired[1];
-        for j in SPINE().iter().chain(crate::nmrs::NECK().iter()) {
-            c.ch.eff[*j].blend_to_zero(weight);
-        }
-        c.ch.eff[(*SPINE())[0]].desired[1] = keep;
-    }
-
     /// RDR2's shot tick: relax U (upper) and W (lower), the falling decision, the spine ramps, the strength
     /// sub-module from the first bullet, the fall (fallingReaction) and the arm shapes, then the spine blend.
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
@@ -1729,7 +1723,7 @@ impl Shot {
         self.run(c, HIT(), Some(|s, _| s.new_hit), Some(Shot::hit_enter), Some(Shot::hit_tick), Some(|s, _| !s.new_hit), None, dt);
         self.wound = world(&c.b.part(p.body_part).m, self.hit_local);
         c.module(HIT() as u32);
-        let stepped = self.spine_rdr2(c, dt);
+        self.spine_rdr2(c, dt);
         c.module(100);
         self.shock_spin(c, dt);
         c.module(101);
@@ -1753,9 +1747,6 @@ impl Shot {
         self.run(c, MELEE(), Some(|s, _| s.p.melee && s.new_hit), Some(Shot::melee_enter), Some(Shot::melee_tick),
                  Some(|s, _| s.failed() || s.new_hit), Some(|_, c| c.out.spine_twist_stop = true), dt);
         c.module(MELEE() as u32);
-        if !stepped {
-            self.blend_rdr2(c);
-        }
         c.module(102);
         self.new_hit = false;
     }
@@ -1946,10 +1937,12 @@ impl Shot {
         let dir = if b >= 0.0 { nr1 * a + nr2 * cc - up } else { r0 * (0.5 * a) + lr2 * cc - up };
         let sh = c.b.joint_pos(l.e[1]);
         let el = c.b.joint_pos(l.e[2]);
-        let len = (el - sh).length() + (c.b.joint_pos(l.e[3]) - el).length();
+        // the arm's length to the hand (limb +0x3a8, recorded 0.626; +0x3ac, to the wrist, is 0.558), and the IK's lead 1 with
+        // the velocity of its own root part, which leaves the lead's turning term
+        let len = (el - sh).length() + (c.b.part(l.p[3]).m.d - el).length();
         let target = sh + dir.normalize_or_zero() * (rho * len).min(dir.length());
         let side = if i == 0 { 1.0 } else { -1.0 };
-        crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], target, 0.2, 0.0, side, 1.0, Vec3::ZERO, None);
+        crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], target, 0.2, 1.0, side, 1.0, c.b.part(l.p[0]).v, None);
         let e = &mut c.ch.eff[l.e[2]].desired[0];
         *e = e.max(0.3);
         if b < 0.0 {
