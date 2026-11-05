@@ -1207,6 +1207,13 @@ impl Agent {
         self.roll_up.is_some()
     }
 
+    /// NMX_POSE comparison: bodyBalance's turn state and target as a recording had them.
+    pub fn nmx_turn(&mut self, state: u8, far: Vec3) {
+        if let Some(bb) = self.balance.as_mut().and_then(|b| b.bb.as_mut()) {
+            bb.nmx_turn(state, far);
+        }
+    }
+
     /// Read-only list of what is running now, for the headless NMX_DUMP comparison (changes nothing).
     pub fn nmx_active(&self) -> Vec<String> {
         let mut v: Vec<String> = vec![];

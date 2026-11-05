@@ -9939,6 +9939,9 @@ mod nmx {
         back: Vec3,
         angles: Vec<[f32; 3]>,
         rel: Vec<Vec3>,
+        /// bodyBalance's turn state by time since the hit (+0x30c) and its target as seen from him (the game's origin)
+        pub turns: Vec<(f32, u8)>,
+        pub far: Vec3,
     }
     pub fn first_pose(path: &str) -> Option<Pose> {
         const JMAP: [usize; 20] = [0, 3, 6, 1, 2, 4, 5, 7, 8, 9, 12, 16, 10, 13, 14, 15, 17, 18, 19, 11];
@@ -9946,15 +9949,38 @@ mod nmx {
         let u = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
         let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         let mut off = 4096;
+        let mut pose: Option<Pose> = None;
+        let mut t0 = None;
         while off + 40 <= d.len() {
             let (tag, len) = (u(off), u(off + 4) as usize);
-            let body = d.get(off + 40..off + 40 + len)?;
+            let Some(body) = d.get(off + 40..off + 40 + len) else { break };
             off += 40 + len;
             if tag != 3 {
                 continue;
             }
             let (mut o, mut j) = (0, 0);
-            let mut pose = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![] };
+            if let Some(p) = pose.as_mut() {
+                let (mut t, mut state) = (None, None);
+                while o + 20 <= body.len() {
+                    let kind = u32::from_le_bytes(body[o..o + 4].try_into().unwrap());
+                    let size = u32::from_le_bytes(body[o + 16..o + 20].try_into().unwrap()) as usize;
+                    let Some(b) = body.get(o + 20..o + 20 + size) else { break };
+                    o += 20 + size;
+                    if kind == 1 && !b.is_empty() {
+                        t = Some(f(b, 0x47b8));
+                    }
+                    if kind == 5 && b.len() > 0x310 && u32::from_le_bytes(b[0xc..0x10].try_into().unwrap()) == 2 {
+                        state = Some(u32::from_le_bytes(b[0x30c..0x310].try_into().unwrap()) as u8);
+                    }
+                }
+                if let (Some(t), Some(s)) = (t, state) {
+                    let t0 = *t0.get_or_insert(t);
+                    p.turns.push((t - t0, s));
+                }
+                continue;
+            }
+            let mut pose_ = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![], turns: vec![], far: Vec3::ZERO };
+            let mut com = Vec3::ZERO;
             while o + 20 <= body.len() {
                 let kind = u32::from_le_bytes(body[o..o + 4].try_into().unwrap());
                 let vt = u32::from_le_bytes(body[o + 12..o + 16].try_into().unwrap());
@@ -9963,22 +9989,26 @@ mod nmx {
                 o += 20 + size;
                 let row = |b: &[u8], o: usize| Vec3::new(f(b, o), f(b, o + 4), f(b, o + 8));
                 match kind {
-                    1 if !b.is_empty() => pose.back = row(b, 0xf30).with_z(0.0).normalize(),
+                    1 if !b.is_empty() => {
+                        pose_.back = row(b, 0xf30).with_z(0.0).normalize();
+                        com = row(b, 0xf40);
+                    }
                     2 if j < 20 => {
-                        pose.angles[JMAP[j]] = if vt == 0x3663d98 { [f(b, 0x114), 0.0, 0.0] } else { row(b, 0x12c).to_array() };
+                        pose_.angles[JMAP[j]] = if vt == 0x3663d98 { [f(b, 0x114), 0.0, 0.0] } else { row(b, 0x12c).to_array() };
                         j += 1;
                     }
                     4 if b.len() >= 21 * 0x140 => {
                         let (r0, r1, r2) = (row(b, 0), row(b, 0x10), row(b, 0x20));
-                        pose.pelvis = Mat3::from_cols(Vec3::new(r0.x, r1.x, r2.x), Vec3::new(r0.y, r1.y, r2.y), Vec3::new(r0.z, r1.z, r2.z));
-                        pose.rel = (0..21).map(|k| row(&b[k * 0x140..], 0x30)).collect();
+                        pose_.pelvis = Mat3::from_cols(Vec3::new(r0.x, r1.x, r2.x), Vec3::new(r0.y, r1.y, r2.y), Vec3::new(r0.z, r1.z, r2.z));
+                        pose_.rel = (0..21).map(|k| row(&b[k * 0x140..], 0x30)).collect();
                     }
                     _ => {}
                 }
             }
-            return Some(pose);
+            pose_.far = Quat::from_rotation_arc(pose_.back, Vec3::Y) * -com;
+            pose = Some(pose_);
         }
-        None
+        pose
     }
 
     /// Puts the doll in that pose, at rest: back axis on the room's +y, the pelvis over the room's origin, the lower
@@ -10177,6 +10207,14 @@ fn headless(mut sim: Sim, n: usize) {
         if let (Some(p), Some(f)) = (&pose, &fires) {
             if f.first().is_some_and(|x| x.0 == i) {
                 nmx::set_pose(&mut sim, p);
+            }
+        }
+        // ... and bodyBalance takes the recording's turn states (a random draw there), as inputs
+        if let (Some(p), Some(f)) = (&pose, fires.as_ref().and_then(|f| f.first())) {
+            if i > f.0 {
+                let t = (i - f.0) as f32 / 60.0;
+                let s = p.turns.iter().rev().find(|x| x.0 <= t).or(p.turns.first()).map_or(2, |x| x.1);
+                sim.agent.nmx_turn(s, p.far);
             }
         }
         match &fires {
