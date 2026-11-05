@@ -9930,6 +9930,85 @@ impl Sim {
 mod nmx {
     use super::*;
     use std::io::Write;
+    /// NMX_POSE=<recording>: the recording's first NM step, read at run time from the user's .nmx (nothing of it is
+    /// kept): the pelvis's frame and back axis from the Rage part blob (three rows at +0, +0x10, +0x20), and the joints'
+    /// actual angles, in RDR2's joint order. The parts' own frames can't be taken: the recorded link frames differ from
+    /// the body's by constant turns (the knee reads 0.25 rad apart); the joints' angles are the body's own.
+    pub struct Pose {
+        pelvis: Mat3,
+        back: Vec3,
+        angles: Vec<[f32; 3]>,
+        rel: Vec<Vec3>,
+    }
+    pub fn first_pose(path: &str) -> Option<Pose> {
+        const JMAP: [usize; 20] = [0, 3, 6, 1, 2, 4, 5, 7, 8, 9, 12, 16, 10, 13, 14, 15, 17, 18, 19, 11];
+        let d = std::fs::read(path).ok()?;
+        let u = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
+        let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let mut off = 4096;
+        while off + 40 <= d.len() {
+            let (tag, len) = (u(off), u(off + 4) as usize);
+            let body = d.get(off + 40..off + 40 + len)?;
+            off += 40 + len;
+            if tag != 3 {
+                continue;
+            }
+            let (mut o, mut j) = (0, 0);
+            let mut pose = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![] };
+            while o + 20 <= body.len() {
+                let kind = u32::from_le_bytes(body[o..o + 4].try_into().unwrap());
+                let vt = u32::from_le_bytes(body[o + 12..o + 16].try_into().unwrap());
+                let size = u32::from_le_bytes(body[o + 16..o + 20].try_into().unwrap()) as usize;
+                let b = body.get(o + 20..o + 20 + size)?;
+                o += 20 + size;
+                let row = |b: &[u8], o: usize| Vec3::new(f(b, o), f(b, o + 4), f(b, o + 8));
+                match kind {
+                    1 if !b.is_empty() => pose.back = row(b, 0xf30).with_z(0.0).normalize(),
+                    2 if j < 20 => {
+                        pose.angles[JMAP[j]] = if vt == 0x3663d98 { [f(b, 0x114), 0.0, 0.0] } else { row(b, 0x12c).to_array() };
+                        j += 1;
+                    }
+                    4 if b.len() >= 21 * 0x140 => {
+                        let (r0, r1, r2) = (row(b, 0), row(b, 0x10), row(b, 0x20));
+                        pose.pelvis = Mat3::from_cols(Vec3::new(r0.x, r1.x, r2.x), Vec3::new(r0.y, r1.y, r2.y), Vec3::new(r0.z, r1.z, r2.z));
+                        pose.rel = (0..21).map(|k| row(&b[k * 0x140..], 0x30)).collect();
+                    }
+                    _ => {}
+                }
+            }
+            return Some(pose);
+        }
+        None
+    }
+
+    /// Puts the doll in that pose, at rest: back axis on the room's +y, the pelvis over the room's origin, the lower
+    /// foot's lowest corner on the floor.
+    pub fn set_pose(sim: &mut Sim, pose: &Pose) {
+        let yaw = Quat::from_rotation_arc(pose.back, Vec3::Y);
+        let root = Transform::from_rotation(yaw * Quat::from_mat3(&pose.pelvis).normalize());
+        let Some(ch) = sim.agent.character() else { return };
+        let mut frames = ch.pose(&sim.build, root, &pose.angles);
+        let mut low = f32::MAX;
+        for k in [3, 6] {
+            for c in 0..8 {
+                let s = |bit: i32| if c >> bit & 1 == 0 { -1.0 } else { 1.0 };
+                let l = Vec3::new(s(0) * 0.077, s(1) * 0.0375, s(2) * 0.15);
+                low = low.min((frames[k].translation + frames[k].rotation * l).z);
+            }
+        }
+        const GAME: [usize; 21] = [0, 1, 4, 5, 2, 6, 7, 3, 8, 9, 10, 13, 20, 11, 14, 15, 16, 12, 17, 18, 19];
+        let gaps: Vec<String> = GAME.iter().enumerate().map(|(k, g)| format!("{:.3}", (frames[k].translation - yaw * pose.rel[*g]).length())).collect();
+        for t in &mut frames {
+            t.translation.z += 0.001 - low;
+        }
+        for (k, t) in frames.iter().enumerate() {
+            sim.agent.doll.set_body(k, t.translation, t.rotation, Vec3::ZERO, Vec3::ZERO);
+        }
+        let f = |k: usize| frames[k].translation.xy().distance(frames[0].translation.xy());
+        let s = format!("nmx  pose set: feet apart {:.3}, foot z {:.3} {:.3}, foot-pelvis xy {:.3} {:.3}; part distance from the recording's {}", frames[3].translation.distance(frames[6].translation), frames[3].translation.z, frames[6].translation.z, f(3), f(6), gaps.join(" "));
+        sim.say(s);
+    }
+
     /// Per-frame state for comparison with RDR2 recordings (headless NMX_DUMP only).
     pub struct Dump {
         frames: std::io::BufWriter<std::fs::File>,
@@ -10091,11 +10170,24 @@ fn headless(mut sim: Sim, n: usize) {
         Some((f, k, Vec3::new(*d.first()?, *d.get(1)?, *d.get(2)?)))
     });
     let mut dump = std::env::var("NMX_DUMP").ok().map(|p| nmx::Dump::new(&p));
+    // NMX_POSE=<recording>: at the first NMX_FIRE frame the doll takes the recording's first-frame pose and the shot's
+    // task starts on that same frame, as RDR2's NM starts at the hit from its animated pose
+    let pose = std::env::var("NMX_POSE").ok().and_then(|p| nmx::first_pose(&p));
     for i in 0..n {
+        if let (Some(p), Some(f)) = (&pose, &fires) {
+            if f.first().is_some_and(|x| x.0 == i) {
+                nmx::set_pose(&mut sim, p);
+            }
+        }
         match &fires {
             None if i == 60 => sim.button("shot"),
             Some(f) => for (_, b) in f.iter().filter(|(at, _)| *at == i) {
                 sim.button(b);
+                if pose.is_some() {
+                    if let Some(t) = sim.shot_task.as_mut() {
+                        t.1 = t.1.saturating_sub(2);
+                    }
+                }
             },
             _ => {}
         }
