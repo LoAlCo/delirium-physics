@@ -10084,6 +10084,7 @@ mod nmx {
     pub struct Dump {
         frames: std::io::BufWriter<std::fs::File>,
         joints: std::io::BufWriter<std::fs::File>,
+        parts: std::io::BufWriter<std::fs::File>,
     }
     impl Dump {
         pub fn new(p: &str) -> Dump {
