@@ -1118,6 +1118,22 @@ struct BcrParams {
     to_forward: f32,
     rebound: f32,
     brace: bool,
+    stable: f32,
+    react: f32,
+    spin_mag: f32,
+    spin_turn: f32,
+    spin_decay: f32,
+    spin_reduce: f32,
+    spin_min: f32,
+    slump_mode: i32,
+    sit_start: f32,
+    sit_rate: f32,
+    fling: f32,
+    arm_brace: bool,
+    drape: bool,
+    high: bool,
+    weak_zero: f32,
+    weak_ramp: f32,
 }
 
 /// A probe's hit: the point, the wall's normal there (out of it), the distance along the probe and the object's
@@ -1130,14 +1146,14 @@ struct BcrHit {
     vel: Vec3,
 }
 
-/// RDR2's balancerCollisionsReaction (with the RDR2 core), from a partial study of RDR2's code
-/// (rdr2-decomp/study/rdr2_bcr.md): while nothing is met, two sphere probes look half a second ahead along his
-/// horizontal velocity for a wall (moving objects both light and small don't count); the wall becomes a plane the
-/// balancer keeps his predicted COM off (exclusionZone, more once he has hit it); a part touching it is the impact,
-/// which publishes impactLegStiffReduction for staggerFall, bends the knees through the balancer (owner 8) and turns
-/// the head to the wall. RDR2's states: 0 looking, 1 impact, 2 moving off it, 4 slump, 5 glance (side-on, back to 1
-/// after glanceSpinTime), 6 come off the wall (reboundMode decides), 12 finished; he slumps after
-/// numStepsTillSlump steps from the impact, timeToForward after a forward impact, or once the balancer gives up.
+/// RDR2's balancerCollisionsReaction (with the RDR2 core), from RDR2's code (rdr2-decomp/study/rdr2_bcr.md, §10 on):
+/// while nothing is met, two sphere probes look half a second ahead along his horizontal velocity for a wall (moving
+/// objects both light and small don't count); the wall becomes a plane the balancer keeps his predicted COM off
+/// (exclusionZone, more once he has hit it); a part touching it is the impact, which publishes impactLegStiffReduction
+/// for staggerFall, bends the knees through the balancer (owner 8) and turns the head from the wall. RDR2's states: 0
+/// looking, 1 impact, 2 moving off it, 3 still against it, 4 slump, 5 glance (side-on, spinning, back to 1 after
+/// glanceSpinTime), 6 come off the wall (reboundMode decides), 8/9 over a low wall, 10 glance over one, 12 finished.
+/// Ours or left out: see rdr2_bcr.md §12.
 pub struct BcrRdr2 {
     p: BcrParams,
     state: u8,
@@ -1147,6 +1163,8 @@ pub struct BcrRdr2 {
     wall: Option<(Vec3, Vec3)>,
     wall_vel: Vec3,
     tte: f32,
+    /// which side of the plane he is on (+0x300): -1 unless he was moving off it at the impact
+    side: f32,
     /// the impact latched (+0x27b) and this phase's (+0x27c), the time since, the balancer's steps then
     impacted: bool,
     phase: bool,
@@ -1155,10 +1173,63 @@ pub struct BcrRdr2 {
     /// still balancing (+0x62c), and how long something other than his feet has touched since it stopped
     balancing: bool,
     nonfoot: Option<f32>,
-    slump_t: f32,
     started: bool,
     look: Option<Vec3>,
+    /// what the wall is (+0x274): 0 nothing above the contact, 1 a full wall, 2 a low wall's top, 3 not known
+    kind: u8,
+    /// the probe down the wall's face from above the contact (0x2af9c64, RDR2's is asynchronous): from, along; its hit
+    second: Option<(Vec3, Vec3)>,
+    second_hit: Option<Option<Vec3>>,
+    /// contacts low (+0x27d) and high (+0x27e), the wall judged low (+0x27f), their normals' sums (+0x5e0, +0x5d0)
+    touch_low: bool,
+    touch_high: bool,
+    low: bool,
+    sum: [Vec3; 2],
+    /// his velocity relative to the object at the impact (+0x5c0), his velocity last tick (+0x5b0)
+    rel: Vec3,
+    /// time in states 2 and 3 (+0x620)
+    t_stable: f32,
+    /// the weakness ramp (+0x618)
+    weak: f32,
+    /// the over-a-low-wall record (+0x4d0): time, its random delay drawn, he got back on his feet (+0x4f2)
+    over_t: f32,
+    over_drawn: bool,
+    recovered: bool,
+    /// fallOverWall was started from here (+0x633); rollDownStairs and bodyRollUp too (ours: RDR2 reads whether they run)
+    fow_mine: bool,
+    rds_on: bool,
+    roll_on: bool,
+    slump: Option<SlumpRec>,
+    fling: Option<BcrFling>,
+    /// arms near the wall (+0x473/+0x474), sliding along it (+0x471/+0x472), sinking (+0x470)
+    near: [bool; 2],
+    slide: [bool; 2],
+    sink: bool,
 }
+
+/// The slump core's record (0x2a55ddc, +0x478): its clock, the last kinetic energy, the legs' stiffness ramps (hip L, R,
+/// knee L, R). The friction ramps aren't here: Delirium's friction is per material, not per part.
+#[derive(Clone, Copy, Debug)]
+struct SlumpRec {
+    t: f32,
+    ke: f32,
+    legs: [f32; 4],
+}
+
+/// fling2 (+0x390, block defaults 0x2a3b4e8, start 0x2a2d5dc): per arm whether it flings, the drawn angle and length,
+/// when it relaxes, whether the hand has stopped; the clock.
+#[derive(Clone, Copy, Debug)]
+struct BcrFling {
+    on: [bool; 2],
+    angle: [f32; 2],
+    length: [f32; 2],
+    relax: [f32; 2],
+    stopped: [bool; 2],
+    hand: [Vec3; 2],
+    t: f32,
+}
+const FL_TIME: f32 = 0.5;
+const FL_BEFORE: f32 = 0.1;
 
 impl BcrRdr2 {
     pub fn new(p: &mut P) -> Result<BcrRdr2, Error> {
@@ -1173,15 +1244,26 @@ impl BcrRdr2 {
             slump_red: f(p, "slumpLegStiffReduction", 1.0)?, slump_rate: f(p, "slumpLegStiffRate", 8.0)?,
             spin_time: f(p, "glanceSpinTime", 0.5)?, mass: f(p, "ignoreColMassBelow", 20.0)?, volume: f(p, "ignoreColVolumeBelow", 0.1)?,
             rebound_mode: i(p, "reboundMode", 0)?, forward_mode: i(p, "forwardMode", 0)?, to_forward: f(p, "timeToForward", 0.5)?,
-            rebound: f(p, "reboundForce", 0.0)?, brace: b(p, "braceWall", false)?,
+            rebound: f(p, "reboundForce", 0.0)?, brace: b(p, "braceWall", false)?, stable: f(p, "stable2SlumpTime", 1.0)?,
+            react: f(p, "reactTime", 0.3)?, spin_mag: f(p, "glanceSpinMag", 50.0)?, spin_turn: f(p, "glanceSpinTurn", 40.0)?,
+            spin_decay: f(p, "glanceSpinDecayMult", 0.3)?, spin_reduce: f(p, "glanceSpinReduce", 1.5)?, spin_min: 0.3,
+            slump_mode: i(p, "slumpMode", 1)?, sit_start: f(p, "sitstarttime", 0.3)?, sit_rate: f(p, "sitrate", 1.0)?,
+            fling: f(p, "fling2prob", 0.5)?, arm_brace: b(p, "armBrace", true)?, drape: b(p, "fallOverWallDrape", true)?,
+            high: b(p, "fallOverHighWalls", false)?, weak_zero: f(p, "impactWeaknessZeroDuration", 0.2)?,
+            weak_ramp: f(p, "impactWeaknessRampDuration", 0.01)?,
         };
-        Ok(BcrRdr2 { p, state: 0, hits: [None; 2], speed: 0.0, wall: None, wall_vel: Vec3::ZERO, tte: 0.0, impacted: false, phase: false,
-                     t_hit: 0.0, steps_at: 0, balancing: true, nonfoot: None, slump_t: 0.0, started: false, look: None })
+        Ok(BcrRdr2 { p, state: 0, hits: [None; 2], speed: 0.0, wall: None, wall_vel: Vec3::ZERO, tte: 0.0, side: -1.0, impacted: false, phase: false,
+                     t_hit: 0.0, steps_at: 0, balancing: true, nonfoot: None, started: false, look: None, kind: 3, second: None, second_hit: None,
+                     touch_low: false, touch_high: false, low: false, sum: [Vec3::ZERO; 2], rel: Vec3::ZERO, t_stable: 0.0, weak: 1.0005,
+                     over_t: 0.0, over_drawn: false, recovered: false, fow_mine: false, rds_on: false, roll_on: false, slump: None, fling: None, near: [false; 2], slide: [false; 2], sink: false })
     }
 
     /// The probes (state 0, moving faster than 0.5 m/s): spheres of 0.25 m from the pelvis and 0.1 m from the chest
-    /// along his horizontal velocity for half a second of it.
+    /// along his horizontal velocity for half a second of it. And the probe down the wall's face, when it is asked.
     pub fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
+        if let Some((from, d)) = self.second.take() {
+            self.second_hit = Some(self.sweep(world, obs, from, d, 0.001, 1.0).map(|h| h.at));
+        }
         self.hits = [None; 2];
         if self.state != 0 {
             return;
@@ -1252,10 +1334,13 @@ impl BcrRdr2 {
                 let n = flat(h.n);
                 if n != Vec3::ZERO {
                     (self.wall, self.wall_vel, self.tte) = (Some((h.at, n)), h.vel, h.dist / self.speed.max(1e-6));
+                    // the wall's type (0x2aee3a8): 2 with the pelvis's hit alone, else by where the chest's lies
+                    self.kind = self.hits[1].map_or(2, |h1| if (h1.at - h0.at).dot(flat(h0.n)) < -0.1 { 2 } else { 1 });
                 }
             }
         }
-        self.machine(c, out);
+        let fow_on = c.extras_on.contains(&"fallOverWall");
+        self.machine(c, dt, fow_on, out);
         let speed = (c.vel - up * up.dot(c.vel)).length();
         if let Some((at, n)) = self.wall {
             // the balancer's exclusion plane (BCR's wins over teeter's once he has hit it)
@@ -1265,19 +1350,31 @@ impl BcrRdr2 {
                 _ => self.p.zone + if self.impacted { (0.2 * speed).min(0.5) } else { 0.0 },
             };
             if self.impacted || c.out.dbm_plane.is_none() {
-                c.out.dbm_plane = Some((at, n, -1.0, off));
+                c.out.dbm_plane = Some((at, n, self.side, off));
             }
-            // coming up to it with braceWall: look at it while it is more than half a second away
-            let bracing = self.p.brace && self.balancing && (self.p.rebound_mode != 2 || self.state == 0);
-            if !self.impacted && self.state != 12 && bracing && self.tte > 0.5 {
-                self.look_at(at, out);
+            if !self.impacted && self.state != 12 {
+                // moving along his facing faster than 0.5 m/s toward it: his feet wider (0x2af9888)
+                let fwd = flat(-c.m.c);
+                if fwd.dot(c.vel) > 0.5 {
+                    c.out.dbm_extra_feet = Some(0.2);
+                }
+                // coming up to it with braceWall: the head to it while more than half a second away, nearer it the
+                // spine turned from it (0x2ae9ae4 decides; the brace service it runs isn't here, see §12)
+                let bracing = self.p.brace && self.balancing && (self.state == 0 || self.kind != 2);
+                if bracing && self.tte >= 0.5 {
+                    self.look_at(at, out);
+                }
             }
             if self.impacted {
-                // the head to the wall at chest height, while he stands (ours: RDR2 waits for catchFall and
-                // bodyRollUp to be idle)
+                // reactTime: reachForWound lets both hands go
+                if self.t_hit < self.p.react && self.balancing {
+                    c.out.rfw_release = [true; 2];
+                }
+                // the head from the wall: the normal, from the chest (ours: RDR2 waits for catchFall and bodyRollUp to
+                // be idle)
                 if c.upright {
                     let chest = c.b.at(crate::nmshot::chest_part());
-                    self.look_at(at + up * up.dot(chest - at), out);
+                    self.look_at(chest + n, out);
                 }
                 // on the impact's tick the knees are held at the bend they have (0x2ab617c, at most 0.35), not bent further
                 if self.phase {
@@ -1288,26 +1385,45 @@ impl BcrRdr2 {
                         c.out.dbm_crouch.push(Crouch::Knee(8, -k, f32::INFINITY));
                     }
                 }
+                let free = c.upright && self.nonfoot.is_none();
+                if free {
+                    self.fling_or_brace(c, at, n, dt);
+                }
+                // the weakness ramp (+0x618): nothing for impactWeaknessZeroDuration, then up to 1; the shot's strength
+                // reads it (its looseness amount, while the amount is no less than the ramp)
+                if self.weak < 1.0 && self.t_hit >= self.p.weak_zero {
+                    self.weak = (self.weak + dt / self.p.weak_ramp.max(1e-4)).min(1.0);
+                }
             }
         }
         // the slump once the balancer has given up (unless he has been down on something more than 0.3 s)
-        if !self.balancing && !matches!(self.state, 0 | 12) && self.nonfoot.unwrap_or(0.0) <= 0.3 {
+        if !self.balancing && !matches!(self.state, 0 | 12) && self.nonfoot.unwrap_or(0.0) <= 0.3 && c.ch.fow_state.is_none_or(|s| s == 0 || s == 4) {
             self.state = 4;
         }
-        if self.state == 4 {
-            self.slump_t += dt;
-            if c.dbm.is_some() {
-                self.slump(c);
-            }
+        if matches!(self.state, 4 | 7) && c.dbm.is_some() {
+            self.slump_core(c, dt);
         }
-        c.ch.bcr = Some((self.state, self.impacted, if self.impacted { self.p.leg_red } else { 0.0 }));
+        // he has come down on both feet off fallOverWall: back to balancing, state 2 (step 15)
+        let feet = c.b.doll.collided(&[limb(2).p[3]]) && c.b.doll.collided(&[limb(3).p[3]]);
+        if c.ch.fow_state.is_some_and(|s| s > 1) && !self.balancing && !fow_on && feet {
+            out.extend(["rollDownStairs start=false", "catchFall start=false", "smartFall start=false", "bodyRollUp start=false"].map(String::from));
+            c.out.dbm = Some(true);
+            c.out.dbm_taper = Some(true);
+            (self.state, self.balancing, self.recovered, self.nonfoot) = (2, true, true, None);
+            c.ch.fow_state = None;
+        }
+        if self.fow_mine && !matches!(self.state, 8 | 9) {
+            self.fow_mine = false;
+            out.push("fallOverWall start=false".into());
+        }
+        c.ch.bcr = Some((self.state, self.impacted, if self.impacted { self.p.leg_red } else { 0.0 }, self.weak));
         if self.state != was {
             out.push(format!("#say bcr state {}", self.state));
         }
     }
 
-    /// RDR2's state machine (0x2aeaa50), as far as it is read.
-    fn machine(&mut self, c: &mut Ctx, out: &mut Vec<String>) {
+    /// RDR2's state machine (0x2aeaa50).
+    fn machine(&mut self, c: &mut Ctx, dt: f32, fow_on: bool, out: &mut Vec<String>) {
         let steps = c.dbm.map_or(0, |d| d.steps);
         // the slump by steps since the impact (ours [P]: counted only after it)
         if self.impacted && steps.saturating_sub(self.steps_at) as i64 >= self.p.steps as i64 {
@@ -1323,85 +1439,419 @@ impl BcrRdr2 {
         if matches!(self.state, 6 | 12) {
             return;
         }
+        // the probe down the wall's face has answered (0x2af96cc): on the plane a full wall, off it a low wall's top
+        if let Some(hit) = self.second_hit.take() {
+            self.kind = match (hit, self.wall) {
+                (Some(q), Some((at, n))) => if (q - at).dot(n).abs() < 0.02 { 1 } else { 2 },
+                _ => 0,
+            };
+        }
         self.phase = false;
+        let up = c.up;
+        let over_fow = self.kind == 0 && matches!(self.state, 8 | 9) && fow_on;
+        let (mut contact, mut height) = (None, 0.0);
+        if (!self.touch_high && !self.low) || over_fow {
+            // the contacts (0x2af9f74): a listed part's above the lower foot, on anything but himself; the first five
+            // (six with fallOverHighWalls) are low, the rest high
+            let low_foot = [2, 3].map(|i| up.dot(c.b.at(limb(i).p[3]))).into_iter().fold(f32::MAX, f32::min);
+            let lows = if self.p.high { 6 } else { 5 };
+            for (i, &k) in BCR_PARTS.iter().enumerate() {
+                if let Some((q, cn, id)) = c.b.doll.hit[k] {
+                    let h = up.dot(q) - low_foot;
+                    if id != -1 && h > BCR_ABOVE_FOOT {
+                        let high = i >= lows;
+                        self.sum[high as usize] += cn;
+                        if high {
+                            self.touch_high = true;
+                        } else {
+                            self.touch_low = true;
+                        }
+                        (contact, height) = (Some(q), h);
+                    }
+                }
+            }
+            // over a wall fallOverWall holds, a higher contact moves its top
+            if let (true, Some(q), Some((at, n))) = (over_fow, contact, self.wall) {
+                let d = q - at;
+                if up.dot(q) > up.dot(at) || (up.dot(d).abs() < 0.01 && n.dot(d) < 0.0) {
+                    self.wall = Some((q, n));
+                    out.push(format!("fallOverWall fallOverWallEndA={} fallOverWallEndB={}", v3s(q + n.cross(up)), v3s(q)));
+                }
+            }
+        }
         if !self.impacted {
-            // the first impact (0x2af9f74): a listed part's contact above the lower foot, on anything but himself; the probes'
-            // wall isn't needed, and the wall is now the contacts': the last point, the normals' sum made horizontal
-            let low = [2, 3].map(|i| c.up.dot(c.b.at(limb(i).p[3]))).into_iter().fold(f32::MAX, f32::min);
-            let hits = BCR_PARTS.iter().filter_map(|&k| c.b.doll.hit[k]).filter(|&(q, _, id)| id != -1 && c.up.dot(q) - low > BCR_ABOVE_FOOT);
-            if let Some((q, sum)) = hits.fold(None, |a: Option<(Vec3, Vec3)>, (q, cn, _)| Some((q, a.map_or(cn, |x| x.1 + cn)))) {
+            if let Some(q) = contact {
+                let s = self.sum[0] + self.sum[1];
+                let n = unit(s - up * up.dot(s));
                 (self.impacted, self.phase, self.state, self.t_hit, self.steps_at) = (true, true, 1, 0.0, steps);
-                let n = unit(sum - c.up * c.up.dot(sum));
+                self.rel = c.vel - self.wall_vel;
                 // the impact angle: his velocity against the wall's inward direction, past 0.6 rad a glance
-                let v = unit((c.vel - self.wall_vel) - c.up * c.up.dot(c.vel - self.wall_vel));
+                let v = unit(self.rel - up * up.dot(self.rel));
                 if (-n).dot(v).clamp(-1.0, 1.0).acos() > BCR_GLANCE {
                     self.state = 5;
                 }
+                self.side = if self.rel.dot(n) <= 0.0 { -1.0 } else { 1.0 };
                 self.wall = Some((q, n));
+                self.weak = 0.01;
+                // a high contact is a full wall; a low one asks what is above it (0x2af9c64): from above the wall's face
+                // (1.35 m over the lower foot with one down, else at the upper spine), down and into it
+                if self.touch_high {
+                    self.kind = 1;
+                } else {
+                    let (feet, zf) = ([2, 3].map(|i| c.b.doll.collided(&[limb(i).p[3]])), [2, 3].map(|i| up.dot(c.b.at(limb(i).p[3]))));
+                    let h = if feet[0] || feet[1] { zf[0].min(zf[1]) + 1.35 } else { up.dot(c.b.at((*SPINE())[2] + 1)) };
+                    self.second = Some((q + up * (h - up.dot(q)) + n * 0.05, unit(-n - up)));
+                }
             }
         }
         let Some((at, n)) = self.wall else { return };
         let w = -n;
-        if matches!(self.state, 5 | 10) && self.t_hit > self.p.spin_time {
+        let in_glance = matches!(self.state, 5 | 10);
+        if in_glance && self.t_hit > self.p.spin_time {
             self.state = 1;
         }
-        let at = self.wall.map_or(at, |w| w.0);
-        if self.state == 1 {
+        let chest = c.b.at(crate::nmshot::chest_part());
+        if (self.touch_high || self.kind == 1) && self.state == 1 {
+            self.touch_high = true;
             // facing the wall (ours: his forward axis is the trunk's back axis negated)
             if (-c.m.c).dot(w) >= 0.0 {
-                let chest = crate::nmshot::chest_part();
-                let e = (c.b.at(chest) - at).dot(n);
-                if self.p.rebound > 0.0 && e > 0.0 && e < 0.4 {
-                    c.out.impulse.push((chest, c.b.at(chest), n * self.p.rebound));
+                let e = (chest - at).dot(n);
+                if self.p.rebound > 0.0 && self.side * e < 0.0 && e.abs() < 0.4 {
+                    let chest_k = crate::nmshot::chest_part();
+                    c.out.impulse.push((chest_k, chest, n * self.p.rebound));
                     for i in 0..2 {
                         let k = limb(i).p[1];
-                        c.out.impulse.push((k, c.b.at(k), n * (-0.25 * self.p.rebound)));
+                        c.out.impulse.push((k, c.b.at(k), n * (-0.3 * self.p.rebound)));
                     }
                 }
-                // forwardMode 1 while shot: RDR2's fall-to-knees preset instead ([G], left out: he stays)
-                if self.t_hit > 0.1 && self.t_hit > self.p.to_forward && !(self.p.forward_mode == 1 && c.shot_on) {
-                    self.state = 4;
+                if self.t_hit > 0.1 && self.t_hit > self.p.to_forward {
+                    if self.p.forward_mode == 1 && c.shot_on {
+                        self.to_knees(out);
+                    } else {
+                        self.state = 4;
+                    }
                 }
             } else {
                 self.state = 2;
             }
         }
         // coming off the wall: moving away from it faster than 0.2 m/s with the COM 0.4 m out
-        if self.impacted && !matches!(self.state, 5 | 10) && (c.vel - self.wall_vel).dot(n) > 0.2 && (c.com - at).dot(n) > 0.4 {
-            self.state = 6;
-            match self.p.rebound_mode {
-                0 if !c.shot_on => self.state = 4,
-                2 => self.state = 4,
-                3 => self.restart(c, out),
-                _ => {}
+        if self.impacted && !matches!(self.state, 5 | 10) {
+            let v = unit(c.vel - self.wall_vel);
+            if v.dot(n) > 0.2 && self.side * (c.com - at - n * 0.4).dot(n) < 0.0 {
+                self.state = 6;
+                match self.p.rebound_mode {
+                    0 if !c.shot_on => self.state = 4,
+                    0 => self.to_knees(out),
+                    // reboundMode 1: the balancer's time limit is now (bal+0x6d0 = its time balancing)
+                    1 => c.out.dbm_time_up = true,
+                    2 => self.state = 4,
+                    3 => return self.restart(c, out),
+                    _ => {}
+                }
+            }
+        }
+        // a low wall: low contacts only, then a full wall's parts past the plane, a low one's at once
+        if self.touch_low && !self.touch_high && !self.low && !self.recovered {
+            let past = |p: Vec3| self.side * (p - at).dot(n) > 0.0;
+            let by_type = self.kind == 0 || self.kind == 2;
+            let arms = (0..2).any(|i| past(c.b.at(limb(i).p[3])) || past(c.b.joint_pos(limb(i).e[1])));
+            if by_type || past(c.b.at((*SPINE())[1] + 1)) || past(c.b.at((*SPINE())[2] + 1)) || past(chest) || arms {
+                self.low = true;
+            }
+            if self.low {
+                if self.state == 5 {
+                    if contact.is_some() && height > 0.4 {
+                        self.state = 10;
+                    }
+                } else if matches!(self.state, 1 | 2) {
+                    self.over_low_wall(c, at, n, fow_on, out);
+                }
+            }
+        }
+        if self.state == 10 && !self.balancing && self.low {
+            self.over_low_wall(c, at, n, fow_on, out);
+        }
+        if self.t_hit < self.p.spin_time && matches!(self.state, 5 | 10) {
+            self.glance_spin(c, n);
+        }
+        if matches!(self.state, 8 | 9) {
+            self.over_supervise(c, fow_on, dt, out);
+        }
+        // still against it (the balancer's fail test writes 3 below its stable speeds, ours the same speeds as its still
+        // test); stable2SlumpTime from moving off it
+        if self.state == 2 && c.vel.length() < 0.2 && c.angvel.length() < 0.5 {
+            self.state = 3;
+        }
+        if matches!(self.state, 2 | 3) {
+            self.t_stable += dt;
+        }
+        if self.state == 3 && self.t_stable >= self.p.stable {
+            self.state = 4;
+        }
+    }
+
+    /// RDR2's "fall to knees" settings in the character's shot record: at once, no helper force, no lean.
+    fn to_knees(&mut self, out: &mut Vec<String>) {
+        out.push("shotFallToKnees start=true ftkBalanceTime=0 ftkHelperForce=0 ftkLeanHelp=0".into());
+    }
+
+    /// Over a low wall (0x2aec2f0): state 8 or 9 by which way his hips cross it, and with fallOverWallDrape fallOverWall
+    /// takes it (0x2afbf58).
+    fn over_low_wall(&mut self, c: &mut Ctx, at: Vec3, n: Vec3, fow_on: bool, out: &mut Vec<String>) {
+        let along = n.cross(c.up);
+        let hips = c.b.joint_pos(limb(3).e[1]) - c.b.joint_pos(limb(2).e[1]);
+        self.state = 8 + (along.dot(hips) < 0.0) as u8;
+        if self.p.drape && !fow_on {
+            out.push(format!("fallOverWall start=true fallOverWallEndA={} fallOverWallEndB={} magOfForce=0.7 forceTimeOut=3 bodyStiffness=9 bodyTwist=0.9 maxTwist={} moveArms=false moveLegs=true legtwist=1 legamp=1 zAxisSpinReduction=0.2",
+                             v3s(at + along), v3s(at), std::f32::consts::PI));
+            self.fow_mine = true;
+        }
+    }
+
+    /// While over a low wall (0x2a2d260, called through 0x2aed504).
+    fn over_supervise(&mut self, c: &mut Ctx, fow_on: bool, dt: f32, out: &mut Vec<String>) {
+        let touching = c.b.doll.collided(&[crate::nmshot::chest_part(), limb(0).p[3], limb(1).p[3]]);
+        if !fow_on {
+            self.over_t += dt;
+            if self.over_t > 0.3 && self.balancing {
+                (self.state, self.recovered) = (2, true);
+                out.extend(["rollDownStairs start=false", "catchFall start=false"].map(String::from));
+            }
+            if self.state == 8 {
+                if touching && !self.over_drawn {
+                    self.over_drawn = true;
+                    self.over_t += c.ch.random() * 0.2;
+                }
+                if !self.rds_on {
+                    self.rds_on = true;
+                    let legs = 0.2 + c.ch.random() * 0.6;
+                    out.push(format!("rollDownStairs start=true stiffness=10 forcemag=1 asymmetricalLegs={legs} m_useArmToSlowDown=-0.9 m_armReachAmount=1.4 spinWhenInAir=true m_legPush=0.2 armReachLength=0.6"));
+                }
+            }
+        } else {
+            let s = c.ch.fow_state.unwrap_or(0);
+            if self.kind != 1 && (s != 1 && s != 7) {
+                if s == 4 {
+                    self.state = 4;
+                    (self.recovered, self.nonfoot) = (true, None);
+                    out.push("fallOverWall start=false".into());
+                } else if self.over_drawn {
+                    out.push("fallOverWall start=false".into());
+                }
+            } else {
+                self.state = 2;
+                self.recovered = true;
+                out.push("fallOverWall start=false".into());
+                if self.balancing {
+                    out.extend(["catchFall start=false", "bodyRollUp start=false"].map(String::from));
+                }
+            }
+        }
+        if !self.balancing && !fow_on {
+            (self.state, self.recovered) = (2, true);
+        }
+        if (self.state == 9 || fow_on) && !self.roll_on {
+            self.roll_on = true;
+            out.push("bodyRollUp start=true".into());
+        }
+    }
+
+    /// The glance's spin, states 5 and 10 (part of 0x2aeaa50): against his speed along the wall, decaying with the time
+    /// since the impact, the way his velocity crosses the normal; about the spine on the spine's parts, or (glanceSpinTurn
+    /// > 0, RDR2's default) as a turn asked of the balancer (ours [P]: dbm_turn on the record's heading, not its force).
+    fn glance_spin(&mut self, c: &mut Ctx, n: Vec3) {
+        let along = (c.vel - n * n.dot(c.vel)).length();
+        let g = if along > self.p.spin_min { (self.p.spin_reduce * along).min(1.0) } else { 0.0 };
+        let sign = if self.rel.cross(n).dot(c.up) < 0.0 { -1.0 } else { 1.0 };
+        let fall = ((self.p.spin_time - self.t_hit * self.p.spin_decay) / self.p.spin_time.max(1e-4)).max(0.0) * g;
+        let s = *SPINE();
+        let axis = unit(c.b.joint_pos(s[3]) - c.b.joint_pos(s[0]));
+        let t = axis * (self.p.spin_mag * fall * sign);
+        if self.state == 10 {
+            c.out.torque(s[0] + 1, t);
+            c.out.torque(s[1] + 1, t * 0.5);
+            c.out.torque(0, t * 0.5);
+        } else if self.p.spin_turn > 0.0 {
+            c.out.dbm_turn = Some(unit(c.m.b * sign + c.m.c * 0.5) * 0.5);
+        } else {
+            c.out.torque(s[2] + 1, t);
+            c.out.torque(s[1] + 1, t * 0.5);
+            c.out.torque(s[3] + 1, t * 0.5);
+            c.out.torque(s[0] + 1, t * 0.25);
+        }
+    }
+
+    /// After the impact: fling2 on the first tick if a draw passes and he hit faster than 1.25 m/s, while it runs the
+    /// flinging arms; else the arms brace on the wall.
+    fn fling_or_brace(&mut self, c: &mut Ctx, at: Vec3, n: Vec3, dt: f32) {
+        if self.phase {
+            let on = [c.ch.random() < self.p.fling, c.ch.random() < self.p.fling];
+            if self.rel.length() > 1.25 && (on[0] || on[1]) {
+                let g = 1.5924 * arm_length(c, 0);
+                let mut r = || c.ch.random();
+                let (a0, a1, l0, l1) = (r(), r(), r(), r());
+                let hand = [limb(0).p[3], limb(1).p[3]].map(|k| c.b.at(k));
+                self.fling = Some(BcrFling { on, angle: [-1.5 + 2.5 * a0, -1.5 + 2.5 * a1], length: [(0.25 + 0.3 * l0) * g, (0.25 + 0.35 * l1) * g],
+                                             relax: [FL_BEFORE + 0.5; 2], stopped: [false; 2], hand, t: 0.0 });
+            }
+        }
+        if self.fling.is_some() {
+            return self.fling_tick(c, dt);
+        }
+        if !self.p.arm_brace {
+            return;
+        }
+        // the chest faces the wall (0x2af2848): the flags, with their hysteresis
+        if (-c.m.c).dot(n) >= 0.0 {
+            return;
+        }
+        let vt = c.vel - n * n.dot(c.vel);
+        let side_v = vt.dot(c.m.b);
+        let shoulder = |c: &Ctx, i: usize| c.b.joint_pos(limb(i).e[1]);
+        for i in 0..2 {
+            let reach = shoulder(c, i) + c.b.doll.vel(limb(i).p[3]).0 * 0.1 - at;
+            self.near[i] = reach.dot(n) < if self.near[i] { 0.5 } else { 0.4 };
+        }
+        let hys = |on: bool| 0.2 - if on { 0.05 } else { 0.0 };
+        let slide = [side_v > hys(self.slide[0]), -side_v > hys(self.slide[1])];
+        self.sink = -vt.dot(c.up) > hys(self.sink) && !slide[0] && !slide[1];
+        self.slide = slide;
+        for i in 0..2 {
+            if self.near[i] {
+                let idle = !self.sink && !self.slide[i];
+                self.brace_arm(c, i, at, n, if idle { 0.15 } else { 1.0 });
+                if idle {
+                    c.ch.eff[(*crate::nmrs::ELBOW())[i]].desired[0] = 1.4;
+                }
             }
         }
     }
 
-    /// reboundMode 3: back to looking for a wall; catchFall and bodyRollUp stopped if he is still balancing; the
-    /// knee bend let go.
+    /// One arm on the wall (0x2ae9f5c): the hand direction whose reach meets the plane from the shoulder's distance
+    /// (capped at `cap`), turned out by 0.5 rad to his side. Ours [P]: RDR2 turns that into clavicle, shoulder, elbow and
+    /// wrist rotations in their joint frames (limited to 0.8 rad); here the limb IK takes the same hand point.
+    fn brace_arm(&mut self, c: &mut Ctx, i: usize, at: Vec3, n: Vec3, cap: f32) {
+        let l = limb(i);
+        let s = c.b.joint_pos(l.e[1]);
+        let d = (s - at).dot(n).min(cap);
+        if d < 0.0 {
+            return;
+        }
+        let len = arm_length(c, i).max(1e-3);
+        let out_side = 1.0 - 2.0 * i as f32;
+        let tangent = unit(n.cross(c.up)) * if unit(n.cross(c.up)).dot(c.m.b) * out_side >= 0.0 { 1.0 } else { -1.0 };
+        let v0 = Quat::from_axis_angle(n, -0.5 * out_side) * tangent;
+        let perp = unit(v0.cross(n));
+        let a = ((d - 0.05) / len).clamp(-1.0, 1.0).acos();
+        let h = Quat::from_axis_angle(perp, std::f32::consts::FRAC_PI_2 - a) * v0;
+        if h.is_finite() && perp != Vec3::ZERO {
+            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], s + h * len, 0.0, 0.0, out_side, 1.0, Vec3::ZERO, None);
+        }
+    }
+
+    /// fling2's arms (0x2a5c0d4, 0x2a2fd20), after 0.1 s until 0.5 s: stiff at first, relaxed 0.5 s on or once the hand
+    /// has stopped; the hand to the drawn angle off the spine axis (against the hip line) and length from the shoulder.
+    fn fling_tick(&mut self, c: &mut Ctx, dt: f32) {
+        let Some(mut f) = self.fling else { return };
+        f.t += dt;
+        if f.t > FL_BEFORE && f.t < FL_TIME {
+            let s = *SPINE();
+            let spine = unit(c.b.at(crate::nmshot::chest_part()) - c.b.at(0));
+            let hips = unit(c.b.joint_pos(limb(3).e[1]) - c.b.joint_pos(limb(2).e[1]));
+            let _ = s;
+            for i in 0..2 {
+                if !f.on[i] {
+                    continue;
+                }
+                let l = limb(i);
+                let (stiff, damp, muscle, og) = if f.relax[i] < f.t { (7.0, 0.7, None, 0.0) } else { (12.0, 0.7, (i == 0).then_some(0.95), 0.5) };
+                c.ch.set_stiffness(stiff, damp, if i == 0 { "ul" } else { "ur" }, muscle);
+                let e = &mut c.ch.eff[l.e[2]];
+                e.set_stiffness(stiff * 0.75, damp * 0.75, None);
+                for j in [l.e[0], l.e[1], l.e[2]] {
+                    c.ch.eff[j].oppose_gravity = og;
+                }
+                let hand = c.b.at(l.p[3]);
+                if (hand - f.hand[i]).length() / dt.max(1e-4) < 1.0 && f.t > FL_BEFORE + 0.1 {
+                    f.stopped[i] = true;
+                    f.relax[i] = f.t;
+                }
+                f.hand[i] = hand;
+                let side = hips * (1.0 - 2.0 * i as f32);
+                let shoulder = c.b.joint_pos(l.e[1]);
+                let to = shoulder + (spine * f.angle[i].cos() - side * f.angle[i].sin()) * f.length[i];
+                let upper = unit(c.b.joint_pos(l.e[2]) - shoulder);
+                let x = upper.dot(side);
+                let twist = (2.5 * (upper.dot(spine) - x.max(0.0)) + 0.5).clamp(-1.7, 0.2);
+                crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], to, twist, 0.0, 1.0 - 2.0 * i as f32, 1.0, Vec3::ZERO, None);
+                c.ch.eff[l.e[3]].desired = [0.0, 0.0, 0.24];
+            }
+        }
+        self.fling = (f.t < FL_TIME && (f.on[0] || f.on[1])).then_some(f);
+    }
+
+    /// reboundMode 3: the reset (0x2aedfb4), back to looking for a wall; catchFall and bodyRollUp stopped if he is still
+    /// balancing; the knee bend and leg reduction let go.
     fn restart(&mut self, c: &mut Ctx, out: &mut Vec<String>) {
-        (self.state, self.impacted, self.phase, self.t_hit, self.wall, self.tte, self.slump_t) = (0, false, false, 0.0, None, 0.0, 0.0);
+        let p = self.p;
+        let balancing = self.balancing;
+        self.look = None;
+        (self.state, self.impacted, self.phase, self.t_hit, self.wall, self.tte, self.slump) = (0, false, false, 0.0, None, 0.0, None);
+        (self.kind, self.side, self.touch_low, self.touch_high, self.low, self.sum, self.weak) = (3, -1.0, false, false, false, [Vec3::ZERO; 2], 1.0005);
+        (self.t_stable, self.over_t, self.over_drawn, self.fling, self.near, self.slide, self.sink) = (0.0, 0.0, false, None, [false; 2], [false; 2], false);
+        self.p = p;
         c.out.dbm_crouch.push(Crouch::ReleaseKnee(1.0));
-        if self.balancing {
+        if balancing {
             out.extend(["catchFall start=false".to_string(), "bodyRollUp start=false".to_string()]);
         }
     }
 
-    /// The slump's leg weakening (ours [G]: RDR2's slump core isn't read): the legs' stiffness from the balancer
-    /// less slumpLegStiffReduction, reached at slumpLegStiffRate a second.
-    fn slump(&self, c: &mut Ctx) {
-        let r = (self.p.slump_rate * self.slump_t).min(self.p.slump_red).max(0.0);
+    /// The slump (0x2a55ddc, from RDR2's code): the leg under the COM collapses first (the other, one time in five, by a
+    /// random part of it), then every stiffness falls at slumpLegStiffRate (slumpMode 1 always, 0 only while his kinetic
+    /// energy falls below 0.4, 2 while it falls); no new steps; after sitstarttime the legs blend to the sit pose at
+    /// sitrate. The friction ramps aren't here: Delirium's friction is per material.
+    fn slump_core(&mut self, c: &mut Ctx, dt: f32) {
+        c.out.dbm_force_balance = true;
+        let (hip, knee, ankle) = (*HIP(), *KNEE(), *ANKLE());
+        let stiff = |c: &Ctx, j: usize| c.ch.eff[j].strength.max(0.0).sqrt();
+        let ke = 0.5 * c.vel.length_squared();
+        let mut r = self.slump.unwrap_or_else(|| {
+            let mut legs = [stiff(c, hip[0]), stiff(c, hip[1]), stiff(c, knee[0]), stiff(c, knee[1])];
+            let (fl, fr) = (c.b.at(limb(2).p[3]), c.b.at(limb(3).p[3]));
+            let d = fr - fl;
+            // the right leg (1) if the COM is nearer the right foot
+            let under = ((fr - c.com).dot(d) <= (c.com - fl).dot(d)) as usize;
+            legs[under] -= self.p.slump_red;
+            legs[2 + under] -= self.p.slump_red;
+            if c.ch.random() > 0.8 {
+                let other = 1 - under;
+                legs[other] -= c.ch.random() * self.p.slump_red;
+                legs[2 + other] -= c.ch.random() * self.p.slump_red;
+            }
+            SlumpRec { t: 0.0, ke, legs }
+        });
+        r.t += dt;
+        if (ke <= r.ke && ke < 0.4 && self.p.slump_mode == 0) || self.p.slump_mode == 1 || (self.p.slump_mode == 2 && ke <= r.ke) {
+            r.legs = r.legs.map(|s| s - dt * self.p.slump_rate);
+        }
+        r.ke = ke;
         for i in 0..2 {
-            for j in [(*HIP())[i], (*KNEE())[i], (*ANKLE())[i]] {
-                let e = &mut c.ch.eff[j];
-                let s = e.strength.max(0.0).sqrt();
-                if s > 1e-6 {
-                    let k = (s - r).max(0.0) / s;
-                    (e.strength, e.damping) = (e.strength * k * k, e.damping * k);
-                }
+            let k = stiff(c, knee[i]).min(r.legs[2 + i]);
+            let h = stiff(c, hip[i]).min(r.legs[i]);
+            c.ch.eff[ankle[i]].set_stiffness(1.0, 1.0, None);
+            c.ch.eff[knee[i]].set_stiffness(k.max(1.0), 0.9, None);
+            c.ch.eff[hip[i]].set_stiffness(k.max(h).max(0.0), 1.0, None);
+            if self.p.sit_rate > 0.0 && r.t > self.p.sit_start {
+                let w = ((r.t - self.p.sit_start) * self.p.sit_rate).clamp(0.0, 1.0);
+                let e = &mut c.ch.eff[knee[i]].desired[0];
+                *e += (-1.8 - *e) * w;
+                // ours: our hip sign is RDR2's negated
+                let e = &mut c.ch.eff[hip[i]].desired[0];
+                *e += (-1.5 - *e) * w;
             }
         }
+        self.slump = Some(r);
     }
 
     fn look_at(&mut self, at: Vec3, out: &mut Vec<String>) {
@@ -1416,6 +1866,12 @@ impl BcrRdr2 {
         c.ch.bcr = None;
         c.out.dbm_crouch.push(Crouch::ReleaseKnee(1.0));
     }
+}
+
+fn arm_length(c: &Ctx, i: usize) -> f32 {
+    let l = limb(i);
+    let (s, e, w) = (c.b.joint_pos(l.e[1]), c.b.joint_pos(l.e[2]), c.b.joint_pos(l.e[3]));
+    (e - s).length() + (w - e).length() + (c.b.at(l.p[3]) - w).length()
 }
 
 // ---- fallOverWall ----
@@ -1680,6 +2136,7 @@ impl FallOverWall {
 
 impl Extra for FallOverWall {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        c.ch.fow_state = Some(self.state as i32);
         let (p, up) = (self.p, c.up);
         let pel = c.b.part(crate::nmshot::spine_parts()[0]).m.d;
         (self.a, self.b) = (p.end_a, p.end_b);

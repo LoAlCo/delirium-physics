@@ -83,7 +83,7 @@ pub fn slot(message: &str) -> u32 {
         "smartFall" => 0x110,
         "controlledFall" => 0xc8,
         "onFire" => 0xe0,
-        "wallCollision" => 0x118,
+        "wallCollision" | "balancerCollisionsReaction" => 0x118,
         "keyframe" | "softKeyframe" => 0x120,
         "swim" => 0x128,
         _ => CORE,
