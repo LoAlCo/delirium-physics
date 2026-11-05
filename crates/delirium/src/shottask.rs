@@ -130,6 +130,7 @@ impl ShotTask {
         if rd && first && !melee {
             out.push(rdr2_body_balance(hit.pos, rand));
             out.push(rdr2_body_writhe(rand));
+            out.push(rdr2_bcr());
         }
         if hit.health >= delirium_data::kv!(26) {
             if !matches!(hit.blend_group, Some(53..=55 | 57)) {
@@ -245,6 +246,15 @@ fn rdr2_body_writhe(rand: &mut Rand) -> Msg {
     ("bodyWrithe", vec![("start", B(true)), ("mask", Value::Str("us".into())), ("armStiffness", F(13.0)), ("backStiffness", F(rand.float_in_range(6.85, 13.35))),
                         ("legStiffness", F(13.0)), ("armDamping", F(0.5)), ("backDamping", F(0.5)), ("legDamping", F(0.5)), ("armPeriod", F(1.0)), ("backPeriod", F(4.0)),
                         ("legPeriod", F(1.0)), ("armAmplitude", F(1.0)), ("backAmplitude", F(0.0)), ("legAmplitude", F(1.0)), ("rollOverFlag", B(false)), ("applyStiffness", B(true))])
+}
+
+/// balancerCollisionsReaction beside the shot, as recorded on the six standing shots (active from the hit, state 0 throughout
+/// with no wall near): the task's values at its parameter offsets (rdr2_bcr.md 2); the ones its port reads.
+fn rdr2_bcr() -> Msg {
+    use Value::{Bool as B, Float as F, Int as I};
+    ("balancerCollisionsReaction", vec![("start", B(true)), ("numStepsTillSlump", I(8)), ("stable2SlumpTime", F(6.0)), ("exclusionZone", F(0.25)), ("impactLegStiffReduction", F(1.45)),
+                                        ("slumpLegStiffReduction", F(2.45)), ("slumpLegStiffRate", F(4.25)), ("reactTime", F(0.45)), ("glanceSpinTime", F(0.25)), ("ignoreColMassBelow", F(20.0)),
+                                        ("ignoreColVolumeBelow", F(0.1)), ("reboundMode", I(1)), ("forwardMode", I(0)), ("braceWall", B(true)), ("timeToForward", F(0.48)), ("reboundForce", F(0.25))])
 }
 
 fn rdr2_stay_upright() -> Msg {

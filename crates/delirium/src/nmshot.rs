@@ -1744,8 +1744,8 @@ impl Shot {
         self.run(c, CHICKEN(), Some(|s, _| s.p.chicken_arms && s.new_hit), Some(Shot::chicken_enter), Some(Shot::chicken_tick),
                  Some(|s, _| s.since_hit > s.t174 || s.new_hit), None, dt);
         c.module(CHICKEN() as u32);
-        self.run(c, FLING(), Some(|s, _| s.p.fling && s.new_hit), Some(Shot::fling_enter), Some(Shot::fling_tick),
-                 Some(|s, _| s.t174 < s.since_hit || s.new_hit), Some(Shot::fling_exit), dt);
+        // fling: its start needs T < +0x5a0, a field only its own enter fills, so with fling = 1 it doesn't start; recorded
+        // +0x133 = 1, +0x5a0 = 0 and +0x782 = 0 on every tick of both shots
         c.module(FLING() as u32);
         self.run(c, LOOK(), Some(|s, _| s.p.use_head_look), Some(Shot::look_enter), None,
                  Some(|s, _| !s.p.use_head_look), Some(|_, c| c.out.head_look_stop = true), dt);
