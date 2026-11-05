@@ -174,12 +174,14 @@ pub struct Feet {
     pub flags: u8,
     /// RDR2 (bal+0x438): s the swing target has been kept near the pelvis this step
     pub near_time: f32,
+    /// RDR2 (bal+0x46b & 0x20): the COM over the feet, before a re-step clears the placement's flag
+    pub inside_raw: bool,
 }
 
 impl Default for Feet {
     fn default() -> Feet {
         Feet { pos: [Vec3::ZERO; 2], centre: Vec3::ZERO, start: Vec3::ZERO, prev_target: Vec3::ZERO, prev_sole: Vec3::ZERO,
-               height: [0.0; 2], countdown: delirium_data::kv!(41 int), dist: [0.0; 2], stepping: 0, flags: 0, near_time: 0.0 }
+               height: [0.0; 2], countdown: delirium_data::kv!(41 int), dist: [0.0; 2], stepping: 0, flags: 0, near_time: 0.0, inside_raw: false }
     }
 }
 
@@ -470,6 +472,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
         None => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172,
     };
     f.flags = (f.flags & !delirium_data::kv!(1 int)) | (inside as u8) << 2;
+    f.inside_raw = inside;
     let (lpos, rpos) = (s.legs[0].foot.m.d, s.legs[1].foot.m.d);
     match p.rdr2 {
         Some(r) => {
@@ -1001,7 +1004,9 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
                 None => (predict_knee(&leg.hip, &leg.knee, side), target[i]),
             };
             if let Some((_, tilt)) = aim {
-                let n = bevy_math::Quat::from_rotation_arc(Vec3::Z, tilt) * normal[i];
+                // RDR2 (0x2aaeed8): tilted only for a planted foot with the COM over the feet and no step on; otherwise
+                // the balancing pitch is the flat one
+                let n = if f.inside_raw && f.stepping == 0 { bevy_math::Quat::from_rotation_arc(Vec3::Z, tilt) * normal[i] } else { normal[i] };
                 bal[i] = asin(sdot(leg.knee.m.c, vnorm(k - foot).vx(n), b"xyz"));
                 let d = vnorm(k - foot);
                 let tw = |n: Vec3| asin(vnorm(n.vx(leg.knee.m.c)).vd(d.vx(n)));
