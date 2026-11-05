@@ -313,6 +313,35 @@ impl RollDownStairs {
             }
             self.roll_rdr2(c, speed, tv, sr);
         }
+        // fall to knees' overlay (+0xf0, +0xf4..+0xf7)
+        if let Some(k) = c.ch.core.rds_knee.filter(|k| k.on) {
+            use crate::nmrs::{ELBOW, HIP, KNEE, SHOULDER, SPINE};
+            let st = self.stiffness;
+            for i in 0..2 {
+                c.ch.eff[HIP()[i]].desired[0] = -0.1;
+                c.ch.eff[HIP()[i]].strength = st * st;
+                c.ch.eff[KNEE()[i]].desired[0] = [-0.5, -0.9][i];
+            }
+            for &j in SPINE().iter() {
+                c.ch.eff[j].desired[0] = k.lean;
+                if k.stiff {
+                    c.ch.eff[j].strength = (st + 1.0) * (st + 1.0);
+                }
+            }
+            let poses = if k.poses[0] {
+                Some([[0.0, -0.5, -0.7], [0.0, -0.9, -0.7]])
+            } else if k.poses[1] {
+                Some([[0.0, 0.9, 0.7], [0.0, 0.7, 0.7]])
+            } else {
+                None
+            };
+            if let Some(a) = poses {
+                for i in 0..2 {
+                    c.ch.eff[SHOULDER()[i]].desired = a[i];
+                    c.ch.eff[ELBOW()[i]].desired[0] = [0.9, 0.6][i];
+                }
+            }
+        }
         c.ch.set_stiffness(8.0, 1.0, "uw", Some(5.0));
     }
 

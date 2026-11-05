@@ -624,7 +624,7 @@ fn yaw(k: f32, pelvis: &M34, w: Vec3, toward: bool, predict: bool, angvel: Vec3)
 pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
     let up = p.up;
     let [pl, pr] = pv.planted;
-    let both = pl && pr;
+    let both = pl && pr && !p.rdr2.is_some_and(|r| r.kneeling);
     pv.off = shz(s.pelvis.m.d - s.com, up, b"zyx");
     let w = if pv.fixed_vel { pv.vel } else { s.hvel };
     let toward = !pv.fixed_vel;
@@ -1482,7 +1482,7 @@ impl Dbm {
         let off = horizontal(s.com - l, up).length().min(horizontal(s.com - r, up).length())
             .min(horizontal(s.com - (l + r) * 0.5, up).length());
         (self.event, self.success) = (None, false);
-        if off > self.p.abort * h || (h < 0.5 && self.p.low_abort) || self.f.countdown == -1 {
+        if off > self.p.rdr2.and_then(|r| r.abort).unwrap_or(self.p.abort) * h || (h < 0.5 && self.p.low_abort) || self.f.countdown == -1 {
             return false;
         }
         let hi = up.vd(s.com) - up.vd(l).max(up.vd(r));
@@ -1500,7 +1500,8 @@ impl Dbm {
                 return false;
             }
         }
-        self.success = slen(s.vel, b"yxz") < delirium_data::kv!(17) && slen(s.angvel, b"yxz") < delirium_data::kv!(17);
+        self.success = slen(s.vel, b"yxz") < delirium_data::kv!(17) && slen(s.angvel, b"yxz") < delirium_data::kv!(17)
+            && !self.p.rdr2.is_some_and(|r| r.kneeling);
         let x = off / (h * delirium_data::kv!(142));
         self.ratio = if x > self.ratio { x } else { (x - self.ratio) * delirium_data::kv!(17) + self.ratio };
         if self.ratio < 1.0 && h > delirium_data::kv!(74) && self.f.countdown > 2 {
@@ -1542,8 +1543,23 @@ impl Dbm {
             }
         }
         let ankles = self.p.rdr2.map(|_| (b.joint_pos((*ANKLE())[0]), b.joint_pos((*ANKLE())[1])));
-        if !self.holding(&s, b.foot(0), b.foot(1), ankles) {
+        let holds = self.holding(&s, b.foot(0), b.foot(1), ankles);
+        // RDR2: fall to knees' fail now; failMustCollide: a failing test waits for a part off the legs to touch something
+        if self.p.rdr2.as_mut().is_some_and(|r| std::mem::take(&mut r.force_fail)) {
             return None;
+        }
+        if !holds && !self.p.rdr2.is_some_and(|r| r.must_collide && !(0..b.doll.hit_out.len()).any(|k| !(1..=6).contains(&k) && b.doll.hit_out[k].is_some())) {
+            return None;
+        }
+        if self.p.rdr2.is_some() {
+            let gup = self.p.gup;
+            let feet = [0, 1].map(|i| {
+                let p = b.part(b.ch.joints[(*ANKLE())[i]].child);
+                (p.m.d, p.v)
+            });
+            if let Some(r) = self.p.rdr2.as_mut() {
+                r.measure(gup, s.com, s.vel, feet);
+            }
         }
         self.pv.centre = self.f.centre;
         self.pv.planted = [self.f.flags & delirium_data::kv!(251 int) != 0, self.f.flags & delirium_data::kv!(253 int) != 0];
@@ -1904,6 +1920,10 @@ pub fn foot_yaw(b: &Body, yaw: &mut [f32; 2], dt: f32) -> Vec<Vec3> {
     let mut out = vec![Vec3::ZERO; b.build.parts.len()];
     let up = b.ch.up;
     for i in 0..2 {
+        // RDR2 core: ctx+0x47fd
+        if b.ch.rdr2 && !b.ch.core.foot_hold {
+            continue;
+        }
         let k = b.ch.joints[(*ANKLE())[i]].child;
         let t = b.doll.touch[k];
         if t & delirium_data::kv!(7 int) == 0 {
@@ -1915,7 +1935,7 @@ pub fn foot_yaw(b: &Body, yaw: &mut [f32; 2], dt: f32) -> Vec<Vec3> {
         let x = Vec3::X;
         let u = fneg(x.yzx().mul_add(up.zxy(), -(x.zxy() * up.yzx())));
         let now = atan2((m.c.y + m.c.z).mul_add(0.0, m.c.x), sdot(m.c, u, b"zyx"));
-        if t & delirium_data::kv!(1 int) == 0 {
+        if t & delirium_data::kv!(1 int) == 0 || (b.ch.rdr2 && b.ch.core.foot_unlatch) {
             yaw[i] = now;
         }
         let mut d = now - yaw[i];

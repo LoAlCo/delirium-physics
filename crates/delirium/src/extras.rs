@@ -252,6 +252,12 @@ impl Extras {
         for h in self.on.iter().filter_map(|(_, e)| e.rfw_block()).collect::<Vec<_>>() {
             self.on.iter_mut().filter(|(n, _)| *n == "reachForWound").for_each(|(_, e)| e.rfw_release(h));
         }
+        // RDR2 core: balancerCollisionsReaction's reactTime lets reachForWound's hands go (R+0xdb), by the extras' own Out
+        if c.ch.rdr2 && c.out.rfw_release != [false; 2] {
+            let h = std::mem::take(&mut c.out.rfw_release);
+            self.on.iter_mut().filter(|(n, _)| *n == "reachForWound").for_each(|(_, e)| e.rfw_release(h));
+            self.outbox.push("#say balancerCollisionsReaction: reachForWound lets both hands go".into());
+        }
         // RDR2 core: controlledFall writes into a running pointGun (here after both have ticked)
         for s in self.on.iter().filter_map(|(_, e)| e.pg_coupling()).collect::<Vec<_>>() {
             self.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.pg_set(s));
