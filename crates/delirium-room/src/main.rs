@@ -9945,6 +9945,8 @@ mod nmx {
         pub far: Vec3,
         /// the main bullet record (ctx+0x1410): its hit point relative to the pelvis and its direction, in the room's axes
         pub hit: (Vec3, Vec3),
+        /// his velocity before the hit (ctx+0xf60)
+        pub vel: Vec3,
     }
     pub fn first_pose(path: &str) -> Option<Pose> {
         const JMAP: [usize; 20] = [0, 3, 6, 1, 2, 4, 5, 7, 8, 9, 12, 16, 10, 13, 14, 15, 17, 18, 19, 11];
@@ -9982,7 +9984,7 @@ mod nmx {
                 }
                 continue;
             }
-            let mut pose_ = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![], turns: vec![], far: Vec3::ZERO, hit: (Vec3::ZERO, Vec3::Y) };
+            let mut pose_ = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![], turns: vec![], far: Vec3::ZERO, hit: (Vec3::ZERO, Vec3::Y), vel: Vec3::ZERO };
             let mut com = Vec3::ZERO;
             let mut bullet = (Vec3::ZERO, Vec3::Y);
             let mut rage: Vec<u8> = vec![];
@@ -9998,6 +10000,7 @@ mod nmx {
                         pose_.back = row(b, 0xf30).with_z(0.0).normalize();
                         com = row(b, 0xf40);
                         bullet = (row(b, 0x1540), row(b, 0x1550));
+                        pose_.vel = row(b, 0xf60);
                     }
                     2 if j < 20 => {
                         pose_.angles[JMAP[j]] = if vt == 0x3663d98 { [f(b, 0x114), 0.0, 0.0] } else { row(b, 0x12c).to_array() };
@@ -10014,6 +10017,7 @@ mod nmx {
             }
             let yaw = Quat::from_rotation_arc(pose_.back, Vec3::Y);
             pose_.far = yaw * -com;
+            pose_.vel = yaw * pose_.vel;
             // the pelvis's world position: the COM less the mass-weighted part offsets, as nmxread's part_world
             let masses: Vec<f32> = rage.chunks_exact(0x140).map(|c| f(c, 0x11c)).collect();
             let m: f32 = masses.iter().sum();
@@ -10050,7 +10054,7 @@ mod nmx {
         }
         sim_lift(sim, 0.001 - low);
         for (k, t) in frames.iter().enumerate() {
-            sim.agent.doll.set_body(k, t.translation, t.rotation, Vec3::ZERO, Vec3::ZERO);
+            sim.agent.doll.set_body(k, t.translation, t.rotation, pose.vel, Vec3::ZERO);
         }
         let f = |k: usize| frames[k].translation.xy().distance(frames[0].translation.xy());
         let s = format!("nmx  pose set: feet apart {:.3}, foot z {:.3} {:.3}, foot-pelvis xy {:.3} {:.3}; part distance from the recording's {}", frames[3].translation.distance(frames[6].translation), frames[3].translation.z, frames[6].translation.z, f(3), f(6), gaps.join(" "));
