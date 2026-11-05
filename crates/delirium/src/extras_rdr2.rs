@@ -5147,6 +5147,99 @@ const BULLET_PERIOD: f32 = 0.1;
 /// RDR2's trunk part for the extra share (part 3, SKEL_Spine0Body) on our body.
 const BULLET_TRUNK: usize = 7;
 
+/// What RDR2's shot task knows about a bullet when it builds the impulse (0x1c68ea4, 0x1c6eb20).
+pub struct BulletHit {
+    /// the room's force for the weapon, N s (see `bullet_impulse`)
+    pub force: f32,
+    /// part hit, ours
+    pub part: usize,
+    /// the bullet's direction and his root's horizontal velocity, world
+    pub dir: Vec3,
+    pub root_vel: Vec3,
+    /// the task's first bullet (the builder's p5: the health factor and the root speed limit run only then)
+    pub first: bool,
+    /// his health after this hit over his full health (task+0x89c)
+    pub health: f32,
+    /// this hit kills him (+0x89c = 0), or he is dying already (+0x9d8 bit 2)
+    pub kill: bool,
+    pub dying: bool,
+    /// standing (+0x9d8 bit 0x20): his left foot to his head is longer than 1 m and more than 0.9 up
+    pub standing: bool,
+    /// the bullet goes along his front axis, so it came from behind (+0x8a8 > 0; +0x9d8 bit 0x10 clear)
+    pub from_behind: bool,
+    /// unit z of his pelvis to neck (0x1c4a838)
+    pub upright: f32,
+}
+
+/// What RDR2's shot task sends for a bullet.
+pub struct BulletSend {
+    /// the applyBulletImpulse's impulse, N s, and its extraShare
+    pub impulse: f32,
+    pub extra_share: Option<f32>,
+    /// the applyImpulse on Spine0 of a shot in the leg (equalizeAmount 1, at the part's frame), N s before the equalize
+    pub root: Option<f32>,
+}
+
+/// RDR2's bullet impulse from the shot task's builder 0x1c68ea4 and its caller 0x1c6eb20, for the factors whose inputs
+/// a Delirium scene has. The XML's tunables except where it can't be what ran, as the recordings show: the trunk share
+/// reads 0.75 (the XML says 0.5), and the leg's root impulse fires though the XML's upright limit 1.0 can't be passed.
+///
+/// RDR2's bullet starts from the damage event's force and two per-weapon factors, in a weapon file we don't have. So
+/// ours: the room's force, scaled so the pistol's 50 gives what the recorded Cattleman gives on a standing man at
+/// 85% health, 49.38 N s on the chest and the back (`BULLET_BASE`, and 58.49 in a thigh, `BULLET_LEG`). The root
+/// impulse (LegShotFallRootImpulseMult 0.375 times the unfactored force) is a third recorded number: 67.5 N s in the
+/// body's momentum at once, through the equalize's 1.905 on RDR2's Spine0 (`BULLET_ROOT`).
+///
+/// Left out, no input: armour (x1.2), the mounted and vehicle states, the bracing x0.5, the shot-against-wall factor,
+/// an arm hit's overflow to the clavicle, rapid fire and the shotgun's pellets, the "hit again soon" flag (+0x9d9 bit
+/// 0, which takes the extra share and the low trunk's factor from later bullets), the kill's per-weapon factor.
+pub fn bullet_impulse(h: &BulletHit) -> BulletSend {
+    /// 49.38 / (1.3 standing x 1.085 health) / 50
+    const BULLET_BASE: f32 = 0.7002;
+    /// 58.49 / 49.38, the thigh's: same chain in the code, so it is in the part's force [P]
+    const BULLET_LEG: f32 = 1.1845;
+    /// 67.5 / 1.905 / (50 x BULLET_BASE x BULLET_LEG)
+    const BULLET_ROOT: f32 = 0.854;
+    /// The upright limit that ran: 1.0 in the XML. Ours, the standing test's.
+    const LEG_ROOT_UPRIGHT: f32 = 0.9;
+    let leg = matches!(h.part, 1..=6);
+    let mut f = h.force * BULLET_BASE * if leg { BULLET_LEG } else { 1.0 };
+    let force = f;
+    // 0x0D7DB754, not on someone falling or dying
+    if h.standing && !h.dying {
+        f *= 1.3;
+    }
+    let head = matches!(h.part, 11 | 12);
+    if head {
+        // HeadShot; scaled by how upright he is on someone dying
+        f *= if h.dying { 0.25 + (1.2 - 0.25) * h.upright.max(0.0) } else { 1.2 };
+    } else if h.kill {
+        f *= 1.5;
+    } else if h.first {
+        // the damage-taken factor is 1 at both ends; armour would go here
+        f *= 1.0 + 0.1 * h.health.clamp(0.0, 1.0);
+    }
+    // 0x1c4a5a8: running into the bullet, or with it, past the task's speed
+    let speed = h.root_vel.with_z(0.0).length();
+    if speed > BULLET_RUN_SPEED {
+        let dot = h.dir.normalize_or_zero().dot(h.root_vel.with_z(0.0).normalize_or_zero());
+        let k = dot.abs() * 0.5 + 0.1 * speed;
+        f *= if dot < -0.6 { (k * 2.7 + 1.0).min(3.0) } else if dot > 0.6 { k * 0.6 } else { 1.0 };
+    }
+    f = f.min(500.0);
+    // the low trunk from behind; the front's x1.1 is on two bones of the upper chest we don't have [P]
+    if h.from_behind && h.standing && !h.dying && matches!(h.part, 0 | 7 | 8) {
+        f *= 1.3;
+    }
+    let trunk = matches!(h.part, 0 | 7..=10);
+    let extra_share = (trunk && h.standing && !h.dying && (!h.first || speed < 100.0) && f >= 0.01).then_some(-0.75);
+    let root = (leg && !h.dying && h.upright > LEG_ROOT_UPRIGHT).then_some(force * BULLET_ROOT);
+    BulletSend { impulse: f, extra_share, root }
+}
+
+/// CTaskNMShot::Tunables +0x68, m/s, the speed past which running against or with the bullet counts.
+const BULLET_RUN_SPEED: f32 = 1.5;
+
 impl BulletImpulse {
     fn new(p: &mut P) -> Result<BulletImpulse, Error> {
         let mut b = BulletImpulse { recs: vec![], new: vec![], modifier: 1.0 };

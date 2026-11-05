@@ -3328,15 +3328,25 @@ impl Sim {
         let w = self.weapons.iter().find(|w| w.name == name);
         let set = w.map_or("*", |w| delirium::nm::weapon_set(w, if self.weak { 2 } else { 3 }));
         let (at, d, n) = aim.unwrap_or((ours.p(part) + ours.fwd * 0.1, -ours.fwd, ours.fwd));
-        let vel = shottask::bullet(at, at - d.normalize() * BULLET_BACK(), w.map_or(WEAPONS[self.weapon].2, |w| w.force), false);
+        let force = w.map_or(WEAPONS[self.weapon].2, |w| w.force);
+        let mut o_root = None;
+        let mut vel = shottask::bullet(at, at - d.normalize() * BULLET_BACK(), force, false);
         // RDR2 core: the game's applyBulletImpulse, which NM spreads over 0.1 s, with an extra share on the trunk for a
-        // trunk hit (minus COMImpulseScale: 0.75 in the running game, read off its recording; the exported XML says 0.5)
+        // trunk hit, and for a leg hit its applyImpulse on the root at once (extras_rdr2.rs)
         let mut o = vec![if self.rdr2_core && !was_dead {
-            let extra = if matches!(part, 0 | 7..=10) { " extraShare=-0.75" } else { "" };
-            format!("applyBulletImpulse start=true partIndex={part} hitPoint={} impulse={}{extra}", v3(at), v3(vel))
+            let send = delirium::extras_rdr2::bullet_impulse(&self.rdr2_bullet(part, d, force));
+            vel = vel.normalize_or_zero() * send.impulse;
+            let extra = send.extra_share.map_or(String::new(), |s| format!(" extraShare={s}"));
+            let line = format!("applyBulletImpulse start=true partIndex={part} hitPoint={} impulse={}{extra}", v3(at), v3(vel));
+            if let Some(root) = send.root {
+                let spine0 = self.agent.doll.frames().nth(7).map_or(at, |f| f.translation);
+                o_root = Some(format!("applyImpulse partIndex=7 hitPoint={} impulse={} equalizeAmount=1", v3(spine0), v3(vel.normalize_or_zero() * root)));
+            }
+            line
         } else {
             format!("applyImpulse partIndex={part} hitPoint={} impulse={}", v3(at), v3(vel))
         }];
+        o.extend(o_root);
         if was_dead {
             return self.send_ours(o);
         }
@@ -3353,6 +3363,29 @@ impl Sim {
             }
         }
         self.send_ours(o);
+    }
+
+    /// What RDR2's shot task reads when it builds a bullet's impulse.
+    fn rdr2_bullet(&self, part: usize, dir: Vec3, force: f32) -> delirium::extras_rdr2::BulletHit {
+        let doll = &self.agent.doll;
+        let up = |from: usize, to: usize| doll.centre(to) - doll.centre(from);
+        let (lift, trunk) = (up(3, 12), up(0, 11).normalize_or_zero());
+        let (_, root_vel) = doll.com();
+        // his front axis: the shot's from-behind test, on the task's flat vectors
+        let fwd = self.ours().fwd.with_z(0.0).normalize_or_zero();
+        delirium::extras_rdr2::BulletHit {
+            force,
+            part,
+            dir,
+            root_vel,
+            first: self.shot_task.is_none(),
+            health: self.health / 200.0,
+            kill: self.health <= 0.0,
+            dying: self.health < FATAL(),
+            standing: lift.length() > 1.0 && lift.normalize_or_zero().z > 0.9,
+            from_behind: fwd.dot(dir.with_z(0.0).normalize_or_zero()) > 0.0,
+            upright: trunk.z,
+        }
     }
 
     /// The RDR2 reactions to a shot (part hit at `at`, the bullet along `dir`), as message lines.
