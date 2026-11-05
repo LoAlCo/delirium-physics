@@ -142,6 +142,9 @@ pub struct Out {
     pub dbm_lead_add: f32,
     /// RDR2 core: the balancer's taperKneeStrength (bal+0x654) from now on, as teeter and highFall set it
     pub dbm_taper: Option<bool>,
+    /// RDR2 core: balancerCollisionsReaction's extraFeetApart, and its reboundMode 1: the balancer's time limit is now
+    pub dbm_extra_feet: Option<f32>,
+    pub dbm_time_up: bool,
     /// RDR2 core: teeter's exclusion plane this step (point, horizontal normal, side sign, offset): the balancer's
     /// predicted COM is kept on the plane `offset` from the edge
     pub dbm_plane: Option<(Vec3, Vec3, f32, f32)>,
@@ -1684,7 +1687,7 @@ impl Shot {
             let ns = r.initial_neck_stiffness + (r.neck_stiffness - r.initial_neck_stiffness) * kn;
             let nd = r.initial_neck_damping + (r.neck_damping - r.initial_neck_damping) * kn;
             apply_strength(c, &Strength { k, body_stiffness: p.body_stiffness, arm_stiffness: r.arm_stiffness, spine_damping: r.spine_damping,
-                                          neck: (ns, nd), upper: u, lower: w, looseness: p.looseness_amount, k_mult_on_loose: r.k_mult_on_loose,
+                                          neck: (ns, nd), upper: u, lower: w, looseness: c.ch.bcr.map_or(p.looseness_amount, |b| if b.3 <= p.looseness_amount { b.3 } else { p.looseness_amount }), k_mult_on_loose: r.k_mult_on_loose,
                                           k_mult_4_legs: r.k_mult_4_legs, min_legs_looseness: r.min_legs_looseness,
                                           min_arms_looseness: r.min_arms_looseness, stable_hands_and_neck: p.stable_hands_and_neck,
                                           balancing: !self.no_balance && !c.dbm_failed }, dt);

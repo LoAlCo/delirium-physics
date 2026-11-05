@@ -569,7 +569,9 @@ pub struct Character {
     pub exclude_arms: [bool; 2],
     /// RDR2 core: balancerCollisionsReaction while it runs, for the behaviours that read it: its state, whether the
     /// impact has happened, and the leg stiffness reduction it publishes for staggerFall (RDR2's bal+0x568)
-    pub bcr: Option<(u8, bool, f32)>,
+    pub bcr: Option<(u8, bool, f32, f32)>,
+    /// RDR2 core: fallOverWall's state (+0x1a0) once it has run, for balancerCollisionsReaction
+    pub fow_state: Option<i32>,
     /// RDR2 core: what its core helpers keep on the character (read only with the core on)
     pub core: CoreState,
 }
@@ -639,7 +641,7 @@ fn targets(j: &JointDef, e: &Effector) -> [f32; 3] {
 
 impl Character {
     pub fn new(joints: Vec<JointDef>, frames: &[Transform]) -> Character {
-        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, core: CoreState::default() };
+        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, fow_state: None, core: CoreState::default() };
         c.seed(0);
         c.eff = (0..c.joints.len()).map(|i| Effector::new(&c.joints[i], c.angle(i, frames))).collect();
         static ONCE: std::sync::Once = std::sync::Once::new();

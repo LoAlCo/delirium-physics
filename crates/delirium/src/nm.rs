@@ -2139,6 +2139,12 @@ impl Agent {
                     if let Some(t) = out.dbm_taper {
                         r.taper = t;
                     }
+                    if let Some(x) = out.dbm_extra_feet {
+                        r.p.extra_feet_apart = x;
+                    }
+                    if out.dbm_time_up {
+                        r.p.max_balance_time = r.time;
+                    }
                     match out.dbm_force_step {
                         Some(Some(i)) => (r.forced, r.cancel_step) = (Some((i, r.steps)), true),
                         Some(None) => r.forced = None,
