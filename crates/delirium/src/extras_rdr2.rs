@@ -2323,7 +2323,7 @@ impl Default for ArmRec {
 /// step, and the time since each hand's reach last ended (both for the shot's default arms).
 #[derive(Clone, Default)]
 struct Rfw2 {
-    act: [ArmRec; 2], pend: [Option<ArmRec>; 2], reaching: [bool; 2], hits: Vec<(Vec3, i32)>,
+    act: [ArmRec; 2], pend: [Option<ArmRec>; 2], reaching: [bool; 2], hits: Vec<(Vec3, i32, Vec3)>,
     twist_t: f32, twist_left: bool, twist: Limiter, bend: Limiter, releasing: bool, toggle: bool, toggle_at: f32,
     hit_down: bool, len: f32, release: [bool; 2], since_stop: [f32; 2],
 }
