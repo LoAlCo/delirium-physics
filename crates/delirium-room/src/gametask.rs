@@ -327,7 +327,7 @@ pub fn gate_modules(merged: Vec<SentMessage>, hit: ShotHit, part: usize) -> Vec<
         let is = |n: &str| h == joaat(n);
         if is("shotsnap") {
             flag(m, "snap")
-        } else if is("shotingusts") {
+        } else if is("shotinguts") {
             flag(m, "shotInGuts")
         } else if is("shotfrombehind") {
             flag(m, "shotFromBehind") && hit == ShotHit::Back
@@ -408,7 +408,7 @@ pub fn line(m: &SentMessage, port: &Message) -> (String, Vec<String>) {
                    (0x47e73885, "maxStillTime"), (0x9de396e2, "spineBlendPose"), (0xae9bb2a3, "kTime"), (0x9be8054b, "spineLeanGain"), (0xcb0eb739, "armFriction")];
         let wanted = own.iter().find(|o| o.0 == p.hash).map(|o| o.1).or_else(|| crate::own_names::OWN.iter().find(|o| o.0 == p.hash && port.params.iter().any(|x| x.name == o.1)).map(|o| o.1)).map_or(p.hash, joaat);
         // a module's switch, used by gate_modules
-        if ["snap", "shotingusts", "shotfrombehind", "shotspin", "falltoknees"].iter().any(|n| joaat(n) == p.hash) && m.hash != joaat("shot") {
+        if ["snap", "shotinguts", "shotfrombehind", "shotspin", "falltoknees"].iter().any(|n| joaat(n) == p.hash) && m.hash != joaat("shot") {
             continue;
         }
         let Some(prm) = port.params.iter().find(|x| joaat(x.name) == wanted) else {
