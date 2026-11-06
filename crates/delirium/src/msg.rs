@@ -252,6 +252,44 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "backwardsMinArmOffset", kind: Kind::Float, used: true, doc: "" },
     ] },
     Message { name: "configureBalance", params: &[
+        Param { name: "backwardsLeanCutoff", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "stableLinSpeedThresh", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "stableRotSpeedThresh", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "ignoreFailure", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "failMustCollide", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "useComDirTurnVelThresh", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "hipError", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "hipErrorRun", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "hipErrorMax", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "dampPelvis", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "flattenDownSwing", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "flatterSwingFeet", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "flatterSwingFeetRun", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "airborneStep", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "runningThresh", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "runningThreshB", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "clavicleCrouchingAccumulated", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "clavicleCrouchingAccumulatedB", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "stepTurnWait", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "dontStepTime", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "leftLegSwingDamping", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "rightLegSwingDamping", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "opposeGravityLegs", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "opposeGravityAnkles", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "footSlipStiffnessRun", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "avoidLeg", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "avoidFootWidth", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "avoidFootWidthB", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "avoidFeedback", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "turnLiftFeet", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "turnLiftFeetVariance", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "minLegTwistVariance", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "maxLegTwistVariance", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "slopePelvisBlend", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "staggerFailHeight", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "extraSteps", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "extraTime", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "maxStillTime", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
         Param { name: "legStiffness", kind: Kind::Float, used: true, doc: "" },
         Param { name: "stepHeight", kind: Kind::Float, used: true, doc: "" },
         Param { name: "stepClampScale", kind: Kind::Float, used: true, doc: "" },
@@ -964,6 +1002,11 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
     let has = |n: &str| params.iter().any(|(p, _)| *p == n);
     let ang_vel = has("angVelMultiplier") && has("angVelThreshold");
     let mut unused = 0;
+    // RDR2's handler (0x2a63cbc): start=true is the registered defaults, then this message's values
+    if msg == "configureBalance" && start == Some(true) && a.rdr2_core.is_some() {
+        st.configure_balance = Default::default();
+        a.configure_balance_rdr2_reset();
+    }
     for (name, v) in params {
         if *name == "start" || (msg == "bodyBalance" && !ang_vel && matches!(*name, "angVelMultiplier" | "angVelThreshold")) {
             continue;

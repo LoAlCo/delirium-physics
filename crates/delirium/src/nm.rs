@@ -613,6 +613,13 @@ impl Agent {
 
     /// RDR2 core: one of configureBalance's parameters, on the balancer running and on those to come.
     pub fn configure_balance_rdr2(&mut self, name: &'static str, v: f32) {
+        // these two act once, on the balancer running
+        if matches!(name, "extraSteps" | "extraTime") {
+            if let Some(r) = self.balance.as_mut().and_then(|b| b.dbm.as_mut()).and_then(|d| d.p.rdr2.as_mut()) {
+                r.extra(name, v);
+            }
+            return;
+        }
         self.core_cb.retain(|x| x.0 != name);
         self.core_cb.push((name, v));
         if let Some(p) = self.rdr2_core.as_mut() {
@@ -1696,7 +1703,7 @@ impl Agent {
                         // RDR2 core: the balancer sets the foot yaw hold's gains every step it runs (they stay after),
                         // and its fall assist runs on this tick
                         if let Some(r) = dbm.p.rdr2 {
-                            let k = r.p.foot_slip_stiffness;
+                            let k = if r.running { r.p.foot_slip_stiffness_run } else { r.p.foot_slip_stiffness };
                             ch.core.foot_slip = (k, 2.0 * k.sqrt());
                             let rec = crate::nmdbm_rdr2::stay_live(&ch.core.stay, s.vel);
                             fall_assist = rec.fall_assist(r.time, s.vel, self.doll.mass());

@@ -405,7 +405,19 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
         if f.stepping != 0 && r.redecide() {
             f.stepping = 0;
         }
-        if f.stepping == 0 && (!r.may_step() || r.force_balance || (r.failing.is_some() && r.p.fall_type == 1)) {
+        // RDR2's running anti-crossing (0x2ab32bc): the foot in the air gives way to the other when the planted one is too
+        // far behind him along his way and the swing one ahead; the thresholds by whether he moves forward (bal+0x2f0, +0x2f4)
+        if r.running && f.stepping != 0 {
+            let d = horizontal(s.vel, r.up_now).normalize_or_zero();
+            let forward = s.vel.vd(horizontal(-s.m.c, r.up_now)) > 0.0;
+            let (back, ahead) = if forward { (r.p.run_back_fwd, r.p.run_ahead_fwd) } else { (r.p.run_back, r.p.run_ahead) };
+            let (fl, fr) = (d.dot(s.legs[0].foot.m.d - s.com), d.dot(s.legs[1].foot.m.d - s.com));
+            if (f.stepping == 2 && fl < -back && fr > ahead) || (f.stepping == 1 && fr < -back && fl > ahead) {
+                f.stepping = 0;
+            }
+        }
+        // "don't change step": early in the balance (dontStepTime), or fallType 1 once failing (0x2aba1cc)
+        if f.stepping == 0 && (!r.may_step() || r.force_balance || (r.failing.is_some() && r.p.fall_type == 1) || r.time < r.p.dont_step_time) {
             return;
         }
     }
@@ -627,6 +639,11 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
     let both = pl && pr && !p.rdr2.is_some_and(|r| r.kneeling);
     pv.off = shz(s.pelvis.m.d - s.com, up, b"zyx");
     let w = if pv.fixed_vel { pv.vel } else { s.hvel };
+    // RDR2: slower than useComDirTurnVelThresh the twist takes the way he faces, not the velocity
+    let w = match p.rdr2 {
+        Some(r) if !pv.fixed_vel && s.vel.length() < r.p.use_com_dir_turn_vel_thresh => horizontal(-s.m.c, up).normalize_or_zero(),
+        _ => w,
+    };
     let toward = !pv.fixed_vel;
     let m = &s.pelvis.m;
     let blend = |y: f32, cur: f32| ((y.clamp(-delirium_data::kv!(119), delirium_data::kv!(119)) - cur) * (slen(w, b"yxz") * 2.0).min(1.0)).fma(delirium_data::kv!(60), cur);
@@ -674,7 +691,9 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
     } else {
         pv.out[1] = 0.0;
         pv.acc -= match p.rdr2 {
-            Some(r) if r.p.ankle_balance => (-0.26 * c).clamp(0.0, 0.2),
+            // RDR2: (5 - hipError) x 0.052 or 0.04, which at 0 are these
+            Some(r) if r.p.ankle_balance => ((5.0 - r.hip_error().clamp(0.0, 4.0)) * -0.052 * c).clamp(0.0, 0.2),
+            Some(r) => ((5.0 - r.hip_error().clamp(0.0, 4.0)) * -0.04 * c).clamp(0.0, 0.5),
             _ => (-delirium_data::kv!(60) * c).clamp(0.0, 0.5),
         };
     }
@@ -842,6 +861,15 @@ pub(crate) fn predict_knee(hip: &Eff3, knee: &Eff1, side: f32) -> Vec3 {
 pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     let up = p.up;
     let (lp, rp) = (f.flags & delirium_data::kv!(251 int) != 0, f.flags & delirium_data::kv!(253 int) != 0);
+    // RDR2 (0x2aaeed8): running, or with airborneStep off, a planted foot off the ground on the side he moves to swings
+    let lost = match p.rdr2 {
+        Some(rd) if rd.running || !rd.p.airborne_step => {
+            let along = s.vel.dot(s.legs[1].foot.m.d - s.legs[0].foot.m.d);
+            [lp && s.flags & delirium_data::kv!(251 int) == 0 && along < 0.0, rp && s.flags & delirium_data::kv!(7 int) == 0 && along > 0.0]
+        }
+        _ => [false; 2],
+    };
+    let (lp, rp) = (lp && !lost[0], rp && !lost[1]);
     let r = p.pelvis_height;
     let drop = |x: Vec3| {
         let e = ((slen(shz(x - f.centre, up, b"zxy"), b"zyx") - p.hip_dist) * delirium_data::kv!(80)).powi(2).min(r * r * delirium_data::kv!(57));
@@ -886,6 +914,17 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         Some(_) => rdr2_height.unwrap_or_default(),
         None => r * p.leg_length - (sdot(f.centre, up, b"yzx") - low) + if lp && rp { 0.0 } else { delirium_data::kv!(131) },
     };
+    // the running case's target for a foot that swings so: toward the COM ahead by the knee's bend (0x2aaeed8)
+    if p.rdr2.is_some_and(|r| r.running) {
+        for i in 0..2 {
+            if lost[i] {
+                let k = s.legs[i].knee.actual;
+                let tau = if k > -0.7 { k * -0.542857 } else { 0.38 };
+                let to = s.com + s.vel * (tau * tau);
+                t[i] += horizontal(to - t[i], up);
+            }
+        }
+    }
     let mut target = t;
     let mut normal = p.normal;
     if lp || rp {
@@ -896,7 +935,8 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         let cs = |a: f32| ((a as f64).cos() as f32, (a as f64).sin() as f32);
         let ((cy, sy), (cz, sz)) = (cs(-pv.acc), cs(-pv.out[0]));
         let e = [Vec3::new(cz * cy, sz * cy, -sy), Vec3::new(-sz, cz, 0.0), Vec3::new(cz * sy, sz * sy, cy)];
-        let q = rotvec_quat(s.pelvis.w * -delirium_data::kv!(78));
+        // RDR2: dampPelvis off, no turn against the pelvis's spin
+        let q = if p.rdr2.is_some_and(|r| !r.p.damp_pelvis) { Quat::IDENTITY } else { rotvec_quat(s.pelvis.w * -delirium_data::kv!(78)) };
         let qm = quat_rows(q);
         let pd: [Vec3; 3] = e.map(|e| {
             let a = fwd.mul_add(Vec3::splat(e.z), side.mul_add(Vec3::splat(e.y), hup * e.x));
@@ -908,11 +948,22 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         let row = |k: usize| pel.c.mul_add(Vec3::splat(pd[2][k]), pel.b.mul_add(Vec3::splat(pd[1][k]), pel.a * pd[0][k]));
         let cm = [row(0), row(1), row(2)];
         let cd = pel.c.mul_add(Vec3::splat(-pd[2].vd(pdd)), pel.b.mul_add(Vec3::splat(-pd[1].vd(pdd)), pel.a.mul_add(Vec3::splat(-pd[0].vd(pdd)), pel.d)));
+        // RDR2's hipError (rdr2_balancer2.md 9): the stance legs reach as if for a pelvis frame turned on by the arc from
+        // the pelvis's first axis to the desired one, scaled by hipError at 60 Hz (none at 30), at most hipErrorMax
+        let stance = p.rdr2.filter(|r| r.hip_error() > 0.01 && r.p.hip_error_max > 1e-4).map_or((cm, cd), |r| {
+            let (arc, angle) = (bevy_math::Quat::from_rotation_arc(pel.a.normalize_or_zero(), pd[0].normalize_or_zero()), 1.0);
+            let (axis, th) = arc.to_axis_angle();
+            let scaled = (th * r.hip_error() * (2.0 - 60.0 * p.dt.clamp(1.0 / 60.0, 1.0 / 30.0)) * angle).min(r.p.hip_error_max);
+            let turn = bevy_math::Quat::from_axis_angle(axis, scaled);
+            let pe = pd.map(|e| turn * e);
+            let row = |k: usize| pel.c.mul_add(Vec3::splat(pe[2][k]), pel.b.mul_add(Vec3::splat(pe[1][k]), pel.a * pe[0][k]));
+            ([row(0), row(1), row(2)], pel.c.mul_add(Vec3::splat(-pe[2].vd(pdd)), pel.b.mul_add(Vec3::splat(-pe[1].vd(pdd)), pel.a.mul_add(Vec3::splat(-pe[0].vd(pdd)), pel.d))))
+        });
         for (i, planted) in [lp, rp].into_iter().enumerate() {
             if planted {
                 let hip = &s.legs[i].hip;
                 let t1 = reach(t[i], up, &pdm, p.step_clamp * hip.half_lean1, p.step_clamp * hip.half_lean2);
-                target[i] = crate::vm4(cm[0], cm[1], cm[2], cd, t1);
+                target[i] = crate::vm4(stance.0[0], stance.0[1], stance.0[2], stance.1, t1);
                 let col = |k: usize| Vec3::new(cm[0][k], cm[1][k], cm[2][k]);
                 normal[i] = Vec3::new(col(0).vd(p.normal[i]), col(1).vd(p.normal[i]), col(2).vd(p.normal[i]));
             }
@@ -960,7 +1011,11 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     for (i, planted) in [lp, rp].into_iter().enumerate() {
         let side = if i == 0 { 1.0 } else { -1.0 };
         let leg = &mut s.legs[i];
-        let a = if !planted {
+        let a = if let Some(rd) = p.rdr2.filter(|r| !planted && r.flat_swing(i)) {
+            // RDR2 (0x2aae0b4): a flat swing foot aims from the actual knee and foot; moving sideways 0.9 more
+            let a = asin(sdot(leg.knee.m.c, vnorm(leg.knee.m.d - leg.foot.m.d).vx(normal[i]), b"xyz"));
+            if rd.sideways { a + 0.9 } else { a }
+        } else if !planted {
             let sh = &leg.shin;
             let back = p.rdr2.is_some_and(|r| r.stagger)
                 && horizontal(leg.foot.v, up).normalize_or_zero().vd(horizontal(leg.foot.m.c, up).normalize_or_zero()) < -0.3;
@@ -1485,6 +1540,9 @@ impl Dbm {
             .min(horizontal(s.com - (l + r) * 0.5, up).length());
         (self.event, self.success) = (None, false);
         if off > self.p.rdr2.and_then(|r| r.abort).unwrap_or(self.p.abort) * h || (h < 0.5 && self.p.low_abort) || self.f.countdown == -1 {
+            if let Some(r) = self.p.rdr2 {
+                crate::extras_core_rdr2::trace(|| format!("balancer: fail test: {off:.2} off over {h:.2} high at {:.2} s", r.time));
+            }
             return false;
         }
         let hi = up.vd(s.com) - up.vd(l).max(up.vd(r));
@@ -1494,15 +1552,18 @@ impl Dbm {
             let offa = horizontal(s.com - al, up).length().min(horizontal(s.com - ar, up).length())
                 .min(horizontal(s.com - (al + ar) * 0.5, up).length());
             if h < r.giveup_height() || crate::nmdbm_rdr2::ANKLE_ABORT * ha < offa {
+                crate::extras_core_rdr2::trace(|| format!("balancer: fail test: height {h:.2} under {:.2}, or ankles {ha:.2}, {offa:.2}, at {:.2} s", r.giveup_height(), r.time));
                 return false;
             }
             // RDR2's stagger mode: the COM too low over the higher foot (staggerFailHeight x leg length, the leg length
             // taken as his standing pelvis height)
-            if r.stagger && hi < crate::nmdbm_rdr2::STAGGER_FAIL_HEIGHT * self.p.pelvis_height {
+            if r.stagger && hi < r.p.stagger_fail_height * self.p.pelvis_height {
+                crate::extras_core_rdr2::trace(|| format!("balancer: fail test: stagger height {hi:.2} at {:.2} s", r.time));
                 return false;
             }
         }
-        self.success = slen(s.vel, b"yxz") < delirium_data::kv!(17) && slen(s.angvel, b"yxz") < delirium_data::kv!(17)
+        let (lin, rot) = self.p.rdr2.map_or((delirium_data::kv!(17), delirium_data::kv!(17)), |r| (r.p.stable_lin, r.p.stable_rot));
+        self.success = slen(s.vel, b"yxz") < lin && slen(s.angvel, b"yxz") < rot
             && !self.p.rdr2.is_some_and(|r| r.kneeling);
         let x = off / (h * delirium_data::kv!(142));
         self.ratio = if x > self.ratio { x } else { (x - self.ratio) * delirium_data::kv!(17) + self.ratio };
@@ -1550,11 +1611,17 @@ impl Dbm {
         if self.p.rdr2.as_mut().is_some_and(|r| std::mem::take(&mut r.force_fail)) {
             return None;
         }
-        if !holds && !self.p.rdr2.is_some_and(|r| r.must_collide && !(0..b.doll.hit_out.len()).any(|k| !(1..=6).contains(&k) && b.doll.hit_out[k].is_some())) {
+        // RDR2: ignoreFailure, the fail tests do nothing
+        if !holds && !self.p.rdr2.is_some_and(|r| r.p.ignore_failure || ((r.must_collide || r.p.fail_must_collide) && !(0..b.doll.hit_out.len()).any(|k| !(1..=6).contains(&k) && b.doll.hit_out[k].is_some()))) {
             return None;
         }
         if self.p.rdr2.is_some() {
             let gup = self.p.gup;
+            // the backward lean starts the timed fail: the spine's top against the pelvis
+            let top = b.part(10).m;
+            if let Some(r) = self.p.rdr2.as_mut() {
+                r.back_lean(gup, &s.pelvis.m, &top);
+            }
             let feet = [0, 1].map(|i| {
                 let p = b.part(b.ch.joints[(*ANKLE())[i]].child);
                 (p.m.d, p.v)
@@ -1613,6 +1680,7 @@ impl Dbm {
         let was = self.f.stepping;
         if let Some(r) = self.p.rdr2.as_mut() {
             let up = self.p.up;
+            r.up_now = up;
             let i = match was { 1 => 1, 2 => 0, _ => (up.vd(self.p.target[1]) > up.vd(self.p.target[0])) as usize };
             r.slope(self.p.normal[i].z);
             r.speed = s.hvel.length();
@@ -1643,12 +1711,22 @@ impl Dbm {
             }
             let v = horizontal(s.hvel, self.p.up);
             r.sideways(self.f.stepping != 0, v.length_squared(), sdot(v.normalize_or_zero(), s.m.a, b"zyx"));
-            if r.sideways {
-                let feet = (self.f.pos[0] + self.f.pos[1]) * 0.5;
-                let dir = horizontal(s.pelvis.m.d - feet, self.p.up).normalize_or_zero();
-                let back = sdot(v, s.m.c, b"zyx") < 0.0;
-                self.push += dir * if back { -r.p.sideways_cheat_force } else { r.p.sideways_cheat_force };
+            // RDR2's sideways force (stage 3, 0x2abc4ec): on one foot, the heading error to his way (the way he faces below
+            // useComDirTurnVelThresh) times sidewaysCheatForce, along the stance foot to the spine's top; on the left
+            // foot only moving backward, on the right only not. Both or neither: 1 N up.
+            if r.sideways && !r.turning && r.p.sideways_cheat_force >= 0.01 {
+                let up = self.p.up;
+                let dir = if s.vel.length() < r.p.use_com_dir_turn_vel_thresh { horizontal(-s.m.c, up) } else { s.vel };
+                let back = sdot(v.normalize_or_zero(), horizontal(-s.m.c, up).normalize_or_zero(), b"zyx") < 0.0;
+                let top = b.part(10).m.d;
+                match self.pv.planted {
+                    [true, false] if back => self.push += (top - s.legs[0].foot.m.d).normalize_or_zero() * (yaw(1.0, &s.pelvis.m, dir, false, false, s.angvel) * r.p.sideways_cheat_force),
+                    [false, true] if !back => self.push += (top - s.legs[1].foot.m.d).normalize_or_zero() * (-yaw(-1.0, &s.pelvis.m, dir, false, false, s.angvel) * r.p.sideways_cheat_force),
+                    [true, false] | [false, true] => {}
+                    _ => self.push += up,
+                }
             }
+            r.down_swing = [0, 1].map(|i| r.p.flatten_down_swing && self.f.stepping == i as u32 + 1 && s.legs[i].foot.v.dot(self.p.up) < 0.0);
             // RDR2's +0x44c counts every step, one starting on the last one's landing tick too (rdr2_balancer.md §5.4)
             r.update(dt, s.angvel.length_squared(), was != self.f.stepping && self.f.stepping != 0, self.f.stepping != 0);
         }
@@ -1716,6 +1794,14 @@ impl Dbm {
             }
             ch.eff[(*SPINE())[0]].set_stiffness(each[0].max(each[1]), 1.0, None);
         }
+        // RDR2's setter (0x2ab9df8), every step: hips and spine 0 opposeGravityLegs, knees twice it
+        if let Some(r) = self.p.rdr2 {
+            for i in 0..2 {
+                ch.eff[(*HIP())[i]].oppose_gravity = r.p.oppose_gravity_legs;
+                ch.eff[(*KNEE())[i]].oppose_gravity = 2.0 * r.p.oppose_gravity_legs;
+            }
+            ch.eff[(*SPINE())[0]].oppose_gravity = r.p.oppose_gravity_legs;
+        }
         for i in 0..2 {
             let touching = s.flags & [delirium_data::kv!(251 int), delirium_data::kv!(7 int)][i] != 0;
             ch.eff[(*ANKLE())[i]].muscle_stiffness = if touching { delirium_data::kv!(31) } else { soft };
@@ -1727,10 +1813,17 @@ impl Dbm {
                 (knee.strength, knee.muscle_stiffness) = ((f * k).powi(2), delirium_data::kv!(12));
             } else {
                 (knee.strength, knee.muscle_stiffness) = (k * k, 2.0);
+                // RDR2: the swing hip's damping 2 x left/rightLegSwingDamping x k
+                if let Some(r) = self.p.rdr2 {
+                    ch.eff[(*HIP())[i]].damping = 2.0 * [r.p.swing_damping_l, r.p.swing_damping_r][i] * each[i];
+                }
             }
             ch.eff[(*ANKLE())[i]].oppose_gravity = sdot(self.p.normal[i], s.legs[i].foot.m.b, b"yzx").powi(2) * 2.0;
-            if self.p.rdr2.is_some() && !touching {
-                ch.eff[(*ANKLE())[i]].oppose_gravity = 1.0;
+            // RDR2 (0x2abc4ec): 2 x opposeGravityAnkles x that square, the square 1 for the stepping foot, and none for a foot
+            // flattenDownSwing has flagged
+            if let Some(r) = self.p.rdr2 {
+                let stepping = self.f.stepping == i as u32 + 1;
+                ch.eff[(*ANKLE())[i]].oppose_gravity = if r.down_swing[i] { 0.0 } else if stepping { 2.0 * r.p.oppose_gravity_ankles } else { 2.0 * r.p.oppose_gravity_ankles * sdot(self.p.normal[i], s.legs[i].foot.m.b, b"yzx").powi(2) };
             }
             // RDR2 core: a hip pitch a behaviour asked the balancer for
             if let Some(r) = self.p.rdr2.filter(|r| r.owned.hip.value != 0.0) {
