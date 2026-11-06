@@ -908,7 +908,7 @@ impl Agent {
         match msg {
             "headLook" => {
                 let h = &self.nm_head;
-                st.head_look = crate::msg::HeadLookMsg { pos: h.pos, vel: h.vel, stiffness: h.stiffness, damping: h.damping,
+                st.head_look = crate::msg::HeadLookMsg { keep_head_away: false, twist_spine: true, pos: h.pos, vel: h.vel, stiffness: h.stiffness, damping: h.damping,
                                                          always_look: h.always_look, always_eyes_horizontal: h.always_eyes_horizontal };
             }
             "shot" => {
