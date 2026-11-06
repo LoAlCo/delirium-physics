@@ -235,6 +235,9 @@ pub static MESSAGES: [Message; 28] = [
     ] },
     Message { name: "shotInGuts", params: &[
         Param { name: "sigSpineAmount", kind: Kind::Float, used: true, doc: "how far the spine hunches forward, rad over the whole spine (0.6)" },
+        Param { name: "sigHipAmount", kind: Kind::Float, used: true, doc: "RDR2 core: the balancer's hip pitch (1)" },
+        Param { name: "sigForceBalancePeriod", kind: Kind::Float, used: true, doc: "RDR2 core: s with no new steps (0)" },
+        Param { name: "sigKneesOnset", kind: Kind::Float, used: true, doc: "RDR2 core: s before the knees give (0)" },
         Param { name: "sigNeckAmount", kind: Kind::Float, used: true, doc: "how far the neck bends forward, rad (0.25)" },
         Param { name: "sigKneeAmount", kind: Kind::Float, used: true, doc: "how far the knees bend, rad; the hips flex by half (0.15)" },
         Param { name: "sigPeriod", kind: Kind::Float, used: true, doc: "s he stays folded (1.5)" },

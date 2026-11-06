@@ -328,7 +328,11 @@ pub fn gate_modules(merged: Vec<SentMessage>, hit: ShotHit, part: usize) -> Vec<
         if is("shotsnap") {
             flag(m, "snap")
         } else if is("shotinguts") {
-            flag(m, "shotInGuts")
+            // Recorded on chest, back and leg: the shot holds the mod's sigSpineAmount 7.65 and sigPeriod 0.25 with its switch
+            // +0x2ec off and the module never entered, though the file says on. The parser and the reset are the only
+            // writers found and no order of them explains it (rdr2_shot_gaps.md 1), so this follows the recorded state.
+            // RDR2_SHOT_GUTS=1 goes by the file instead.
+            flag(m, "shotInGuts") && std::env::var_os("RDR2_SHOT_GUTS").is_some()
         } else if is("shotfrombehind") {
             flag(m, "shotFromBehind") && hit == ShotHit::Back
         } else if is("shotspin") {
