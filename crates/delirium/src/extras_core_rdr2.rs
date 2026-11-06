@@ -343,6 +343,13 @@ fn bullets(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     let mut q = |n: &str| p.b(n, false);
     let (air_on, leg_on, scaled, spine3) = (q("impulseAirOn")?, q("impulseOneLegOn")?, q("impulseLeakageStrengthScaled")?, q("torqueAlwaysSpine3")?);
     let (mode, spin, filter) = (p.i("torqueMode", -1)?, p.i("torqueSpinMode", -1)?, p.i("torqueFilterMode", -1)?);
+    for x in BULLET_PARAMS.iter().filter(|x| !x.used) {
+        match x.kind {
+            Kind::Float => drop(p.f(x.name, 0.0)?),
+            Kind::Bool => drop(p.b(x.name, false)?),
+            _ => drop(p.i(x.name, 0)?),
+        }
+    }
     Ok(once(move |c| {
         let cfg = &mut c.ch.core.cfg;
         let i = extra as usize;
