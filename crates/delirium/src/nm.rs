@@ -380,6 +380,8 @@ pub struct Agent {
     nm_rds: crate::nmrds::RollDownStairs,
     nm_rds_msg: Option<crate::nmrds::RollDownStairs>,
     rds_on: bool,
+    /// RDR2's fallingReaction 2: catchFall runs on the arms alone
+    cf_arms_only: bool,
     bb_on: bool,
     nm_pa: crate::nmpa::PointArm,
     nm_gr: crate::nmgr::Grab,
@@ -467,7 +469,7 @@ impl Agent {
         let pelvis_up = facing.inverse() * frames[roles.pelvis].rotation;
         let mut a = Agent { core_cb: vec![], core_base: None, locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
                 stiffness: (delirium_data::kv!(31), 1.0), relax: None, config: ConfigureBalance::default(), feedback: vec![], balance: None, lean: None,
-                shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_relax_lower: None, bb_brace: Default::default(), nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, fow_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
+                shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_relax_lower: None, bb_brace: Default::default(), nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, cf_arms_only: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, fow_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
                 brace: None, head_look: vec![], shot_look: false, eff_override: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(200), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0 * build.parts[0].grown, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
                 ch: crate::nmrs::ASSET[build.nm].get().and_then(|a| crate::nmrs::joints(build, a)).map(|j| {
                     let mut c = crate::nmrs::Character::new(j, &frames);
@@ -895,9 +897,16 @@ impl Agent {
         if out.rds_soft {
             self.nm_rds.stiffness = 6.0;
         }
-        if out.rds_end && self.rds_on {
-            self.rds_on = false;
-            crate::extras_core_rdr2::trace_first("bodyBalance: falling reaction 2, the upper body is down");
+        self.cf_arms_only = out.cf_arms;
+        if out.cf_arms {
+            crate::extras_core_rdr2::trace_first("bodyBalance: falling reaction 2, catchFall on the arms alone");
+        }
+        if out.rds_end && self.catch_fall.is_some() {
+            self.catch_fall = None;
+            if let Some(mut f) = self.nm_cf.take() {
+                f.deactivate(&mut self.nm_head, &mut self.nm_twist);
+            }
+            crate::extras_core_rdr2::trace_first("bodyBalance: falling reaction 2, the body is down: catchFall stops, the roll goes on");
         }
         let Some(ch) = self.ch.as_mut() else { return };
         // gshelp: ctx+0x1114 = 0, ctx+0x1116 = 1
@@ -2232,7 +2241,16 @@ impl Agent {
             let kept = cf_excluded.contains(&true).then(|| c.ch.eff.clone());
             if !waits(walk_actives!(self), W_CF()) {
                 if let Some(f) = self.nm_cf.as_mut() {
+                    let before = self.cf_arms_only.then(|| c.ch.eff.clone());
                     f.tick(&mut c, world, obstacles, &mut self.nm_head, &mut self.nm_twist, dt);
+                    if let Some(before) = before {
+                        let (l0, l1) = (crate::nmshot::limb(0), crate::nmshot::limb(1));
+                        for (k, e) in c.ch.eff.iter_mut().enumerate() {
+                            if !l0.e.contains(&k) && !l1.e.contains(&k) {
+                                *e = before[k].clone();
+                            }
+                        }
+                    }
                 }
             }
             if c.ch.cf_exclude != [false; 2] && self.nm_cf.as_ref().is_some_and(|f| f.active) {
@@ -2595,6 +2613,34 @@ impl Agent {
             let out_hit = self.doll.hit_out_id.iter().zip(&self.doll.hit_out).any(|(id, h)| h.is_some() && *id >= 0);
             let frames: Vec<Transform> = self.doll.frames().collect();
             if let Some(ch) = self.ch.as_mut() {
+                // the floor's acceleration channel, ctx+0xfe0, and resistAcc (bal+0x68c): the top of the body is pushed along with it, not parts 1..6, the legs
+                static FLOOR: std::sync::OnceLock<Vec3> = std::sync::OnceLock::new();
+                ch.core.floor_acc = *FLOOR.get_or_init(|| std::env::var("RDR2_FLOOR_ACC").ok().and_then(|s| {
+                    let v: Vec<f32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2]))
+                }).unwrap_or(Vec3::ZERO));
+                if let Some(r) = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).and_then(|d| d.p.rdr2.as_ref()).filter(|r| r.p.moving_floor && r.p.resist_acc != 0.0) {
+                    let a = ch.core.floor_acc.clamp_length_max(r.p.resist_acc_max) * r.p.resist_acc;
+                    if a != Vec3::ZERO {
+                        let rp = crate::extras_ysk_rdr2::rp;
+                        for k in 0..frames.len() {
+                            if !(1..=6).any(|l| rp(l) == k) {
+                                if force.len() < frames.len() { force.resize(frames.len(), Vec3::ZERO); }
+                                force[k] += a * self.doll.part_mass(k);
+                            }
+                        }
+                        crate::extras_core_rdr2::trace_once("resist acc", || format!("resistAcc: {a:.3?} on the parts but the legs"));
+                    }
+                }
+                // 0x2a38630's two flags, 0x2a7452c's k: a foot's contact with the balancer running takes footFriction, with staggerFall on (behaviour 7) footFrictionStagger
+                if let Some(r) = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).and_then(|d| d.p.rdr2.as_ref()) {
+                    let k = r.p.foot_friction[self.extras.on.iter().any(|(n, _)| *n == "staggerFall") as usize];
+                    if k != 1.0 {
+                        let rp = crate::extras_ysk_rdr2::rp;
+                        part_scales.0.extend([(rp(5), k), (rp(7), k)]);
+                        crate::extras_core_rdr2::trace_once("foot friction", || format!("footFriction: {k} on the feet"));
+                    }
+                }
                 let snap = ch.clone();
                 let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
                 let s = body.snap(snap.up);
@@ -2602,18 +2648,37 @@ impl Agent {
                 if out_hit && cfg.spin_hit.time != 0.0 {
                     cfg.spin_hit.left = cfg.spin_hit.time;
                 }
-                if out_hit && cfg.coll.on && s.vel.length() < cfg.coll.max_speed {
+                // 0x2a7452c, gated on ctx+0x1116, which only bodyBalance's gshelp and brace's pre-step set, a step at a time (0x2a498ec clears it; the
+                // message doesn't). A contact with the object: the timer restarts and every part's friction takes scale 1 unless footSlip. The feet
+                // then take scale 2 as well, with the timer running or footSlip, whatever they touch [P: `part_scales` can't tell contacts apart]. maxVelocity is the
+                // spin's (0x2a39ee0), not this. cap >= 0: `scale.min(cap)`; the absolute cap of its other mode has no channel here.
+                if cfg.coll.on {
                     let r = cfg.coll;
+                    if out_hit {
+                        cfg.coll.timer = 2;
+                    }
+                    let timer = cfg.coll.timer > 0;
                     let rp = crate::extras_ysk_rdr2::rp;
                     for k in 0..frames.len().min(32) {
-                        let scale = if k == rp(5) || k == rp(7) { r.scale[1] } else { r.scale[0] };
-                        part_scales.0.push((k, if r.cap < 0.0 { scale } else { scale.min(r.cap) }));
+                        let foot = k == rp(5) || k == rp(7);
+                        let mut scale = if out_hit && !r.foot_slip { r.scale[0] } else { 1.0 };
+                        if foot && (timer || r.foot_slip) {
+                            scale *= if r.cap >= 0.0 { r.scale[1].min(r.cap) } else if r.foot_slip { 1.0 } else { r.scale[1] };
+                        }
+                        if scale != 1.0 {
+                            part_scales.0.push((k, scale));
+                        }
                     }
-                    if r.foot_slip {
+                    if out_hit && r.foot_slip {
                         ch.core.foot_unlatch = true;
                     }
-                    crate::extras_core_rdr2::trace_first("setCharacterCollisions: a contact with an obstacle");
+                    if out_hit || timer {
+                        crate::extras_core_rdr2::trace_once("coll timer", || format!("setCharacterCollisions: friction, a contact {out_hit}, the feet's timer {}", ch.core.cfg.coll.timer));
+                    }
                 }
+                let cfg = &mut ch.core.cfg;
+                cfg.coll.timer = (cfg.coll.timer - 1).max(0);
+                cfg.coll.on = false;
                 let cfg = &mut ch.core.cfg;
                 if cfg.spin.left > 0.0 || cfg.spin_hit.left > 0.0 {
                     let (mut h, mut c_) = (Vec3::ZERO, Vec3::ZERO);

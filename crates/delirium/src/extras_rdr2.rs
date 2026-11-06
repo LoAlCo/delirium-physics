@@ -404,6 +404,7 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "lsRate", kind: Kind::Float, used: true, doc: "lower spine's bend rate, rad/s (0.4)" },
         Param { name: "usRate", kind: Kind::Float, used: true, doc: "upper spine's bend rate, rad/s (0.4)" },
         Param { name: "headRate", kind: Kind::Float, used: true, doc: "neck's bend rate, rad/s (0.4)" },
+        Param { name: "elasticitypushed7", kind: Kind::Float, used: true, doc: "RDR2's name for +0x78, the same as spineTwistRate" },
         Param { name: "spineTwistRate", kind: Kind::Float, used: true, doc: "spine's side-lean and twist rate, rad/s (0.5)" },
         Param { name: "neckTwistRate", kind: Kind::Float, used: true, doc: "neck's side-lean and twist rate, rad/s (0.5)" },
         Param { name: "timeBeforeDuck", kind: Kind::Float, used: true, doc: "s before the duck starts (0)" },
@@ -861,6 +862,7 @@ impl DuckRdr2 {
         (self.head_rate, self.us_rate, self.ls_rate) = (p.f("headRate", self.head_rate)?, p.f("usRate", self.us_rate)?, p.f("lsRate", self.ls_rate)?);
         self.neck_twist_rate = p.f("neckTwistRate", self.neck_twist_rate)?;
         self.spine_twist_rate = p.f("spineTwistRate", self.spine_twist_rate)?;
+        self.spine_twist_rate = p.f("elasticitypushed7", self.spine_twist_rate)?;
         (self.wait, self.time, self.blend) = (p.f("timeBeforeDuck", self.wait)?, p.f("duckTime", self.time)?, p.f("blendTime", self.blend)?);
         (self.dont_look, self.point_gun) = (p.f("dontLookTime", self.dont_look)?, p.i("pointGunType", self.point_gun)?);
         (self.twist, self.forward, self.exag) = (p.b("leanTwistStart", self.twist)?, p.b("bendForward", self.forward)?, p.b("duckExag", self.exag)?);

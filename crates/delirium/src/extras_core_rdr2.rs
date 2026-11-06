@@ -481,6 +481,8 @@ pub struct CollRec {
     pub clavicles: bool,
     pub upper: bool,
     pub all: bool,
+    /// ctx+0x1118: steps the feet keep the second scale after a contact (0x2a498ec counts down, 0x2a7452c restarts it at 2)
+    pub timer: i32,
 }
 
 impl Default for CoreCfg {
@@ -817,7 +819,7 @@ pub fn spin_limit_step(r: &mut SpinRec, h: Vec3, a: Vec3, z: Vec3, speed: f32, d
 /// setCharacterCollisions (0x2a4d0bc): held; `collisions` in the contact pass reads it.
 fn collisions(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     let r = CollRec {
-        on: true, spin: p.f("spin", 0.0)?, max_speed: p.f("maxVelocity", 8.0)?, foot_slip: p.b("footSlip", false)?, scale: [p.f("gsfricscale1", 8.0)?, p.f("gsfricscale2", 0.2)?],
+        on: false, timer: 0, spin: p.f("spin", 0.0)?, max_speed: p.f("maxVelocity", 8.0)?, foot_slip: p.b("footSlip", false)?, scale: [p.f("gsfricscale1", 8.0)?, p.f("gsfricscale2", 0.2)?],
         cap: p.f("?b11746eb", -0.2)?, spine: p.b("applyToSpine", false)?, thighs: p.b("applyToThighs", false)?, clavicles: p.b("applyToClavicles", false)?, upper: p.b("applyToUpperArms", false)?, all: p.b("applyToAll", false)?,
     };
     let _ = p.s("vehicleflags", "");

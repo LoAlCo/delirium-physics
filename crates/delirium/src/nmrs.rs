@@ -590,6 +590,8 @@ pub struct Character {
 /// RDR2 core: per-character values RDR2's core helpers read (rdr2_core2.md sections 1 and 4).
 #[derive(Clone, Copy, Debug)]
 pub struct CoreState {
+    /// ctx+0xfe0: the floor's acceleration, its horizontal change low-passed. Nothing under him moves in the room, so only the test hook RDR2_FLOOR_ACC fills it
+    pub floor_acc: Vec3,
     /// RDR2's joint scale fields this step (k, damping, muscle): lowered by whoever asks, over any setStiffness
     pub scale: [[f32; 3]; 32],
     /// the foot yaw hold's gains (RDR2's ctx+0x1034 / +0x1038): 60 and 10 until the balancer writes
@@ -667,7 +669,7 @@ impl CoreState {
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { props: [(-1, 0.0, 0.0); 8], prop_hit: [(-1, bevy_math::Vec3::ZERO, bevy_math::Vec3::ZERO, -1); 4], lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
+        CoreState { floor_acc: Vec3::ZERO, props: [(-1, 0.0, 0.0); 8], prop_hit: [(-1, bevy_math::Vec3::ZERO, bevy_math::Vec3::ZERO, -1); 4], lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 
