@@ -646,7 +646,8 @@ impl Extra for StaggerFall {
             let first = self.rd.is_none();
             let rd = self.rd.get_or_insert_with(|| StgRdr2::new(c, rp, &mut self.out));
             rd.tick(c, &rp, &mut self.out, dt);
-            // the head look it starts ranks above it and runs this same tick (ours arrives by message, next tick): recorded 121 / 22
+            // Its activation starts the head look itself (0x2a78100: stiffness 11, damping 1), which ticks the same step: recorded
+            // 121 / 22. Ours arrives by message, next tick, so its gains are written here; its targets still come a tick late
             if first && rp.head {
                 for j in (*NECK()).iter().copied() {
                     c.ch.eff[j].set_stiffness(STG_HEAD, 1.0, None);
