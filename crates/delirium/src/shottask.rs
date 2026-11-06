@@ -264,8 +264,8 @@ fn rdr2_bcr() -> Msg {
 fn rdr2_stay_upright() -> Msg {
     use Value::{Bool as B, Float as F, Int as I, Vec3 as V};
     ("stayUpright", vec![("start", B(true)), ("side", I(0)), ("useForces", B(true)), ("useTorques", B(true)), ("velocityBased", B(true)), ("torqueparts", B(true)),
-                         ("turnTowardsBullets", B(true)), ("switchSpeed", F(4.5)), ("forceSaturationVel", F(4.002)), ("torqueleanreduction", F(1.0)), ("leanmin", F(0.4)),
-                         ("leanmax", F(0.8)), ("lean", F(0.15)), ("supportPosition", F(1.25)), ("noSupportForceMult", F(0.45)), ("antigrav", F(0.7)), ("antigravtime", F(0.5)),
+                         ("turnTowardsBullets", B(true)), ("switchSpeed", F(4.5)), ("forceSaturationVel", F(4.002)), ("torqueleanreduction", F(1.0)), ("torqueleanmin", F(0.4)),
+                         ("torqueleanmax", F(0.8)), ("torquelean", F(0.15)), ("supportPosition", F(1.25)), ("noSupportForceMult", F(0.45)), ("antigrav", F(0.7)), ("antigravtime", F(0.5)),
                          ("antigravspeed", F(0.5)), ("torqueStrength", V(Vec3::new(5.005, 5.005, 0.0)))])
 }
 
