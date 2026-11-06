@@ -1830,6 +1830,17 @@ impl Dbm {
             let (u, l) = (self.p.up, self.hip_lean);
             self.p.hip_up = vnorm(u + l - u * l.dot(u));
         }
+        // RDR2's stage 1 with movingFloor: the floor's acceleration, thrown away over 20, at most leanAccMax, tilts both ups
+        if let Some((la, hla, max)) = self.p.rdr2.as_ref().filter(|r| r.p.moving_floor).map(|r| (r.p.lean_acc, r.p.hip_lean_acc, r.p.lean_acc_max)) {
+            let a = b.ch.core.floor_acc;
+            if a != Vec3::ZERO && a.length() <= 20.0 {
+                let a = a.clamp_length_max(max) / 9.81;
+                let (u, h) = (self.p.up, if self.p.hip_up != Vec3::ZERO { self.p.hip_up } else { self.p.up });
+                self.p.hip_up = vnorm(h + a * hla);
+                self.p.up = vnorm(u + a * la);
+                crate::extras_core_rdr2::trace_once("floor lean", || format!("movingFloor: the floor's acceleration {a:.3?} g tilts up by {la}, the hips' by {hla}"));
+            }
+        }
         let leg_scale = self.p.leg_scale();
         if let Some(r) = self.p.rdr2.as_mut() {
             r.straight = (c.legs.0, leg_scale);

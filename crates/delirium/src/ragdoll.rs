@@ -1787,6 +1787,58 @@ fn out(gap: f32) -> f32 {
     -gap - (-gap * 0.5).clamp(0.0, PUSH_KEEP())
 }
 
+/// 0x286de1c: the point of the ellipse x^2/a^2 + y^2/b^2 = 1 nearest to p: iterations of stepping along its support toward p.
+fn rage_ellipse_near(p: (f32, f32), a: f32, b: f32, iters: u32) -> (f32, f32) {
+    let (mut x, mut y) = (0.0f32, 0.0f32);
+    for _ in 0..iters {
+        let (dx, dy) = ((p.0 - x) * a, (p.1 - y) * b);
+        let l = (dx * dx + dy * dy).sqrt();
+        let (r, s) = if l > 0.0 { (dx / l * a - x, dy / l * b - y) } else { (-x, -y) };
+        let q = r * r + s * s;
+        if q <= 1e-5 {
+            break;
+        }
+        let k = ((r * (p.0 - x) + s * (p.1 - y)) / q).clamp(0.0, 1.0);
+        x += k * r;
+        y += k * s;
+    }
+    (x, y)
+}
+
+/// 0x286c280: a direction d in the cone's frame (z its axis) against the spherical ellipse with half axes a along x, b along y. Takes the ellipse's point at
+/// the same angle round the axis, or, over 0.1 rad outside, the nearest in the plane of angles (4 steps). Gives the ellipse's tangent there, the axis along
+/// it, and how far d is past it about the tangent, negative inside.
+fn rage_ellipse(d: Vec3, a: f32, b: f32) -> Option<(Vec3, Vec3, f32)> {
+    let len = (d.x * d.x + d.y * d.y).sqrt();
+    if len <= 1e-5 {
+        return None;
+    }
+    let radius = |x: f32, y: f32| 1.0 / (x * x / (a * a) + y * y / (b * b)).sqrt();
+    let (mut x, mut y) = (d.x / len, d.y / len);
+    let mut rho = radius(x, y);
+    let theta = d.z.clamp(-1.0, 1.0).acos();
+    if theta >= rho + 0.1 {
+        let (nx, ny) = rage_ellipse_near((x * theta, y * theta), a, b, 4);
+        if nx != 0.0 || ny != 0.0 {
+            let l = (nx * nx + ny * ny).sqrt();
+            (x, y) = (nx / l, ny / l);
+            rho = radius(x, y);
+        }
+    }
+    let (s, c) = rho.sin_cos();
+    let k = (1.0 / (a * a) - 1.0 / (b * b)) * y * x * rho * rho * rho;
+    let tan = Vec3::new(x, y, 0.0) * (k * c) - Vec3::Z * (k * s) + Vec3::new(-y, x, 0.0) * s;
+    let l = tan.length();
+    if l < 1e-5 {
+        return None;
+    }
+    let tan = tan / l;
+    let p = Vec3::new(x * s, y * s, c);
+    let across = tan.cross(p);
+    let dp = d - tan * d.dot(tan);
+    Some((tan, across, across.dot(dp).atan2(tan.cross(dp).dot(across))))
+}
+
 impl Ragdoll {
     /// RDR2 core: the position pass's contact row (0x28a5b30, its branch for that pass): nothing to 0.007 deep, a quarter past
     /// it, no warm start (0x28e4740 passes 0 for it there)
@@ -2758,11 +2810,36 @@ impl Ragdoll {
                     }
                     if st.theta > 0.0 {
                         let [l0, l1] = lean.map(|l| (l - LIMIT_MARGIN()).max(0.0).max(delirium_data::kv!(72)));
-                        let (c1, c0) = (st.s.dot(crate::rigid::col(&st.pr, 1)) / l0, st.s.dot(crate::rigid::col(&st.pr, 0)) / l1);
-                        let o = st.theta - 1.0 / (c0 * c0 + c1 * c1).sqrt();
-                        if near(st.s, o) {
-                            let w = rate(st.across);
-                            dofs.push((st.s, o, Some(if w < 0.0 { -st.across } else { st.across })));
+                        let (ex, ey, ez) = (crate::rigid::col(&st.pr, 0), crate::rigid::col(&st.pr, 1), crate::rigid::col(&st.pr, 2));
+                        let dw = crate::rigid::ldot(&cl.r, crate::rigid::col(&j.jc.cm, 2));
+                        let d = Vec3::new(dw.dot(ex), dw.dot(ey), dw.dot(ez));
+                        let to_world = |v: Vec3| ex * v.x + ey * v.y + ez * v.z;
+                        if let Some((tan, across, o)) = rage_ellipse(d, l0, l1) {
+                            let (tan, across) = (to_world(tan), to_world(across));
+                            if near(tan, o) {
+                                crate::extras_core_rdr2::trace_once("rage ellipse", || format!("rage lean row: closest point of the ellipse, {o:.3} past, half axes {l0:.2} {l1:.2}"));
+                                let w = rate(across);
+                                dofs.push((tan, o, Some(if w < 0.0 { -across } else { across })));
+                            }
+                        }
+                        // 0x2875a78's third row (flag 0x3c9f2e0 on): a cone narrow by a tenth or more gets a stop at the tip of its long axis: a plane through
+                        // the tip, normal along the great circle out of it.
+                        let (big, small) = (l0.max(l1), l0.min(l1));
+                        if small < 0.9 * big {
+                            let long = if l1 <= l0 { Vec3::X } else { Vec3::Y };
+                            let long = if d.dot(long) >= 0.0 { long } else { -long };
+                            let (s, c) = big.sin_cos();
+                            if d.dot(long * s + Vec3::Z * c) > 0.01 {
+                                let t0 = Vec3::Z * s - long * c;
+                                // d.t0 is the sine of how far short of the tip; rotating about t0 x d goes past it
+                                let axis = t0.cross(d).normalize_or_zero();
+                                let o = d.dot(t0).clamp(-1.0, 1.0).acos() - std::f32::consts::FRAC_PI_2;
+                                let u = to_world(axis);
+                                if near(u, o) {
+                                    crate::extras_core_rdr2::trace_once("rage cone tip", || format!("rage cone's third row: {o:.3} past the tip of {big:.2}, narrow {small:.2}"));
+                                    dofs.push((u, o, None));
+                                }
+                            }
                         }
                     }
                 }

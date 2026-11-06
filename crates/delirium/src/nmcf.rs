@@ -380,7 +380,7 @@ pub(crate) fn clav_follow(ch: &mut Character, clav: usize, shoulder: usize) {
 
 // RDR2's catchFall (with the RDR2 core), from a study of RDR2's own catchFall: GTA IV's catchFall on RDR2's terms.
 // The balancer isn't kept beside it here, so the mode's hand-over of the legs to the balancer (+0x2b0, +0x467) has no use, and
-// its hip requests go nowhere unless one runs; the arm helpers' push flag (+0x5f, hips 12 not 8) isn't here;
+// its hip requests go nowhere unless one runs;
 // the both-arms-down event, the teeter edge clamp and the big-spin
 // stiffness aren't here.
 
@@ -397,6 +397,9 @@ struct RArm {
     target: Vec3,
     normal: Vec3,
     swing: (f32, f32),
+    /// hands and knees' push off the hand: +0x5f, and its timer +0x48 (init -0.1)
+    push: bool,
+    push_t: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -438,7 +441,7 @@ impl Rdr2Cf {
     fn arm_init(ch: &mut Character, len: f32) -> RArm {
         let (clav_lean1, clav_lean2, elbow) = (ch.random() * 0.4 - 0.4, ch.random() * 0.5, 0.7 + ch.random() * 0.6);
         let _ = len;
-        RArm { k: 1.0, clav_lean1, clav_lean2, elbow, elbow_on: false, target: Vec3::ZERO, normal: Vec3::Z, swing: (0.0, 0.0) }
+        RArm { k: 1.0, clav_lean1, clav_lean2, elbow, elbow_on: false, target: Vec3::ZERO, normal: Vec3::Z, swing: (0.0, 0.0), push: false, push_t: -0.1 }
     }
 }
 
@@ -645,7 +648,8 @@ impl CatchFall {
         ch.set_stiffness((p.legs_stiffness * 0.25).max(leg).max(4.0), 0.5, "lr", None);
         if r.hk {
             for i in 0..2 {
-                ch.eff[(*HIP())[i]].set_stiffness(8.0, 0.5, Some(0.5));
+                // 12 with the other hand pushing off (the mask's 0x2 reads helper 1's flag, 0x4 helper 0's)
+                ch.eff[(*HIP())[i]].set_stiffness(if r.arm[1 - i].push { 12.0 } else { 8.0 }, 0.5, Some(0.5));
             }
         }
         for (i, ka) in [(0, kl), (1, kr)] {
@@ -879,11 +883,33 @@ impl Rdr2Cf {
         let ul = u.length();
         if ul > reach {
             u *= reach / ul;
-        } else if ul < 0.4 && u.dot(normal) < 0.0 && !pushed {
-            u *= 0.4 / (ul + 1e-4);
+        } else if ul < (if self.hk { 1.5 } else { 0.4 }) && u.dot(normal) < 0.0 && !pushed {
+            u *= (if self.hk { 1.5 } else { 0.4 }) / (ul + 1e-4);
         }
         if u.length() > reach {
             u *= reach / u.length();
+        }
+        // Push-off (item 11), hands and knees only: a hand turned flat on what it touches shoves for 0.0835 s, one hand at a time
+        if self.hk {
+            let hand = c.b.pmat(l.p[3]).m;
+            if (hand.a * side).dot(normal) < 0.0 && hand.b.dot(normal) > 0.7 && !self.arm[1 - i].push && a.push_t < -0.3 {
+                (a.push, a.push_t) = (true, 0.0835);
+                crate::extras_core_rdr2::trace_first("catchFall: a hand pushes off");
+            }
+            if a.push {
+                u += normal * 0.3;
+                if u.length() > reach {
+                    u *= reach / u.length();
+                }
+            }
+            if a.push_t < 0.0 {
+                a.push = false;
+            }
+            if a.push_t >= 0.0 || (a.push_t >= -0.3 && c.b.doll.collided(&l.p)) {
+                a.push_t -= c.dt;
+            }
+        } else {
+            (a.push, a.push_t) = (false, -0.1);
         }
         target = shoulder + u;
         a.target = target;

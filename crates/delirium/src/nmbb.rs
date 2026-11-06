@@ -139,6 +139,8 @@ pub struct Out {
     pub rds: bool,
     pub rds_soft: bool,
     pub rds_end: bool,
+    /// fallingReaction 2 before the body lands: catchFall on the arms alone (its mask +0x68 = 0xfd800)
+    pub cf_arms: bool,
     /// RDR2: gshelp's writes on the core
     pub gs_help: bool,
 }
@@ -574,13 +576,13 @@ impl BodyBalance {
                 if self.rd.fall_end < -1.0 && b.doll.collided(&body) {
                     self.rd.fall_end = 0.0;
                 }
+                // Mode 2: rolls with the arms catching, and from the landing rolls on with catchFall stopped (0x2aed6ec)
                 if self.rd.fall_end >= 0.0 {
                     self.rd.fall_end += dt;
                     out.rds_end = true;
-                }
-                if self.rd.fall_end < 0.0 {
                     return out;
                 }
+                out.cf_arms = true;
             }
             // fallingReaction 0: catchFall with its defaults (8.25, 10, 13) scaled by armStiffness / 9
             let k = p.body_stiffness / 9.0;
