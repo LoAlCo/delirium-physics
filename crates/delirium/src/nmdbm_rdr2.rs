@@ -156,9 +156,9 @@ pub struct Params {
     pub start_flat_twist: f32,
     pub end_flat_twist: f32,
     pub ankle_twist_mult: f32,
-    /// the planted feet's yaw hold gain while the balancer runs (the core's 60 before), s^2 with s = 7.689, the damping
-    /// being 2s: RDR2 writes it every step, and its running value (+0x758, default unread) in run mode; here this one in
-    /// both
+    /// the planted feet's yaw hold gain while the balancer runs (the core's 60 before), s^2 with s = 7.7 (the message's
+    /// footSlipStiffness is s, its handler keeps s^2 and 2s), the damping being 2s: RDR2 writes it every step, and its
+    /// running value (+0x758) in run mode; here this one in both
     pub foot_slip_stiffness: f32,
     /// standing (below 1 m/s, not staggering), the stance ankle aims from the actual knee to the actual foot on the
     /// renormalised contact normal (RDR2's +0x9c state test is left out)
@@ -181,11 +181,16 @@ impl Default for Params {
                  fall_reduce_gravity_comp: false, min_leg_twist: -1.9, max_leg_twist: 0.2, ankle_keep_pelvis: false,
                  crouch: false, crouch_bend_thresh: 0.3, crouch_bend_max: 0.55, crouch_time: 0.5, crouch_stand_rate: 0.4,
                  crouch_hip_rate: 0.25, start_flat_twist: 0.05, end_flat_twist: 0.15, ankle_twist_mult: 20.0,
-                 foot_slip_stiffness: 59.126, flatter_static_feet: false }
+                 foot_slip_stiffness: 59.29, flatter_static_feet: false }
     }
 }
 
 impl Params {
+    /// configureBalance's value for one of these, as the message sends it.
+    pub fn set_message(&mut self, name: &str, v: f32) -> bool {
+        self.set(name, if name == "footSlipStiffness" { v * v } else { v })
+    }
+
     /// Sets one parameter by its RDR2 name; false when the name isn't one of these.
     pub fn set(&mut self, name: &str, v: f32) -> bool {
         match name {

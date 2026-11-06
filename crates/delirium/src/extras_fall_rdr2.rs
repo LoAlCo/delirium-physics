@@ -1387,11 +1387,11 @@ impl BcrRdr2 {
         let (at, n) = (v(p, "objectBehindVictimPos")?, v(p, "objectBehindVictimNormal")?);
         let p = BcrParams {
             behind: b(p, "objectBehindVictim", false)?.then_some((at, n)),
-            steps: i(p, "numStepsTillSlump", 3)?, zone: f(p, "exclusionZone", 0.2)?, leg_red: f(p, "impactLegStiffReduction", 3.0)?,
+            steps: i(p, "numStepsTillSlump", 4)?, zone: f(p, "exclusionZone", 0.2)?, leg_red: f(p, "impactLegStiffReduction", 3.0)?,
             slump_red: f(p, "slumpLegStiffReduction", 1.0)?, slump_rate: f(p, "slumpLegStiffRate", 8.0)?,
             spin_time: f(p, "glanceSpinTime", 0.5)?, mass: f(p, "ignoreColMassBelow", 20.0)?, volume: f(p, "ignoreColVolumeBelow", 0.1)?,
             rebound_mode: i(p, "reboundMode", 0)?, forward_mode: i(p, "forwardMode", 0)?, to_forward: f(p, "timeToForward", 0.5)?,
-            rebound: f(p, "reboundForce", 0.0)?, brace: b(p, "braceWall", false)?, stable: f(p, "stable2SlumpTime", 1.0)?,
+            rebound: f(p, "reboundForce", 0.0)?, brace: b(p, "braceWall", true)?, stable: f(p, "stable2SlumpTime", 1.0)?,
             react: f(p, "reactTime", 0.3)?, spin_mag: f(p, "glanceSpinMag", 50.0)?, spin_turn: f(p, "glanceSpinTurn", 40.0)?,
             spin_decay: f(p, "glanceSpinDecayMult", 0.3)?, spin_reduce: f(p, "glanceSpinReduce", 1.5)?, spin_min: 0.3,
             slump_mode: i(p, "slumpMode", 1)?, sit_start: f(p, "sitstarttime", 0.3)?, sit_rate: f(p, "sitrate", 1.0)?,
@@ -1407,7 +1407,7 @@ impl BcrRdr2 {
                 for (l, n) in limbs.iter_mut().zip(["snapLeftLeg", "snapRightLeg", "snapLeftArm", "snapRightArm", "snapSpine", "snapNeck"]) {
                     *l = b(p, n, false)?;
                 }
-                Some(BcrSnap { mag, random, hip: i(p, "snapHipType", 0)?, limbs, phased: b(p, "snapPhasedLegs", false)?, duration: f(p, "snapDuration", 0.0)? })
+                Some(BcrSnap { mag, random, hip: i(p, "snapHipType", 0)?, limbs, phased: b(p, "snapPhasedLegs", true)?, duration: f(p, "snapDuration", 0.0)? })
             } else {
                 None
             },

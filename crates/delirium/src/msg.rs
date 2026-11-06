@@ -257,6 +257,66 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "stepClampScale", kind: Kind::Float, used: true, doc: "" },
         Param { name: "balanceAbortThreshold", kind: Kind::Float, used: true, doc: "" },
         Param { name: "taperKneeStrength", kind: Kind::Bool, used: true, doc: "DBM+0xBFC bit 0x10: on from init; the game never sends it, but highFall clears it for good." },
+        Param { name: "maxBalanceTime", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "giveupHeight", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "fallMult", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "stepHeightInc4Step", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "startFlat", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "endFlat", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "slopeMinDot", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "noSlopeTime", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "slopeMoveFoot", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "ankleEquilibrium", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "legsApartRestep", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "legsApartMax", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "legsTogetherRestep", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "stepDecisionThreshold", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "stepWait", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "changeStepTime", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "runVel", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "legStiffnessRun", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "stepHeightRun", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "maxFootSpeed", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "predictionTime", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "predictionTimeVariance", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "stepClampScaleVariance", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "liftFeet", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "liftFeetVariance", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "leanAgainstVelocity", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "extraFeetApart", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "feetApartMin", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "feetApartMax", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "feetApartVel", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "sidewaysCheatForce", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "sidewaysThresh", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "ankleOffset", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "ankleMult", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "minKneeAngle", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "minLegTwist", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "maxLegTwist", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "crouchBendThresh", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "crouchBendMax", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "crouchTime", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "crouchStandRate", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "crouchHipRate", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "startFlatTwist", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "endFlatTwist", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "ankleTwistMult", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "footSlipStiffness", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "balanceIndefinitely", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "ankleBalance", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "alwaysStepWithFarthest", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "taperKneeStrengthRun", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "rampHipPitchOnFail", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "standUp", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "stepIfInSupport", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "fallReduceGravityComp", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "crouch", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "flatterStaticFeet", kind: Kind::Bool, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "maxSteps", kind: Kind::Int, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "fallType", kind: Kind::Int, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "stopWaddling", kind: Kind::Int, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "reset", kind: Kind::Bool, used: true, doc: "RDR2 core only: back to RDR2's defaults first" },
     ] },
     Message { name: "configureBalanceReset", params: &[
     ] },
@@ -864,6 +924,12 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
     } else if !one_shot {
         a.held_params(st, msg);
     }
+    // RDR2 core: a start reloads RDR2's registered defaults where they aren't GTA IV's
+    if start == Some(true) && a.rdr2_core.is_some() {
+        for (n, v) in rdr2_start_defaults(msg) {
+            set(st, msg, n, &v)?;
+        }
+    }
     // RDR2 core: StayUpright's message copies the template over the set, then its parameters
     if msg == "stayUpright" && a.rdr2_core.is_some() {
         (st.stay_upright.rdr2, st.stay_upright.side) = (Default::default(), None);
@@ -876,6 +942,20 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
             continue;
         }
         let prm = m.params.iter().find(|p| p.name == *name).ok_or(Error::Param)?;
+        // RDR2's configureBalance: the balancer's parameters, nothing without the RDR2 core
+        if msg == "configureBalance" && !matches!(*name, "legStiffness" | "stepHeight" | "stepClampScale" | "balanceAbortThreshold" | "taperKneeStrength") {
+            if a.rdr2_core.is_some() {
+                let x = match v { Value::Bool(b) => *b as i32 as f32, _ => v.f()? };
+                if *name == "reset" {
+                    if x != 0.0 {
+                        a.configure_balance_rdr2_reset();
+                    }
+                } else {
+                    a.configure_balance_rdr2(prm.name, x);
+                }
+            }
+            continue;
+        }
         if !prm.used {
             match prm.kind {
                 Kind::Float => drop(v.f()?),
@@ -896,7 +976,13 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
         "applyImpulse" => { let p = &st.apply_impulse; a.doll.equalized_impulse(p.part_index.max(0) as usize, p.impulse, p.hit_point, p.equalize_amount); }
         "bodyRelax" => { let p = &st.body_relax; a.body_relax_full(p.relaxation, p.damping, p.mask.as_deref(), p.hold_pose); }
         "configureBalance" => a.configure_balance(st.configure_balance.clone()),
-        "configureBalanceReset" => { st.configure_balance = Default::default(); a.configure_balance(Default::default()); }
+        "configureBalanceReset" => {
+            st.configure_balance = Default::default();
+            a.configure_balance(Default::default());
+            if a.rdr2_core.is_some() {
+                a.configure_balance_rdr2_reset();
+            }
+        }
         "defineAttachedObject" => { let p = &st.define_attached_object; if p.part_index >= 0 { a.define_attached_object(p.part_index as usize, p.world_pos, p.object_mass); } }
         "leanInDirection" => { let p = &st.lean_in_direction; a.lean_in_direction(p.dir, p.lean_amount, f32::INFINITY, p.apply_as_force); }
         "leanToPosition" => { let p = &st.lean_to_position; a.lean_to(crate::nmdbm::LeanMode::Pos(p.pos), p.lean_amount, p.apply_as_force); }
@@ -945,6 +1031,18 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
         reset(st, msg);
     }
     Ok(unused)
+}
+
+/// What RDR2 registers for these where the message's defaults here are GTA IV's.
+fn rdr2_start_defaults(msg: &str) -> Vec<(&'static str, Value)> {
+    use Value::{Bool as B, Float as F};
+    match msg {
+        "bodyBalance" => vec![("elbow", F(0.9)), ("armsOutOnPush", B(true)), ("armsOutOnPushMultiplier", F(1.0)), ("armsOutOnPushTimeout", F(1.1)),
+                              ("bendElbowsTime", F(0.3)), ("useBodyTurn", B(true))],
+        "catchFall" => vec![("legsStiffness", F(8.25)), ("armsStiffness", F(13.0)), ("torsoStiffness", F(10.0))],
+        "braceForImpact" => vec![("reachAbsorbtionTime", F(0.15)), ("braceDistance", F(0.5)), ("targetPredictionTime", F(0.45))],
+        _ => vec![],
+    }
 }
 
 fn reset(st: &mut State, msg: &str) {

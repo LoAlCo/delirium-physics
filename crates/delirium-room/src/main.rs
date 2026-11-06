@@ -27,6 +27,7 @@ mod fluid;
 #[allow(dead_code)]
 mod fluid_gpu;
 mod foam;
+mod gametask;
 mod getup;
 mod learn;
 mod locomotion;
@@ -3916,7 +3917,49 @@ impl Sim {
         }
     }
 
+    /// `rdr2 task <set>`: a set of the player's physicstasks file, its messages sent as the game would. The set is named
+    /// by the '/' pieces of its path in the file, in order, each a name or its hash: the first set that has them all runs.
+    fn fire_task(&mut self, sel: &str) {
+        let trace = std::env::var_os("RDR2_TRACE").is_some();
+        let dir = std::env::args().skip_while(|a| a != "--tune-dir").nth(1).or_else(|| std::env::var("RDR2_TUNE_DIR").ok()).unwrap_or_default();
+        let file = match gametask::read_file(&dir) {
+            Ok(f) => f,
+            Err(e) => return self.say(format!("room  rdr2 task: {e} (--tune-dir <folder with your physicstasks xml>)")),
+        };
+        let Some(sets) = gametask::sets(&file) else { return self.say("room  rdr2 task: couldn't read the file".into()) };
+        let mut hits = sets.iter().filter(|s| gametask::selects(sel, &s.path));
+        let Some(set) = hits.next() else { return self.say(format!("room  rdr2 task: no set {sel} of {}", sets.len())) };
+        let (mut sent, mut left) = (0, vec![]);
+        let mut lines = vec![];
+        for m in &set.messages {
+            match gametask::port_message(m.hash) {
+                _ if m.task_side => left.push(format!("{} (the task's own, not NM)", m.label)),
+                None => left.push(format!("{} (no such message, {} parameters)", m.label, m.params.len())),
+                Some(port) => {
+                    let (l, rest) = gametask::line(m, port);
+                    sent += 1;
+                    left.extend(rest.into_iter().map(|r| format!("{}: {r}", port.name)));
+                    lines.push(l);
+                }
+            }
+        }
+        let head = format!("room  rdr2 task {} (enabled {}; {} more match): {sent} of {} messages, {} left out",
+                           set.path.join("/"), set.enabled, hits.count(), set.messages.len(), left.len());
+        if trace {
+            eprintln!("{head}");
+            lines.iter().for_each(|l| eprintln!("task send: {l}"));
+            left.iter().for_each(|l| eprintln!("task left: {l}"));
+        }
+        self.say(head);
+        for l in lines {
+            self.send(&l);
+        }
+    }
+
     fn button(&mut self, b: &str) {
+        if let Some(sel) = b.strip_prefix("rdr2 task ") {
+            return self.fire_task(sel);
+        }
         match b {
             "camera" => {
                 self.relock = true;
@@ -10348,7 +10391,10 @@ fn headless(mut sim: Sim, n: usize) {
             sim.say(format!("nmx  push part {k}: dv {dv:?}"));
         }
         for (_, l) in sends.iter().filter(|(f, _)| *f == i) {
-            sim.send(l);
+            match l.starts_with("rdr2 task ") {
+                true => sim.button(l),
+                false => sim.send(l),
+            }
         }
         // test hook: RDR2_HOLD_INCOMING=<frame> makes the pose at that frame the incoming animation from then on
         if hold_incoming == Some(i) {
