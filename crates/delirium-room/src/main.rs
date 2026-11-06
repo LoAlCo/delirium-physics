@@ -3026,11 +3026,7 @@ impl Sim {
 
     fn send_ours(&mut self, o: Vec<String>) {
         self.held = false;
-        for mut l in o {
-            // the game's sets' values for the shot go in its start: a running shot takes values a hit too late
-            if l.starts_with("shot start=true") {
-                l += &std::mem::take(&mut self.game_shot);
-            }
+        for l in o {
             self.send(&l);
         }
     }
@@ -5210,6 +5206,11 @@ impl Sim {
     }
 
     fn send(&mut self, line: &str) {
+        // the game's sets' values for the shot go in its start: a running shot takes values a hit too late
+        if line.starts_with("shot start=true") && !self.game_shot.is_empty() {
+            let l = format!("{line}{}", std::mem::take(&mut self.game_shot));
+            return self.send(&l);
+        }
         self.send_to(0, line);
         if line.starts_with("stopAllBehaviours") && self.hanging() {
             let (lines, free) = self.hang.clone().unwrap();
