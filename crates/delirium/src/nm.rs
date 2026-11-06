@@ -2774,11 +2774,24 @@ impl Agent {
         self.doll.contact_off = self.nm_gr.contact_off | self.extras.contact_off;
         if let Some(pairs) = crate::nmrs::SELF[build.nm].get().filter(|_| build.parts.len() == delirium_data::nm_asset::PARTS.len()) {
             let legs = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).is_some_and(|d| d.held);
+            // RDR2 (0x2a2b884, masks 0x32 and 0xc4 while the balancer runs): between the legs a foot's contacts go, and the rest
+            // stay without friction
+            let masks = self.rdr2_core.is_some() && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
+            let legs = legs && self.rdr2_core.is_none();
+            let (lf, rf) = match self.ch.as_ref() {
+                Some(ch) => {
+                    let side = |i: usize| [(*HIP())[i], (*KNEE())[i], (*ANKLE())[i]].map(|j| ch.joints[j].child);
+                    (side(0), side(1))
+                }
+                None => ([0; 3], [0; 3]),
+            };
+            self.doll.slip_legs = masks.then_some([[lf[0], lf[1]], [rf[0], rf[1]]]);
+            let foot_met = |&(a, b): &(usize, usize)| masks && ((lf.contains(&a) && rf.contains(&b)) || (lf.contains(&b) && rf.contains(&a))) && [lf[2], rf[2]].iter().any(|&f| f == a || f == b);
             let hands = self.nm_fl.hands_off;
             // RDR2 core's pointGun: its arms leave these parts alone (nothing without it)
             let off: Vec<(Vec<usize>, Vec<usize>)> = self.extras.pair_off.iter().map(|&(m, i)| (crate::extras_ysk_rdr2::parts(m), crate::extras_ysk_rdr2::parts(i))).collect();
             let off = |&(a, b): &(usize, usize)| off.iter().any(|(m, i)| (m.contains(&a) && i.contains(&b)) || (m.contains(&b) && i.contains(&a)));
-            let on = |p: &(usize, usize)| pair_on(*p, legs, hands) && !off(p);
+            let on = |p: &(usize, usize)| pair_on(*p, legs, hands) && !off(p) && !foot_met(p);
             if self.doll.pairs.len() != pairs.iter().filter(|p| on(p)).count() {
                 self.doll.pairs = game_pairs(pairs.iter().copied().filter(on));
             }

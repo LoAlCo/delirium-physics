@@ -1631,6 +1631,9 @@ pub struct Ragdoll {
     pub touch: Vec<u8>,
     /// The pairs of its own parts that met this step (RDR2's knees and thighs test), lower part first.
     pub self_met: Vec<(usize, usize)>,
+    /// RDR2 core, while the balancer runs (ctx+0x2ec8, +0x2ecc; 0x2a2b884): the left and the right leg's thigh and calf meet
+    /// without friction, and only once they touch.
+    pub slip_legs: Option<[[usize; 2]; 2]>,
     pub contact_off: u32,
     pub hit: Vec<Option<(Vec3, Vec3, i32)>>,
     /// `hit` without his own parts: `hit`'s id is -1 for himself and for the static world alike (RDR2 core's BCR)
@@ -1777,7 +1780,7 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { fric_clamp: None, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+        Ragdoll { fric_clamp: None, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
                   sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
@@ -2700,8 +2703,9 @@ impl Ragdoll {
             let held = &mut self.held_pairs[pi];
             let off = (self.contact_off >> a | self.contact_off >> c) & 1 != 0;
             held.iter_mut().for_each(|r| r.off |= off);
+            let slip = self.slip_legs.is_some_and(|[l, r]| (l.contains(&a) && r.contains(&c)) || (l.contains(&c) && r.contains(&a)));
             for (x, r) in held.iter().enumerate() {
-                if r.off {
+                if r.off || (slip && r.gap > 0.0) {
                     self_seq.push(None);
                     continue;
                 }
@@ -2720,7 +2724,7 @@ impl Ragdoll {
                 let e = (PART_ELASTICITY() * PART_ELASTICITY()) as f64;
                 let j = frame(n).map(pair);
                 let to = DVec3::new((-over.max(0.0) / h) as f64 - fv(&j[0]) / (1.0 + e), -fv(&j[1]), -fv(&j[2]));
-                let mu = part_friction(&build.parts[a]) * part_friction(&build.parts[c]);
+                let mu = if slip { 0.0 } else { part_friction(&build.parts[a]) * part_friction(&build.parts[c]) };
                 let g = {
                     let ts = frame(n);
                     let rv = (Vec3::ZERO - artic::at_point(fc[a], ra)) - (Vec3::ZERO - artic::at_point(fc[c], rc));
