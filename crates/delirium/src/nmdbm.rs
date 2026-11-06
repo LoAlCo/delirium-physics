@@ -510,7 +510,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     let leg = &s.legs[i];
     let stance = f.pos[1 - i];
     // RDR2's "other foot farther" needs a margin (bal+0x314): 0.2 leg lengths, 0.01 turning
-    let margin = p.rdr2.map_or(0.0, |r| if r.turning { 0.01 } else { 0.2 });
+    let margin = p.rdr2.map_or(0.0, |r| if r.turning && !r.turn_margin { 0.01 } else { 0.2 });
     if if two { f.dist[1] < f.dist[0] - margin } else { f.dist[0] < f.dist[1] - margin } {
         f.flags |= delirium_data::kv!(23 int);
     }
@@ -1299,6 +1299,8 @@ pub struct Dbm {
     pub acc: f32,
     pub leg_offset: f32,
     pub knee_scale: f32,
+    /// RDR2 core: the leg stiffness per leg, left and right, when asked (bal+0x658, +0x65c)
+    pub leg_each: Option<[f32; 2]>,
     pub lean: Lean,
     lean_vec: Vec3,
     as_force: bool,
@@ -1417,7 +1419,7 @@ impl Dbm {
             eprintln!("YAWINIT splay {splay:.4} turn {turn:.4}");
         }
         let pv = Pelvis { centre: f.centre, p52: p.lean_bias, p68: delirium_data::kv!(26), yaw: [turn - splay, -turn - splay], ..default() };
-        let mut d = Dbm { p, f, pv, acc: 0.0, leg_offset: 0.0, knee_scale: 1.0, lean: Lean::default(), lean_vec: Vec3::ZERO, as_force: false, push: Vec3::ZERO, ratio: 0.0, event: None, success: false, held: false, last: (Vec3::Z, Vec3::ZERO), hip_lean: Vec3::ZERO,
+        let mut d = Dbm { p, f, pv, acc: 0.0, leg_offset: 0.0, knee_scale: 1.0, leg_each: None, lean: Lean::default(), lean_vec: Vec3::ZERO, as_force: false, push: Vec3::ZERO, ratio: 0.0, event: None, success: false, held: false, last: (Vec3::Z, Vec3::ZERO), hip_lean: Vec3::ZERO,
             down: (0..2).any(|i| b.doll.touch[b.ch.joints[(*ANKLE())[i]].child] & delirium_data::kv!(7 int) != 0) };
         d.held = d.holding(&b.snap(up), l, r, None);
         d
@@ -1705,18 +1707,20 @@ impl Dbm {
         let k = self.p.leg_stiffness * self.knee_scale;
         // RDR2's leg stiffness setter (every step): hips, knees and ankles at k (damping ratio 1), hip muscle 1.5, knee
         // muscle 2, and spine joint 0 at the stiffer leg's (the knees are then set again below)
+        let each = self.leg_each.filter(|_| self.p.rdr2.is_some()).unwrap_or([self.p.leg_stiffness; 2]);
         if self.p.rdr2.is_some() {
             for i in 0..2 {
-                ch.eff[(*HIP())[i]].set_stiffness(self.p.leg_stiffness, 1.0, Some(1.5));
-                ch.eff[(*KNEE())[i]].set_stiffness(self.p.leg_stiffness, 1.0, Some(2.0));
-                ch.eff[(*ANKLE())[i]].set_stiffness(self.p.leg_stiffness, 1.0, None);
+                ch.eff[(*HIP())[i]].set_stiffness(each[i], 1.0, Some(1.5));
+                ch.eff[(*KNEE())[i]].set_stiffness(each[i], 1.0, Some(2.0));
+                ch.eff[(*ANKLE())[i]].set_stiffness(each[i], 1.0, None);
             }
-            ch.eff[(*SPINE())[0]].set_stiffness(self.p.leg_stiffness, 1.0, None);
+            ch.eff[(*SPINE())[0]].set_stiffness(each[0].max(each[1]), 1.0, None);
         }
         for i in 0..2 {
             let touching = s.flags & [delirium_data::kv!(251 int), delirium_data::kv!(7 int)][i] != 0;
             ch.eff[(*ANKLE())[i]].muscle_stiffness = if touching { delirium_data::kv!(31) } else { soft };
             let planted = self.f.flags & [delirium_data::kv!(251 int), delirium_data::kv!(253 int)][i] != 0;
+            let k = if self.leg_each.is_some() && self.p.rdr2.is_some() { each[i] * self.knee_scale } else { k };
             let knee = &mut ch.eff[(*KNEE())[i]];
             if planted {
                 let f = if self.p.taper { (-(-s.legs[i].knee.actual - delirium_data::kv!(12))).fma(delirium_data::kv!(275), 1.0).clamp(delirium_data::kv!(60), 1.0) } else { 1.0 };

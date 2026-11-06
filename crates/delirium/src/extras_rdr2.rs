@@ -375,6 +375,28 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "snapPhasedLegs", kind: Kind::Bool, used: true, doc: "the right leg kicks the other way (true)" },
     ] },
     Message { name: "rdr2Lasso", params: &[
+        Param { name: "neckFootFriction", kind: Kind::Float, used: true, doc: "RDR2 core: round the neck, the feet moving slowly (+0xcc, 0.1)" },
+        Param { name: "pedalWhenSlow", kind: Kind::Bool, used: true, doc: "RDR2 core: down, face down, the legs may pedal when slow (+0x110, false)" },
+        Param { name: "spineAmpUp", kind: Kind::Float, used: true, doc: "RDR2 core: down, face up, the writhe (+0x124, 0.4)" },
+        Param { name: "spineAmpUpNeck", kind: Kind::Float, used: true, doc: "RDR2 core: and round the neck (+0x128, 0.4)" },
+        Param { name: "spineAmpDown", kind: Kind::Float, used: true, doc: "RDR2 core: down, face down, not round the neck (+0x12c, 1)" },
+        Param { name: "spineBigAmp", kind: Kind::Float, used: true, doc: "RDR2 core: down, the big writhe (+0x130, 4)" },
+        Param { name: "spineBigAmpUp", kind: Kind::Float, used: true, doc: "RDR2 core: and face up (+0x134, 0.4)" },
+        Param { name: "spineAmp138", kind: Kind::Float, used: true, doc: "RDR2 core: in RDR2's table, no reader (+0x138, 0.4)" },
+        Param { name: "spineAmp13c", kind: Kind::Float, used: true, doc: "RDR2 core: in RDR2's table, no reader (+0x13c, 1)" },
+        Param { name: "headGrabProb", kind: Kind::Float, used: true, doc: "RDR2 core: the head's chance of looking at a grab (+0x210, 0.333)" },
+        Param { name: "armFeetProb", kind: Kind::Vec3, used: true, doc: "RDR2 core: on his feet, the arms' chances of nothing, the rope (+0x220, 0.2,0.7,0)" },
+        Param { name: "armDownProb", kind: Kind::Vec3, used: true, doc: "RDR2 core: down, the arms' chances of reach, windmill, the rope (+0x240, 0.55,0,0.1)" },
+        Param { name: "rightGrabsAfter", kind: Kind::Bool, used: true, doc: "RDR2 core: round the feet, the right hand grabs again after a grab (+0x250, true)" },
+        Param { name: "limpRate", kind: Kind::Float, used: true, doc: "RDR2 core: down, how fast a noise makes him limp, 0 never (+0x27c, 0)" },
+        Param { name: "struggle", kind: Kind::Float, used: true, doc: "RDR2 core: down, -1 weak .. 1 hard (+0x280, 0)" },
+        Param { name: "bolasHeadShare", kind: Kind::Float, used: true, doc: "RDR2 core: the impulse on the head, chest lassoed (+0x2b4, 0.05)" },
+        Param { name: "bolasFeet", kind: Kind::Float, used: true, doc: "RDR2 core: the impulse round the feet (+0x2b8, 1000)" },
+        Param { name: "bolasSlow", kind: Kind::Float, used: true, doc: "RDR2 core: round the chest, slow (+0x2bc, 3000)" },
+        Param { name: "bolasNeck", kind: Kind::Float, used: true, doc: "RDR2 core: round the neck (+0x2c0, 2500)" },
+        Param { name: "bolasFast", kind: Kind::Float, used: true, doc: "RDR2 core: round the chest, fast (+0x2c4, 5000)" },
+        Param { name: "bolasFirst", kind: Kind::Float, used: true, doc: "RDR2 core: s before the first (+0x2cc, 0.1)" },
+        Param { name: "bolasPeriod", kind: Kind::Float, used: true, doc: "RDR2 core: s between them (+0x2d0, 0.065)" },
         Param { name: "lassoedtype", kind: Kind::Int, used: true, doc: "where the rope is: 0 round his neck (his hands claw at it), 1 round his chest and arms (arms pinned, he wriggles), 2 round his feet (legs held together, his arms reach out past his head clawing at the ground) (0)" },
         Param { name: "grabPart", kind: Kind::Int, used: true, doc: "round the neck: the part his hands claw at (11, the neck; -1: they don't)" },
         Param { name: "grabposl", kind: Kind::Vec3, used: true, doc: "where the left hand claws, from that part: forward, left, up (0.07,0.05,-0.051)" },
@@ -3802,9 +3824,7 @@ impl Lasso {
         let (leg_d, arm_d, spine_d) = (p.f("groundLegDamping", 0.5)?, p.f("groundArmDamping", 0.5)?, p.f("groundSpineDamping", 0.5)?);
         let mut y = crate::extras_ysk_rdr2::YankedParams::new(p)?;
         y.lassoed = p.i("lassoedtype", 0)?.clamp(0, 2);
-        if p.i("grabPart", 11)? >= 0 {
-            y.grab_part = p.i("grabPart", 11)?.clamp(0, 20) as usize;
-        }
+        // (RDR2's default grabPart is the chest, as YankedParams has it; this message's 11 is the GTA IV path's)
         y.rope_part = p.i("ropePart", 10)?.clamp(0, 20) as usize;
         Ok(Lasso {
             r2: Box::new(crate::extras_ysk_rdr2::YankedRdr2::new(y)),

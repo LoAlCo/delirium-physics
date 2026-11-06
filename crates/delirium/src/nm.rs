@@ -2149,6 +2149,14 @@ impl Agent {
                 if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
                     r.limp = x;
                 }
+                // RDR2 core: yanked's turn block
+                if let (Some(x), Some(r)) = (out.dbm_turn_margin, d.p.rdr2.as_mut()) {
+                    r.turn_margin = x;
+                }
+                // RDR2 core: yanked's leg stiffness per leg
+                if out.dbm_leg_each.is_some() {
+                    d.leg_each = out.dbm_leg_each;
+                }
                 // RDR2 core: the hip lean (none asked: none)
                 d.hip_lean = out.hip_lean.unwrap_or(Vec3::ZERO);
                 // RDR2 core: the crouch requests (owner, knee bend, hip pitch)
