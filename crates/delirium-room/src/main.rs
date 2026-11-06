@@ -3353,7 +3353,10 @@ impl Sim {
         }
         let (hit, now) = (self.hit(), self.now());
         let mut rdr2 = if self.rdr2 { self.rdr2_shot(part, at, d) } else { vec![] };
-        rdr2.extend(self.game_shot_lines(part, d));
+        // the bullet's template and strength come before the bullet, as the game's list does; the rest with the reactions
+        let (early, later): (Vec<_>, Vec<_>) = self.game_shot_lines(part, d).into_iter().partition(|l| l.starts_with("configureBullets") || l.starts_with("setCharacterStrength"));
+        o.splice(0..0, early);
+        rdr2.extend(later);
         match self.shot_task.as_mut() {
             Some((t, _)) => {
                 o.extend(t.next_hit(&mut self.rand, &self.tp, &hit, now, set, part, at, vel, n).iter().map(shottask::text));
