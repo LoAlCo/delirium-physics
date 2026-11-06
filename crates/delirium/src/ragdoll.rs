@@ -729,6 +729,7 @@ struct G11 {
     u: Vec3,
     t: f32,
     k: f32,
+    mu: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -1119,12 +1120,15 @@ fn impulses_g(rows: &mut [Row], blocks: &mut [Block], artic: &Artic, base: Vec<a
             push7(&mut lz, &mut vb, g, d, &mut moved);
             *r0 -= d;
         }
-        for (r, r0) in rows.iter().zip(&mut r11) {
-            let g = r.g.unwrap();
+        for i in 0..rows.len() {
+            let g = rows[i].g.unwrap();
             let (wc, wp) = lz.spins(g.c);
             let v = wc.vd(g.u) - wp.vd(g.u);
             let x = ((0.0 - v) - g.t) * g.k;
-            let d = if 0.0 > x - *r0 { *r0 } else { x };
+            let d = if 0.0 > x - r11[i] { r11[i] } else { x };
+            // RDR2 core: the lean limit's second row, friction under its normal's impulse (0x285e3d0, 0x28ae758)
+            let d = if g.mu > 0.0 { d.min(g.mu * -r11[i - 1] + r11[i]) } else { d };
+            let r0 = &mut r11[i];
             let f = 0.0 - d;
             moved = Vec3::new(f.mul_add(f, moved.x), x.mul_add(x, moved.y), x.mul_add(x, moved.z));
             let pp = (Vec3::ZERO * -f, g.u * -f);
@@ -2459,7 +2463,100 @@ impl Ragdoll {
         }
     }
 
+    /// RDR2 core: Rage's joint limit rows (0x285e3d0, slot +0x38 of the joints 0x2875868, 0x2875a78, 0x2865304, 0x28655fc, 0x282531c,
+    /// rdr2_shot_gaps.md 12.1). The rows meet the velocities as they are after gravity and the muscles (0x283997c runs first).
+    fn limit_rows_rage(&mut self, artic: &Artic, joints: &[Option<Joint>], h: f32, dvw: &[(Vec3, Vec3)]) -> (Vec<Row>, Vec<Row>) {
+        const NEAR: f32 = 0.015;
+        // How fast the joint may close on the stop, by how far past it o is (o < 0: short of it)
+        let allowed = |o: f32| {
+            if o < 0.0 {
+                return -o / h;
+            }
+            -(o.min(0.015) * 0.05 / h + (o.clamp(0.015, 0.03) - 0.015) * (720.0 * h).min(1.0 / h))
+        };
+        // The position pass, as a speed over the step: nothing inside 0.03 past, half the rest after
+        let correct = |o: f32| (if o < 0.0 { o } else { (o.clamp(0.03, 2.0) - 0.03) * 0.5 }) / h;
+        self.prep_twist = vec![None; joints.len()];
+        let b = &self.bodies;
+        let n = 6 * b.len();
+        let (mut found, mut prep): (Vec<(Vec<f64>, f32, G11)>, Vec<(usize, f32)>) = (vec![], vec![]);
+        for (k, j) in joints.iter().enumerate() {
+            let Some(j) = *j else { continue };
+            let (pl, cl) = (b[j.parent].link(), b[k].link());
+            let rate = |u: Vec3| u.dot(cl.w - pl.w) + u.dot(dvw[k].1 - dvw[j.parent].1);
+            // Direction into the stop, past it by, friction row's direction
+            let mut dofs: Vec<(Vec3, f32, Option<Vec3>)> = vec![];
+            let near = |u: Vec3, o: f32| o.max(o + h * rate(u)) >= -NEAR;
+            match j.kind {
+                Kind::Hinge { lo, hi } => {
+                    let (lo, hi) = hinge_limits(lo, hi);
+                    let n = artic.axis[k].unwrap_or_else(|| crate::rigid::hinge_axis(&j.jc, &cl));
+                    let a = crate::rigid::hinge_about(&j.jc, &pl, &cl, n);
+                    for (u, o) in [(n, a - hi), (-n, lo - a)] {
+                        if near(u, o) {
+                            dofs.push((u, o, None));
+                        }
+                    }
+                }
+                Kind::Ball { lean, twist } => {
+                    let st = crate::rigid::swing3(&j.jc, &pl, &cl);
+                    prep.push((k, st.twist));
+                    let l = (twist - LIMIT_MARGIN()).max(0.0);
+                    let axis = crate::rigid::ldot(&cl.r, crate::rigid::col(&j.jc.cm, 2));
+                    for (u, o) in [(axis, st.twist - l), (-axis, -st.twist - l)] {
+                        if near(u, o) {
+                            dofs.push((u, o, None));
+                        }
+                    }
+                    if st.theta > 0.0 {
+                        let [l0, l1] = lean.map(|l| (l - LIMIT_MARGIN()).max(0.0).max(delirium_data::kv!(72)));
+                        let (c1, c0) = (st.s.dot(crate::rigid::col(&st.pr, 1)) / l0, st.s.dot(crate::rigid::col(&st.pr, 0)) / l1);
+                        let o = st.theta - 1.0 / (c0 * c0 + c1 * c1).sqrt();
+                        if near(st.s, o) {
+                            let w = rate(st.across);
+                            dofs.push((st.s, o, Some(if w < 0.0 { -st.across } else { st.across })));
+                        }
+                    }
+                }
+            }
+            for (u, o, across) in dofs {
+                let mut row = |u: Vec3, t: f32, mu: f32| {
+                    let mut jr = vec![0.0; n];
+                    for i in 0..3 {
+                        jr[6 * k + 3 + i] = -u[i] as f64;
+                        jr[6 * j.parent + 3 + i] += u[i] as f64;
+                    }
+                    let q = u.dot(artic.answer(k, u));
+                    found.push((jr, o, G11 { c: k, p: j.parent, u, t, k: -1.0 / q, mu }));
+                };
+                row(u, rate(u) - allowed(o), 0.0);
+                if let Some(a) = across {
+                    row(a, rate(a), 0.2);
+                }
+            }
+        }
+        for (k, t) in prep {
+            self.prep_twist[k] = Some(t);
+        }
+        let (mut rows, mut push) = (vec![], vec![]);
+        for g in found.chunks(4) {
+            let mj = artic.solve_rows(std::array::from_fn::<_, 4, _>(|i| &g[i.min(g.len() - 1)].0[..]));
+            for ((jr, o, g11), mj) in g.iter().cloned().zip(mj) {
+                let mut r = Row::with(jr, mj, -g11.t as f64, RowKind::Push);
+                if g11.mu == 0.0 {
+                    push.push(Row { j: r.j.clone(), mj: r.mj.clone(), target: correct(o) as f64, g: Some(G11 { t: correct(o), ..g11 }), ..r.clone() });
+                }
+                r.g = Some(g11);
+                rows.push(r);
+            }
+        }
+        (rows, push)
+    }
+
     fn limit_rows(&mut self, artic: &Artic, joints: &[Option<Joint>], h: f32, qd0: &[f64], dvw: &[(Vec3, Vec3)]) -> (Vec<Row>, Vec<Row>) {
+        if self.nm_first {
+            return self.limit_rows_rage(artic, joints, h, dvw);
+        }
         self.prep_twist = vec![None; joints.len()];
         let mut touched: Vec<bool> = self.held.iter().map(|h| !h.is_empty()).collect();
         touched.resize(joints.len(), false);
@@ -2510,28 +2607,17 @@ impl Ragdoll {
                     jr[delirium_data::kv!(6 int) * j.parent + delirium_data::kv!(0 int) + i] += u[i] as f64;
                 }
                 let b0 = -jr.iter().zip(qd0).map(|(x, y)| x * y).sum::<f64>();
-                // RDR2 core: the stop is the margin's limit itself, GTA IV's rows go a margin past it. Recorded, a stance knee stops at
-                // -0.033 with no speed left; the Rage code for it isn't read
-                let lm = if self.nm_first { 0.0 } else { LIMIT_MARGIN() };
-                let to = (c as f64 - 1.0) * b0 - ((lm - o).max(0.0) / h) as f64 + bs.map_or(0.0, |w| b0 - w as f64);
+                let to = (c as f64 - 1.0) * b0 - ((LIMIT_MARGIN() - o).max(0.0) / h) as f64 + bs.map_or(0.0, |w| b0 - w as f64);
                 let bv = match order {
                     Some(order) => sdot(cl.w, u, order) - sdot(pl.w, u, order),
                     None => bs.unwrap_or(0.0),
                 };
-                let m = lm - o;
+                let m = LIMIT_MARGIN() - o;
                 let m = if -m >= 0.0 { 0.0 } else { m };
                 let t = fneg(m.mul_add(1.0 / h, -(bv * c)));
-                // RDR2 core: this step's forces count against the stop. Recorded, a knee at its stop has no speed left (0.00 rad/s
-                // against 2 to 3 here with GTA IV's rows, where the drive's push over the step stays in the velocity)
-                let (to, t) = if self.nm_first {
-                    let d = u.dot(dvw[k].1 - dvw[j.parent].1) * c;
-                    (to + d as f64, t + d)
-                } else {
-                    (to, t)
-                };
                 let q = sdot(u, artic.answer(k, u), b"yzx") * c;
                 let r = crate::estimate::vrefp(q);
-                found.push((jr, to, if self.nm_first { o + LIMIT_MARGIN() } else { o }, c, G11 { c: k, p: j.parent, u, t, k: 0.0 - r.mul_add(fneg(r.mul_add(q, -1.0)), r) }));
+                found.push((jr, to, o, c, G11 { c: k, p: j.parent, u, t, k: 0.0 - r.mul_add(fneg(r.mul_add(q, -1.0)), r), mu: 0.0 }));
             }
         }
         for g in found.chunks(delirium_data::kv!(1 int)) {
@@ -3439,7 +3525,9 @@ impl Ragdoll {
         let fallen = lt.clone();
         let before: Vec<Acc> = lt.clone();
         let mut limit_ev = vec![];
-        self.limits(&artic, &joints, h, &mut limit_ev);
+        if !self.nm_first {
+            self.limits(&artic, &joints, h, &mut limit_ev);
+        }
         apply(&joints, &limit_ev, &mut lt);
         self.stage_lim = lt.iter().zip(&before).map(|(a, b)| a.1 - b.1).collect();
         self.stage_lt = lt.iter().map(|&(f, t)| v6(f.as_dvec3(), t.as_dvec3())).collect();
@@ -3463,7 +3551,9 @@ impl Ragdoll {
             let artic = self.artic(&joints);
             let mut lt = fallen;
             let mut limit_ev = vec![];
-            self.limits(&artic, &joints, h, &mut limit_ev);
+            if !self.nm_first {
+                self.limits(&artic, &joints, h, &mut limit_ev);
+            }
             apply(&joints, &limit_ev, &mut lt);
             let dvw: Vec<(Vec3, Vec3)> = self.velocities(&artic, &lt, h, true).iter().zip(&self.bodies).map(|(&(v, w), b)| (v - b.v, w - b.w)).collect();
             self.armature = artic.arm.clone();
