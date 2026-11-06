@@ -406,8 +406,14 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
             return;
         }
     }
-    let a = f.dist[0] > f.dist[1] && free;
-    let b = f.dist[1] > f.dist[0] && free;
+    // RDR2, moving sideways or staggering (0x2ab32bc): after a step the other foot leads this decision; before the first
+    // there's no last foot and no lead
+    let mut d = f.dist;
+    if let Some(i) = r.filter(|r| r.sideways || r.stagger).and_then(|r| r.last_foot) {
+        d[1 - i] += crate::nmdbm_rdr2::Rdr2::alternate();
+    }
+    let a = d[0] > d[1] && free;
+    let b = d[1] > d[0] && free;
     if let Some(r) = r {
         if f.stepping != 0 && r.redecide() {
             f.stepping = 0;
@@ -559,10 +565,6 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
         None => (target_a, target_b),
     };
     f.dist = [slen(shz(target_a - lpos, up, b"yxz"), b"zyx"), slen(shz(target_b - rpos, up, b"yzx"), b"zyx")];
-    // RDR2, moving sideways: after each step the other foot leads the decision
-    if let Some(r) = p.rdr2.filter(|r| r.sideways || r.stagger) {
-        f.dist[1 - r.last_foot] += crate::nmdbm_rdr2::Rdr2::alternate();
-    }
     // RDR2 (0x2ab127c): while the foot that gave way waits, no decision and no landing
     let waiting = |f: &Feet| p.rdr2.is_some_and(|r| (f.stepping == 1 && r.wait[1] > 0.0) || (f.stepping == 2 && r.wait[0] > 0.0));
     if !waiting(f) {
@@ -703,7 +705,9 @@ fn yaw(k: f32, pelvis: &M34, w: Vec3, toward: bool, predict: bool, angvel: Vec3)
 pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
     let up = p.up;
     let [pl, pr] = pv.planted;
-    let both = pl && pr && !p.rdr2.is_some_and(|r| r.kneeling);
+    // RDR2 (0x2ab3bb4): staggering doesn't count as both planted, and the pitch target stays where it is (bal+0x337)
+    let staggering = p.rdr2.is_some_and(|r| r.stagger);
+    let both = pl && pr && !staggering && !p.rdr2.is_some_and(|r| r.kneeling);
     pv.off = shz(s.pelvis.m.d - s.com, up, b"zyx");
     let w = if pv.fixed_vel { pv.vel } else { s.hvel };
     // RDR2: slower than useComDirTurnVelThresh the twist takes the way he faces, not the velocity
@@ -769,6 +773,8 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
         if let Some(r) = p.rdr2.filter(|r| r.steps > 0) {
             pv.acc -= if r.p.ankle_balance { (-0.4 * c).clamp(-0.03, 0.2) + 0.03 } else { (-0.7 * c).clamp(0.0, 0.5) };
         }
+    } else if staggering {
+        pv.out[1] = 0.0;
     } else {
         pv.out[1] = 0.0;
         pv.acc -= match p.rdr2 {
@@ -1899,7 +1905,7 @@ impl Dbm {
                 (r.landed, r.turning) = (true, false);
             }
             if let i @ 1..=2 = self.f.stepping {
-                r.last_foot = i as usize - 1;
+                r.last_foot = Some(i as usize - 1);
             }
             let v = horizontal(s.hvel, self.p.up);
             // RDR2's sideways force (stage 3, 0x2abc4ec): on one foot, the heading error to his way (the way he faces below

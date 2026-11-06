@@ -253,6 +253,19 @@ impl Extras {
         self.tick_marked(c, None, obs, dt, None);
     }
 
+    /// RDR2's stopAllBehaviours also queues a neutral request on each limb (0x2a5bce0, type 5): the pose held, stiffness 5,
+    /// damping 0.5, under whatever asks this step. So it goes before any behaviour of the step writes.
+    pub fn neutral_limbs(&self, ch: &mut crate::nmrs::Character, frames: &[Transform]) {
+        if self.stop_soft && ch.rdr2 {
+            crate::extras_core_rdr2::trace_once("neutral limbs", String::new);
+            for j in 0..ch.eff.len() {
+                let a = ch.actual(j, frames);
+                ch.eff[j].desired = a;
+                ch.eff[j].set_stiffness(5.0, 0.5, None);
+            }
+        }
+    }
+
     /// As `tick`; with the RDR2 core's limb requests, each extra's writes are a request at its RDR2 behaviour's slot.
     pub fn tick_marked(&mut self, c: &mut Ctx, world: Option<&crate::collision::Collision>, obs: &[crate::ragdoll::Obstacle], dt: f32,
                        mut reqs: Option<&mut crate::limbreq::Requests>) {
@@ -266,16 +279,6 @@ impl Extras {
         }
         if std::mem::take(&mut self.stop_soft) {
             c.ch.core.cfg.soft.iter_mut().for_each(|r| r.on = false);
-            // RDR2's stopAllBehaviours also queues a neutral request on each limb (0x2a5bce0, type 5): the pose held, stiffness
-            // 5, damping 0.5, under whatever asks this step
-            if c.ch.rdr2 {
-                crate::extras_core_rdr2::trace_once("neutral limbs", String::new);
-                for j in 0..c.ch.eff.len() {
-                    let a = c.ch.actual(j, c.b.frames);
-                    c.ch.eff[j].desired = a;
-                    c.ch.eff[j].set_stiffness(5.0, 0.5, None);
-                }
-            }
         }
         c.extras_on = self.on.iter().map(|(n, _)| *n).collect();
         self.sit_state = self.on.iter().find_map(|(_, e)| e.sit_state());

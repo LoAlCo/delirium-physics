@@ -1036,6 +1036,7 @@ impl Shot {
         let from = if (*SP()).contains(&p.body_part) { c.b.at(p.body_part) } else { c.com };
         self.side = sdot(at - from, c.m.a, b"zyx").clamp(-2.0, 2.0);
         if c.ch.rdr2 {
+            self.side = self.side_lever_rdr2(c, at);
             self.intake_rdr2(c, at);
         }
     }
@@ -1908,13 +1909,43 @@ pub(crate) fn apply_strength(c: &mut Ctx, s: &Strength, dt: f32) {
 impl Shot {
     /// RDR2's bullet intake for the core: the bullet's lean and twist over the body, the weakness and neck ramps
     /// restarted (alwaysResetLooseness), the exaggeration set going.
+    /// RDR2's reference part for a hit (0x2a94a10): the hit part on the trunk, neck and head (0x102709); the pelvis for the
+    /// legs and hands (0x900f6, the spine limb's +0x3f0 [P]); else the chest (+0x410).
+    fn reference_part(part: usize) -> usize {
+        match part {
+            0 | 7..=12 => part,
+            1..=6 | 16 | 20 => 0,
+            _ => (*SP())[4],
+        }
+    }
+
+    /// RDR2's side lever +0x708 (0x2a94a10), by what was hit: y is the reference part's second row. The trunk: minus the
+    /// hit's local y. Neck and head: its local x. Clavicles: from the reference, along y. An arm: minus its shoulder from
+    /// the reference ([P] +0x418 is the shoulder), a leg: minus its hip.
+    fn side_lever_rdr2(&self, c: &Ctx, at: Vec3) -> f32 {
+        let part = self.p.body_part;
+        let m = c.b.part(Self::reference_part(part)).m;
+        let along = |x: Vec3| (x - m.d).dot(m.b);
+        let lever = match part {
+            0 | 7..=10 => -self.hit_local.y,
+            11 | 12 => self.hit_local.x,
+            13 | 17 => along(at),
+            14..=16 => -along(c.b.joint_pos((*SHOULDER())[0])),
+            18..=20 => -along(c.b.joint_pos((*SHOULDER())[1])),
+            1..=3 => -along(c.b.joint_pos((*HIP())[0])),
+            4..=6 => -along(c.b.joint_pos((*HIP())[1])),
+            _ => 0.0,
+        };
+        crate::extras_core_rdr2::trace(|| format!("shot: side lever {lever:.3}"));
+        lever.clamp(-2.0, 2.0)
+    }
+
     fn intake_rdr2(&mut self, c: &mut Ctx, at: Vec3) {
         let (p, up) = (self.p, c.up);
         let r = p.rdr2;
         let flat = |v: Vec3| horizontal(v, up).normalize_or_zero();
         let d = flat(p.bullet_vel);
-        let part = if (*SP()).contains(&p.body_part) { p.body_part } else { (*SP())[4] };
-        let pm = c.b.part(part).m;
+        let pm = c.b.part(Self::reference_part(p.body_part)).m;
         let leg = (c.b.joint_pos((*HIP())[0]) - c.b.joint_pos((*ANKLE())[0])).length().max(0.1);
         let lever = pm.a.vd((at - pm.d).vx(p.bullet_vel.normalize_or_zero())) / leg;
         let mut lean = [-flat(c.m.c).vd(d), -flat(c.m.a).vd(d), lever];

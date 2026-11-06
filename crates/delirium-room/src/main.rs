@@ -3359,8 +3359,28 @@ impl Sim {
         let mut rdr2 = if self.rdr2 && !game_sets { self.rdr2_shot(part, at, d) } else { vec![] };
         // the bullet's template and strength come before the bullet, as the game's list does; the rest with the reactions
         let (early, later): (Vec<_>, Vec<_>) = self.game_shot_lines(part, at, d).into_iter().partition(|l| l.starts_with("configureBullets") || l.starts_with("setCharacterStrength"));
-        o.splice(0..0, early);
+        // RDR2 core: the shot task's post goes out with the bullet, and the impulse is last on its list (0x1c6eb20), so the
+        // joints have the shot's strengths on the tick the bullet lands (recorded at the first NM step)
         rdr2.extend(later);
+        if self.rdr2_core {
+            let core_bullet = std::mem::take(&mut o);
+            match self.shot_task.as_mut() {
+                Some((t, _)) => {
+                    o.extend(early);
+                    o.extend(t.next_hit(&mut self.rand, &self.tp, &hit, now, set, part, at, vel, n).iter().map(shottask::text));
+                    o.extend(rdr2);
+                    self.send_ours(o);
+                }
+                None => {
+                    self.send_ours(early);
+                    self.shot_task = Some((ShotTask::new(&hit, set, part, at, vel, n), self.steps.saturating_sub(2)));
+                    self.rdr2_after = rdr2;
+                    self.shot_frame();
+                }
+            }
+            return self.send_ours(core_bullet);
+        }
+        o.splice(0..0, early);
         match self.shot_task.as_mut() {
             Some((t, _)) => {
                 o.extend(t.next_hit(&mut self.rand, &self.tp, &hit, now, set, part, at, vel, n).iter().map(shottask::text));

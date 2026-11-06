@@ -668,7 +668,7 @@ pub struct Rdr2 {
     pub prev_swing: Option<(usize, bevy_math::Vec3)>,
     pub sideways: bool,
     /// the foot that stepped last (0 left, 1 right)
-    pub last_foot: usize,
+    pub last_foot: Option<usize>,
     /// a behaviour asked the balancer to face a way (RDR2's turn step), and this step's leg-twist limits and lift
     pub turning: bool,
     /// the heading asked this tick is bodyBalance's, which asks no turn step
@@ -723,7 +723,7 @@ impl Rdr2 {
         Rdr2 { p, turn_margin: false, time: 0.0, still: 0.0, straight: (0.99, 1.0), steps: 0, extra_steps: 0, down_swing: [false; 2], up_now: bevy_math::Vec3::Z, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
                since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, run_fast: false, wait: [0.0; 2], give_way: false, push_off: false, falling: false, limp: (0, 0.0), limp_cfg: LimpCfg::default(), lift_mult: [-1.0; 2], forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
-               width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false, heading_only: false,
+               width_scale: 1.0, prev_swing: None, sideways: false, last_foot: None, turning: false, heading_only: false,
                leg_twist: RESET_LEG_TWIST, turn_lift: p.turn_lift_feet, turn_facing: None, force_balance: false, fail_ratio: (0.0, 0.0), quality: 0.0, abort: None, must_collide: false, kneeling: false, force_fail: false, pause: 0.0, aligned: false, landed: false, crouching: None,
                started: false, first_tick: true, twist_rest: 0.0, car: None, stagger: false, lead: None, lead_add: 0.0, taper: true, plane: None }
     }

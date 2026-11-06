@@ -1560,6 +1560,12 @@ impl Agent {
     }
 
     pub(crate) fn substep(&mut self, build: &Build, world: &Collision, dt: f32, obstacles: &[Obstacle], others: &[Capsule]) {
+        // RDR2 core: a message's behaviours have run before the physics step after it: recorded, the first NM step holds
+        // the shot's strengths and no momentum yet, and the next holds the bullet's momentum
+        if self.rdr2_core.is_some() {
+            self.behave(build, world, dt, obstacles);
+            return self.physics(build, world, dt, obstacles, others);
+        }
         self.physics(build, world, dt, obstacles, others);
         self.behave(build, world, dt, obstacles);
     }
@@ -1590,6 +1596,9 @@ impl Agent {
             if last {
                 agents.iter_mut().for_each(|a| a.0.contact_wake = false);
             }
+            for ((a, _, b, ..), ob) in agents.iter_mut().zip(&here).filter(|(a, _)| !a.0.contact_wake && a.0.rdr2_core.is_some()) {
+                a.behave(b, world, h, ob);
+            }
             let kept: Vec<Option<crate::ragdoll::Kept>> = agents.iter_mut().map(|(a, _, b, ..)| if a.contact_wake { None } else { a.physics_drive(b, h) }).collect();
             let mut ms: Vec<crate::ragdoll::Member> = agents.iter_mut().zip(&kept).zip(&here).filter_map(|(((a, id, b, _, ot), k), ob)| {
                 k.as_ref().map(|k| crate::ragdoll::Member { doll: &mut a.doll, id: *id, build: b, drive: k.drive(), obstacles: ob, others: ot })
@@ -1603,7 +1612,7 @@ impl Agent {
                     a.physics_done(h);
                 }
             }
-            for ((a, _, b, ..), ob) in agents.iter_mut().zip(&here).filter(|(a, _)| !a.0.contact_wake) {
+            for ((a, _, b, ..), ob) in agents.iter_mut().zip(&here).filter(|(a, _)| !a.0.contact_wake && a.0.rdr2_core.is_none()) {
                 a.behave(b, world, h, ob);
             }
         }
@@ -1682,6 +1691,7 @@ impl Agent {
             let body = crate::nmdbm::Body { ch, build, doll: &self.doll, frames: &frames };
             let (block, read) = (body.block(), (0..ch.joints.len()).map(|j| body.read(j)).collect());
             (ch.block, ch.read) = (Some(block), read);
+            self.extras.neutral_limbs(ch, &frames);
         }
         self.limb_reqs = match (self.ch.as_ref(), self.rdr2_core) {
             (Some(ch), Some(p)) if p.limb_requests && nm_tick => Some(crate::limbreq::Requests::begin(&ch.eff)),
