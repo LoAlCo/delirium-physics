@@ -1213,16 +1213,19 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
                 Some(_) => (predict_knee(&leg.hip, &leg.knee, side), target[i]),
                 None => (predict_knee(&leg.hip, &leg.knee, side), target[i]),
             };
+            // RDR2 (0x2aaeed8): the ankle balance lays the foot on the contact normal itself, not on the pelvis frame's turn of it
+            // (with the single support pitch target that turn is 0.3 rad; recorded stance pitch flat - 0.12)
+            let contact_n = if balancing { p.normal[i] } else { normal[i] };
             if let Some((_, tilt)) = aim {
                 // RDR2 (0x2aaeed8): tilted only for a planted foot with the COM over the feet and no step on; otherwise
                 // the balancing pitch is the flat one
-                let n = if f.inside_raw && f.stepping == 0 { bevy_math::Quat::from_rotation_arc(Vec3::Z, tilt) * normal[i] } else { normal[i] };
+                let n = if f.inside_raw && f.stepping == 0 { bevy_math::Quat::from_rotation_arc(Vec3::Z, tilt) * contact_n } else { contact_n };
                 bal[i] = asin(sdot(leg.knee.m.c, vnorm(k - foot).vx(n), b"xyz"));
                 let d = vnorm(k - foot);
                 let tw = |n: Vec3| asin(vnorm(n.vx(leg.knee.m.c)).vd(d.vx(n)));
-                twist_flat[i] = Some((tw(normal[i]), tw(n)));
+                twist_flat[i] = Some((tw(contact_n), tw(n)));
             }
-            let n = if flat { normal[i].normalize_or_zero() } else { normal[i] };
+            let n = if flat { contact_n.normalize_or_zero() } else { contact_n };
             let a = asin(sdot(leg.knee.m.c, vnorm(k - foot).vx(n), b"xyz"));
             // RDR2 (0x2aae0b4): the knee-to-foot aim is for the ankle balance, flatterStaticFeet and staggering; otherwise
             // (not a running foot in the air, which aims from the actual knee) the stance ankle's pitch is 0
