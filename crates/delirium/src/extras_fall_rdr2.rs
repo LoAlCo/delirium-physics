@@ -2432,6 +2432,7 @@ impl FallOverWall {
         let c2 = if p.angle_dir > 90.0 { 1.0 } else { p.angle_dir.to_radians().cos().abs() };
         let toward = flat(c.vel).normalize_or_zero().dot(self.n) < c2;
         let low = p.max_wall_height < 0.0 || up.dot(self.a).min(up.dot(self.b)) - up.dot(feet[0]).min(up.dot(feet[1])) < p.max_wall_height;
+        if std::env::var_os("NMX_WD").is_some() { eprintln!("WD lf {:.2} lean {:.2}<{:.2} toward {} low {} approach {:?}", lf, lean, c1, toward, low, self.approach); } // NMXHOOK
         if lf > p.min_leg_height && lean < c1 && toward && low {
             // (the bend values are re-taken in state 2; RDR2 also draws a random bit here that nothing reads)
             c.ch.random();
@@ -2578,6 +2579,7 @@ impl Extra for FallOverWall {
         };
         if self.state != was {
             c.out.send(EVENT(), "fallOverWallState", self.state as f32);
+            if std::env::var_os("NMX_WD").is_some() { eprintln!("WD state {}", self.state); } // NMXHOOK
         }
         match self.state {
             1 | 4 | 5 => c.out.send(FAILURE(), "fallOverWall", 0.0),

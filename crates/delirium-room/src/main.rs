@@ -10029,7 +10029,7 @@ impl Sim {
             .filter(|(p, _)| p.checked_sub(1).map_or(!learning, |i| bench.get(i).is_none_or(|b| b.learned.is_none())))
             .map(|(p, a)| (a, &hero[..], ped_build(build, bench, crowd, p)))
             .chain(doll).enumerate().map(|(i, (a, o, b))| (a, i, b, &car[..], o)).collect();
-        Agent::step_group(&mut all, &self.world, 1.0 / 60.0, &mut self.group, &mut |_, _, _| {});
+        Agent::step_group(&mut all, &self.world, 1.0 / std::env::var("NMX_HZ").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(60.0), &mut self.group, &mut |_, _, _| {}); // NMXHOOK
         if let Some(h) = self.horse.as_mut() {
             // ridden, Homer's body doesn't push on it (held in the seat, he'd act as if he weighed everything)
             let riding = self.riding && self.agent.extras.on.iter().any(|(n, _)| *n == "rdr2Sit");
