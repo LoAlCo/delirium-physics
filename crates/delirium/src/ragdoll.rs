@@ -1544,6 +1544,27 @@ fn box_meets_tri(c: Vec3, m: Mat3, e: Vec3, t: [Vec3; 3]) -> bool {
 #[inline]
 fn LIGHTEST() -> f32 { delirium_data::kv!(68) }
 
+/// RDR2 rig: each part's own capsules (ends in its link's frame, radius): `Ragdoll::slip_legs`.
+pub static LINK_CAPSULES: std::sync::RwLock<Vec<Vec<(Vec3, Vec3, f32)>>> = std::sync::RwLock::new(vec![]);
+
+/// The nearest distance between segments p0-p1 and q0-q1.
+fn segments_apart(p0: Vec3, p1: Vec3, q0: Vec3, q1: Vec3) -> f32 {
+    let (d1, d2, r) = (p1 - p0, q1 - q0, p0 - q0);
+    let (a, e, f) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
+    let (c, b) = (d1.dot(r), d1.dot(d2));
+    let den = a * e - b * b;
+    let mut s = if den > 1e-9 { ((b * f - c * e) / den).clamp(0.0, 1.0) } else { 0.0 };
+    let mut t = if e > 1e-9 { (b * s + f) / e } else { 0.0 };
+    if t < 0.0 {
+        t = 0.0;
+        s = if a > 1e-9 { (-c / a).clamp(0.0, 1.0) } else { 0.0 };
+    } else if t > 1.0 {
+        t = 1.0;
+        s = if a > 1e-9 { ((b - c) / a).clamp(0.0, 1.0) } else { 0.0 };
+    }
+    ((p0 + d1 * s) - (q0 + d2 * t)).length()
+}
+
 fn part_shape(p: &PartDef) -> gjk::Shape {
     match p.boxed {
         Some(e) => gjk::Shape::Box(e - Vec3::splat(BOX_MARGIN()), BOX_MARGIN()),
@@ -1631,8 +1652,9 @@ pub struct Ragdoll {
     pub touch: Vec<u8>,
     /// The pairs of its own parts that met this step (RDR2's knees and thighs test), lower part first.
     pub self_met: Vec<(usize, usize)>,
-    /// RDR2 core, while the balancer runs (ctx+0x2ec8, +0x2ecc; 0x2a2b884): the left and the right leg's thigh and calf meet
-    /// without friction, and only once they touch.
+    /// RDR2 core, while the balancer runs (ctx+0x2ec8, +0x2ecc; 0x2a2b884): the left and the right leg's thigh and calf.
+    /// Calves meet without friction and only once they touch. Thighs and calves report meeting (RDR2's ctx+0x34b1, +0x34b0)
+    /// by the link's own capsules: a thigh here is one capsule at its widest, which would touch all the time.
     pub slip_legs: Option<[[usize; 2]; 2]>,
     pub contact_off: u32,
     pub hit: Vec<Option<(Vec3, Vec3, i32)>>,
@@ -2692,7 +2714,7 @@ impl Ragdoll {
             let held = &mut self.held_pairs[pi];
             let off = (self.contact_off >> a | self.contact_off >> c) & 1 != 0;
             held.iter_mut().for_each(|r| r.off |= off);
-            let slip = self.slip_legs.is_some_and(|[l, r]| (l.contains(&a) && r.contains(&c)) || (l.contains(&c) && r.contains(&a)));
+            let slip = self.slip_legs.is_some_and(|[l, r]| (l[1] == a && r[1] == c) || (l[1] == c && r[1] == a));
             for (x, r) in held.iter().enumerate() {
                 if r.off || (slip && r.gap > 0.0) {
                     self_seq.push(None);
@@ -2705,7 +2727,6 @@ impl Ragdoll {
                 let (at_a, at_c) = if r.age == 1 { (r.world, r.wc) } else { (crate::vm4(wa.1.x_axis, wa.1.y_axis, wa.1.z_axis, wa.0, r.local), crate::vm4(wc.1.x_axis, wc.1.y_axis, wc.1.z_axis, wc.0, r.ground)) };
                 let (ra, rc) = (at_a - rw, at_c - rw);
                 self_touch.extend([(a, at_a, n, -r.gap), (c, at_c, -n, -r.gap)]);
-                self.self_met.push((a.min(c), a.max(c)));
                 let (at_a, at_c) = (lever(at_a), lever(at_c));
                 let pair = |dir: Vec3| -> Vec<f64> {
                     lrow(a, at_a, d(dir), DVec3::ZERO).iter().zip(lrow(c, at_c, d(dir), DVec3::ZERO)).map(|(x, y)| x - y).collect()
@@ -2727,6 +2748,20 @@ impl Ragdoll {
             }
         }
         let n_self = blocks.len();
+        if let Some([l, r]) = self.slip_legs {
+            let caps = LINK_CAPSULES.read().unwrap();
+            let turns = self.turns();
+            let world = |k: usize, v: Vec3| crate::vm4(turns[k].x_axis, turns[k].y_axis, turns[k].z_axis, self.bound_world(k), v);
+            let mut met = vec![];
+            for (a, c) in [(l[0], r[0]), (l[1], r[1])] {
+                let (Some(ca), Some(cc)) = (caps.get(a), caps.get(c)) else { continue };
+                if ca.iter().any(|x| cc.iter().any(|y| segments_apart(world(a, x.0), world(a, x.1), world(c, y.0), world(c, y.1)) < x.2 + y.2)) {
+                    met.push((a.min(c), a.max(c)));
+                }
+            }
+            drop(caps);
+            self.self_met.extend(met);
+        }
         for (k, a) in accs.iter().enumerate().filter(|(_, a)| a.2 > 0.0) {
             self.hit_out[k] = touch_hit(*a).map(|h| (h.0, h.1, a.2));
         }
