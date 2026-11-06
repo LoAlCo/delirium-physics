@@ -2429,7 +2429,7 @@ impl ReachForWound {
         Ok(ReachForWound {
             point: p.v("hitPoint", Vec3::ZERO)?, part: p.i("hitPart", -1)?, bullet: p.v("bulletVel", Vec3::ZERO)?,
             enabled: p.b("enabled", true)?,
-            wait: p.f("timeBeforeReachForWound", 0.2)?.max(0.0), hold: p.f("grabHoldTime", 2.0)?.max(0.0),
+            wait: std::env::var("NMX_RFW").ok().and_then(|v| v.split(' ').next().and_then(|x| x.parse().ok())).map_or(p.f("timeBeforeReachForWound", 0.2)?.max(0.0), |w| { let _ = p.f("timeBeforeReachForWound", 0.2); w }), hold: p.f("grabHoldTime", 2.0)?.max(0.0),
             one_given: p.get("reachWithOneHand").is_some(), one_hand: p.b("reachWithOneHand", true)?, thigh: p.b("allowInjuredThighReach", true)?,
             lower_leg: p.b("allowInjuredLowerLegReach", false)?, arm_stiffness,
             spine_bend: p.f("bend2spine", 0.7)?, hip_bend: p.f("bend2hip", 0.6)?, knee_bend: p.f("bend2leg", 0.6)?,
@@ -2863,6 +2863,7 @@ impl ReachForWound {
         // (RDR2 registers 0: both hands, unless the message says)
         if self.one_hand && (self.one_given || !c.ch.rdr2) && ok == [true; 2] {
             let left = if leg { part_side(part as i32) == Some(0) } else { (point - c.com).dot(side) > 0.0 };
+            let left = std::env::var("NMX_RFW").ok().and_then(|v| v.split(' ').nth(1).map(|x| x == "1")).unwrap_or(left);
             ok = [left, !left];
         }
         let spread = ok == [true; 2] && !leg && !arm && !head;

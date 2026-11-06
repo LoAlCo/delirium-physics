@@ -1197,9 +1197,12 @@ struct Sim {
     rig_rdr2: bool,
     /// where the player's export of RDR2's human ragdoll is (see `rdr2body::find`)
     rig_body: String,
+    nmx_lift: f32,
     rig_dir: String,
     /// RDR2 reactions waiting for the shot task's first messages (which would stop them)
     rdr2_after: Vec<String>,
+    /// the shot task's fallOverWallState set has gone (task+0x9db bit 8)
+    wall_sent: bool,
     /// the values of the game's sets for the next shot's start (RDR2_GAME_SETS)
     game_shot: String,
     /// RDR2's onFire running (Red Dead Redemption 2 style, while he burns)
@@ -3373,6 +3376,7 @@ impl Sim {
                 }
                 None => {
                     self.send_ours(early);
+                    self.wall_sent = false;
                     self.shot_task = Some((ShotTask::new(&hit, set, part, at, vel, n), self.steps.saturating_sub(2)));
                     self.rdr2_after = rdr2;
                     self.shot_frame();
@@ -3387,6 +3391,7 @@ impl Sim {
                 o.extend(rdr2);
             }
             None => {
+                self.wall_sent = false;
                 self.shot_task = Some((ShotTask::new(&hit, set, part, at, vel, n), self.steps));
                 self.rdr2_after = rdr2;
             }
@@ -5536,7 +5541,8 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
     let (fp, ft) = world::floor_tris(room.pool, 50.0);
     world.add(&fp, &ft, &vec![concrete; ft.len()]);
     let (p, t, m) = room.triangles();
-    world.add(&p, &t, &m);
+    // comparison hook: NMX_CLEAR=1 leaves only the floor, so a long stagger meets no furniture
+    if std::env::var("NMX_CLEAR").is_err() { world.add(&p, &t, &m); }
     if let Some(i) = room.snap {
         let (p, t, m) = room.block_triangles(i);
         world.add_chunk(SNAP_CHUNK, &p, &t, &m);
@@ -5549,7 +5555,7 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
     let mut sim = Sim { build, frames, world, tp, agent, msgs: msg::State::default(), paused: false, speed: 1.0, acc: 0.0, steps: 0, arrows: false,
                         shot_task: None, rand: Default::default(),
                         log: VecDeque::new(), console: String::new(), script, typing: false,
-                        game_shot: String::new(), weapons, weapon: 0, weak: false, sel: 0, over_ui: false, held: true,   show_ui: true, sens: 0.5, rec, health: 200.0, god: false, aim_gun: false, gun: Gun::default(), blast_task: None, burning: 0.0, shock: 0.0, charred: vec![], voxels: vec![], on_fire: None, hero_gun: false, passive: true, homer: None, homer_weapon: None, homer_wait: None, homer_wild: false, gun_ai: false, homer_combat: None, homer_guard: None, homer_rest: 0.0, ammo: 0, reloading: None, taxis: vec![], driving: false, pedals: (0.0, 0.0, false), car_tune: None, lean_stop: None, hurt: [0.0; 4], near_at: -9.0, near_last: -9.0, dived: false, no_dodge: false, dodge_gap: DODGE_GAP, look_stop: None, dodge_at: 0.0, dodging: false, look_after: None, fall: None, hold: None, airborne: false, wet: false, hero_alpha: 0.6, render_scale: 1.0, msaa: 4, msaa_max: 4, shadow_q: 3, frame_ms: 0.0, gpu: String::new(), gpu_now: String::new(), gpus: None, aa: AA_MSAA, smaa_q: 2, dlss_q: 0, fsr_q: 1, fsr_ok: false, xess_q: 1, xess_ok: false, sharpen: 0.0, sharp_by: [0.0; 9], ssao: 0, ao_strength: 1.0, bloom: 0.0, dof: 0.0, contact: 0.0, contact_k: 1.0, vignette: 0.0, lens: 0.0, chroma: 0.0, rt: 0, rt_ok: false, sky: 2, god_rays: false, restir: false, fire: 2, water_q: 1, real_fire: false, voxel_water: false, real_water: false, real_drain: false, pouring: false, real_surface: false, real_ripples: false, water_clear: true, wet_trail: true, water_impact: true, water_faucet: true, real_level: None, flow: vec![], hero_flow: vec![], water_caustics: false, water_spray: false, water_waves: false, water_pixels: false, water_haze: false, water_mirror: false, water_foam: false, water_mist: false, photons: false, water_fine: false, water_depth: true, water_relax: false, water_ghost: false, water_vort: false, water_spray_phys: false, safe: false, fire_light: true, fire_homer: false, shadow_filter: 0, water_wet: false, wet_film: false, wet_drips: false, sky_shade: false, water_traced: false, glass_tint: true, glass_shade: true, water_ripples: true, water_refract: false, flood: None, smoke: true, view_px: UVec2::ONE, defaults: String::new(), upscaler: UP_FSR1, dlss_ok: false, fps_limit: FPS_VSYNC, extra: false, rdr2: false, rdr2_core: false, rig_rdr2: false, rig_dir: String::new(), rig_body: String::new(), rdr2_after: vec![], rdr2_fire: false, horse: None, horse_file: String::new(), horse_frag: String::new(), riding: false, rdr2_pick: Default::default(), param_edits: Default::default(), param_search: String::new(), param_changed_only: false, extra_pick: 0xff, fire_react: true, dive: false, hang: None, was_fallen: false, curled: false, super_punch: false, even: false, crush: None, cab_gas: 0.0, cam: None, look_z: 0.8, film: 0.0, photo: false, soft: true, shadows: true, sun_color: [1.0; 3], fill_k: 1.0, gun_reach: 1.0, gun_up: 0.0, gun_off: Vec3::ZERO, gun_aim_off: Vec3::ZERO, crane: None, crane_to: None, shadow: 0.0, strict: false, stairs_rolled: false, cam_head: false, cam_rig: None, spawn_at: None, tear_k: 1.0, sky_k: 1.0, kept_gun: None, cam_floor: f32::MIN, pov: false, film_vel: Vec3::ZERO, photo_pending: false, on_cue: vec![], photo_follow: false, detached: false, cam_at: None, cam2: None, cam2_queue: vec![], cam2_b: None, meat: None, meat_on: true, meat_wipe: false, skate3_bails: false, meat_screen: None, shot_scene: String::new(), photo_note: String::new(), script_walk: Vec3::ZERO, throw_speed: None, homer_shot: 0.0, hero_physics: true, hero_doll: None, tackle: None, cuts: vec![], hat: None, dismember: false, jump: None, steam: (0, vec![]), #[cfg(feature = "portal")] portal: portal::Portals::new(), click_at: None,
+                        game_shot: String::new(), weapons, weapon: 0, weak: false, sel: 0, over_ui: false, held: true,   show_ui: true, sens: 0.5, rec, health: 200.0, god: false, aim_gun: false, gun: Gun::default(), blast_task: None, burning: 0.0, shock: 0.0, charred: vec![], voxels: vec![], on_fire: None, hero_gun: false, passive: true, homer: None, homer_weapon: None, homer_wait: None, homer_wild: false, gun_ai: false, homer_combat: None, homer_guard: None, homer_rest: 0.0, ammo: 0, reloading: None, taxis: vec![], driving: false, pedals: (0.0, 0.0, false), car_tune: None, lean_stop: None, hurt: [0.0; 4], near_at: -9.0, near_last: -9.0, dived: false, no_dodge: false, dodge_gap: DODGE_GAP, look_stop: None, dodge_at: 0.0, dodging: false, look_after: None, fall: None, hold: None, airborne: false, wet: false, hero_alpha: 0.6, render_scale: 1.0, msaa: 4, msaa_max: 4, shadow_q: 3, frame_ms: 0.0, gpu: String::new(), gpu_now: String::new(), gpus: None, aa: AA_MSAA, smaa_q: 2, dlss_q: 0, fsr_q: 1, fsr_ok: false, xess_q: 1, xess_ok: false, sharpen: 0.0, sharp_by: [0.0; 9], ssao: 0, ao_strength: 1.0, bloom: 0.0, dof: 0.0, contact: 0.0, contact_k: 1.0, vignette: 0.0, lens: 0.0, chroma: 0.0, rt: 0, rt_ok: false, sky: 2, god_rays: false, restir: false, fire: 2, water_q: 1, real_fire: false, voxel_water: false, real_water: false, real_drain: false, pouring: false, real_surface: false, real_ripples: false, water_clear: true, wet_trail: true, water_impact: true, water_faucet: true, real_level: None, flow: vec![], hero_flow: vec![], water_caustics: false, water_spray: false, water_waves: false, water_pixels: false, water_haze: false, water_mirror: false, water_foam: false, water_mist: false, photons: false, water_fine: false, water_depth: true, water_relax: false, water_ghost: false, water_vort: false, water_spray_phys: false, safe: false, fire_light: true, fire_homer: false, shadow_filter: 0, water_wet: false, wet_film: false, wet_drips: false, sky_shade: false, water_traced: false, glass_tint: true, glass_shade: true, water_ripples: true, water_refract: false, flood: None, smoke: true, view_px: UVec2::ONE, defaults: String::new(), upscaler: UP_FSR1, dlss_ok: false, fps_limit: FPS_VSYNC, extra: false, rdr2: false, rdr2_core: false, rig_rdr2: false, rig_dir: String::new(), rig_body: String::new(), nmx_lift: 0.0, rdr2_after: vec![], wall_sent: false, rdr2_fire: false, horse: None, horse_file: String::new(), horse_frag: String::new(), riding: false, rdr2_pick: Default::default(), param_edits: Default::default(), param_search: String::new(), param_changed_only: false, extra_pick: 0xff, fire_react: true, dive: false, hang: None, was_fallen: false, curled: false, super_punch: false, even: false, crush: None, cab_gas: 0.0, cam: None, look_z: 0.8, film: 0.0, photo: false, soft: true, shadows: true, sun_color: [1.0; 3], fill_k: 1.0, gun_reach: 1.0, gun_up: 0.0, gun_off: Vec3::ZERO, gun_aim_off: Vec3::ZERO, crane: None, crane_to: None, shadow: 0.0, strict: false, stairs_rolled: false, cam_head: false, cam_rig: None, spawn_at: None, tear_k: 1.0, sky_k: 1.0, kept_gun: None, cam_floor: f32::MIN, pov: false, film_vel: Vec3::ZERO, photo_pending: false, on_cue: vec![], photo_follow: false, detached: false, cam_at: None, cam2: None, cam2_queue: vec![], cam2_b: None, meat: None, meat_on: true, meat_wipe: false, skate3_bails: false, meat_screen: None, shot_scene: String::new(), photo_note: String::new(), script_walk: Vec3::ZERO, throw_speed: None, homer_shot: 0.0, hero_physics: true, hero_doll: None, tackle: None, cuts: vec![], hat: None, dismember: false, jump: None, steam: (0, vec![]), #[cfg(feature = "portal")] portal: portal::Portals::new(), click_at: None,
                         getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None,   click_shoots: false,
                         grab: None, glow: vec![], rings: vec![], ripples: vec![], ripple_wait: vec![], tape: Default::default(), replay: None, throw_at: None, pops: vec![], pop_screen: vec![], show_pops: true, tab: 1, sounds: vec![], sound: true, volume: [1.0, 1.0, 0.35], blood: vec![], pixel_blood: true, gore: false, layers: true, wounds: vec![], show_ripples: false, infinite: false, fx_seed: 1, pointer: None, crowd_hp: vec![], car_hit: vec![], car_reacts: vec![], help: !help_seen(), auto_balance: true, dead: false, hero: None, skate: None, skate_link: skate_files::Link::new(), agility,
                         scene: None, switch_to: None, poke: POKE, game_dir: game_dir.map(str::to_string), walk: true, relock: false, cam_locked: true, walk_dir: Vec3::ZERO, wander: Default::default(), getup_mode: 0, musc: None, learned: None, walk_learned: None, preview_on: false, preview: None, preview_wait: false, preview_keys: (false, false), script_jog: false, watch: None, bench: vec![], homer_id: 0, spawn_body: body, base, crowd_build, body, skin: saved_look(), ped_color: 0, body_alpha: BODY_ALPHA, eyes: true, brows: true, skel: true, skel_style: 0, clean: false, sun_dir: saved_sun() };
@@ -10109,9 +10115,251 @@ impl Sim {
             self.both(|_| vec!["leanInDirection start=false".into()]);
         }
         self.failed[0] |= self.agent.feedback.iter().any(|f| f.slot == 8 && f.name == "balance");
+        // RDR2's shot task on fallOverWall reaching state 2 (0x1c42e58): one set, once. `02f68c8c` if the ped's entity at +0x318 is of
+        // type 3 [P: which entity isn't read; the room has none], else `3f42bf8d`
+        if !self.wall_sent && self.game_sets() && self.shot_task.is_some() && self.agent.feedback.iter().any(|f| f.name == "fallOverWallState" && f.value as i32 == 2) {
+            self.wall_sent = true;
+            match Self::task_file() {
+                Ok(sets) => match gametask::shot_set(&sets, "3f42bf8d") {
+                    Some(set) => {
+                        let merged = gametask::merge([set].into_iter());
+                        let (lines, _) = self.task_lines("fallOverWall's set 3f42bf8d", &merged);
+                        for l in lines {
+                            self.send(&l);
+                        }
+                    }
+                    None => self.say("fallOverWall's set 3f42bf8d isn't in the file".into()),
+                },
+                Err(e) => self.say(e),
+            }
+        }
         let fb: Vec<String> = self.agent.feedback.iter().map(|f| format!("ours  FB {} slot {}", f.name, f.slot)).collect();
         for f in fb {
             self.say(f);
+        }
+    }
+}
+
+mod nmx {
+    use super::*;
+    use std::io::Write;
+    /// NMX_POSE=<recording>: the recording's first NM step, read at run time from the user's .nmx (nothing of it is
+    /// kept): the pelvis's frame and back axis from the Rage part blob (three rows at +0, +0x10, +0x20), and the joints'
+    /// actual angles, in RDR2's joint order. The parts' own frames can't be taken: the recorded link frames differ from
+    /// the body's by constant turns (the knee reads 0.25 rad apart); the joints' angles are the body's own.
+    pub struct Pose {
+        pelvis: Mat3,
+        back: Vec3,
+        angles: Vec<[f32; 3]>,
+        rel: Vec<Vec3>,
+        /// bodyBalance's turn state by time since the hit (+0x30c) and its target as seen from him (the game's origin)
+        pub turns: Vec<(f32, u8)>,
+        pub far: Vec3,
+        /// the main bullet record (ctx+0x1410): its hit point relative to the pelvis and its direction, in the room's axes
+        pub hit: (Vec3, Vec3),
+        /// his velocity before the hit (ctx+0xf60)
+        pub vel: Vec3,
+        /// bodyWrithe's backStiffness (a draw in the game)
+        pub back_k: f32,
+        pub reach: Option<(f32, bool)>,
+        /// the part hit, Delirium's index
+        pub part: usize,
+        pub nmx_w: Vec3, // NMXHOOK
+        pub nmx_h: f32, // NMXHOOK
+        pub nmx_c0: Vec3, // NMXHOOK
+    }
+    pub fn first_pose(path: &str) -> Option<Pose> {
+        const JMAP: [usize; 20] = [0, 3, 6, 1, 2, 4, 5, 7, 8, 9, 12, 16, 10, 13, 14, 15, 17, 18, 19, 11];
+        let d = std::fs::read(path).ok()?;
+        let u = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
+        let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let mut off = 4096;
+        let mut pose: Option<Pose> = None;
+        let mut t0 = None;
+        while off + 40 <= d.len() {
+            let (tag, len) = (u(off), u(off + 4) as usize);
+            let Some(body) = d.get(off + 40..off + 40 + len) else { break };
+            off += 40 + len;
+            if tag != 3 {
+                continue;
+            }
+            let (mut o, mut j) = (0, 0);
+            if let Some(p) = pose.as_mut() {
+                let (mut t, mut state) = (None, None);
+                if p.nmx_h == 0.0 { let mut q = 0; while q + 20 <= body.len() { let kind = u32::from_le_bytes(body[q..q + 4].try_into().unwrap()); let size = u32::from_le_bytes(body[q + 16..q + 20].try_into().unwrap()) as usize; let b = &body[q + 20..q + 20 + size]; q += 20 + size; if kind == 1 && !b.is_empty() { let row = |o: usize| Vec3::new(f(b, o), f(b, o + 4), f(b, o + 8)); let (c, v) = (row(0xf40), row(0xf60)); p.nmx_h = (c - p.nmx_c0).dot(v) / v.length_squared(); break; } } } // NMXHOOK
+                while o + 20 <= body.len() {
+                    let kind = u32::from_le_bytes(body[o..o + 4].try_into().unwrap());
+                    let size = u32::from_le_bytes(body[o + 16..o + 20].try_into().unwrap()) as usize;
+                    let Some(b) = body.get(o + 20..o + 20 + size) else { break };
+                    o += 20 + size;
+                    if kind == 1 && !b.is_empty() {
+                        t = Some(f(b, 0x47b8));
+                    }
+                    if kind == 5 && b.len() > 0x310 && u32::from_le_bytes(b[0xc..0x10].try_into().unwrap()) == 2 {
+                        state = Some(u32::from_le_bytes(b[0x30c..0x310].try_into().unwrap()) as u8);
+                    }
+                    // reachForWound's draws, as inputs: when the recorded hand starts and which
+                    if kind == 5 && b.len() > 0x540 && u32::from_le_bytes(b[0xc..0x10].try_into().unwrap()) == 19 && p.reach.is_none() && (b[0x530] != 0 || b[0x531] != 0) {
+                        p.reach = Some((f32::NAN, b[0x530] != 0));
+                    }
+                    if kind == 5 && b.len() > 0x50 && u32::from_le_bytes(b[0xc..0x10].try_into().unwrap()) == 27 {
+                        p.back_k = f(b, 0x4c);
+                        if std::env::var_os("NMX_WR").is_none() && std::env::var_os("NMX_NOWR").is_none() { unsafe { std::env::set_var("NMX_WR", format!("{} {} {}", f(b, 0xc4), f(b, 0xc8), f(b, 0xcc))) }; } // NMXHOOK
+                    }
+                }
+                if let (Some(t), Some(s)) = (t, state) {
+                    let t0 = *t0.get_or_insert(t);
+                    p.turns.push((t - t0, s));
+                    if p.reach.is_some_and(|r| r.0.is_nan()) {
+                        let left = p.reach.unwrap().1;
+                        p.reach = Some((t - t0, left));
+                        unsafe { std::env::set_var("NMX_RFW", format!("{} {}", t - t0, left as u8)) };
+                    }
+                }
+                continue;
+            }
+            let mut pose_ = Pose { pelvis: Mat3::IDENTITY, back: Vec3::Y, angles: vec![[0.0; 3]; 20], rel: vec![], turns: vec![], far: Vec3::ZERO, hit: (Vec3::ZERO, Vec3::Y), vel: Vec3::ZERO, back_k: 13.0, reach: None, part: 10, nmx_w: Vec3::ZERO, nmx_h: 0.0, nmx_c0: Vec3::ZERO };
+            let mut com = Vec3::ZERO;
+            let mut bullet = (Vec3::ZERO, Vec3::Y);
+            let mut rage: Vec<u8> = vec![];
+            let mut shot_rec = None;
+            while o + 20 <= body.len() {
+                let kind = u32::from_le_bytes(body[o..o + 4].try_into().unwrap());
+                let vt = u32::from_le_bytes(body[o + 12..o + 16].try_into().unwrap());
+                let size = u32::from_le_bytes(body[o + 16..o + 20].try_into().unwrap()) as usize;
+                let b = body.get(o + 20..o + 20 + size)?;
+                o += 20 + size;
+                let row = |b: &[u8], o: usize| Vec3::new(f(b, o), f(b, o + 4), f(b, o + 8));
+                match kind {
+                    1 if !b.is_empty() => {
+                        pose_.back = row(b, 0xf30).with_z(0.0).normalize();
+                        com = row(b, 0xf40);
+                        bullet = (row(b, 0x1560), row(b, 0x1550));
+                        pose_.vel = row(b, 0xf60);
+                    }
+                    2 if j < 20 => {
+                        pose_.angles[JMAP[j]] = if vt == 0x3663d98 { [f(b, 0x114), 0.0, 0.0] } else { row(b, 0x12c).to_array() };
+                        j += 1;
+                    }
+                    5 if b.len() > 0x680 && u32::from_le_bytes(b[0xc..0x10].try_into().unwrap()) == 5 => shot_rec = Some((row(b, 0x640), row(b, 0x670), u16::from_le_bytes(b[0x664..0x666].try_into().unwrap()) as usize)),
+                    4 if b.len() >= 21 * 0x140 => {
+                        let (r0, r1, r2) = (row(b, 0), row(b, 0x10), row(b, 0x20));
+                        pose_.pelvis = Mat3::from_cols(Vec3::new(r0.x, r1.x, r2.x), Vec3::new(r0.y, r1.y, r2.y), Vec3::new(r0.z, r1.z, r2.z));
+                        pose_.rel = (0..21).map(|k| row(&b[k * 0x140..], 0x30)).collect();
+                pose_.nmx_w = row(b, 0xe0); // NMXHOOK
+                        rage = b.to_vec();
+                    }
+                    _ => {}
+                }
+            }
+            let yaw = Quat::from_rotation_arc(pose_.back, Vec3::Y);
+            pose_.far = yaw * -com;
+            pose_.nmx_c0 = com; // NMXHOOK
+            pose_.vel = yaw * pose_.vel;
+            // the pelvis's world position: the COM less the mass-weighted part offsets, as nmxread's part_world
+            let masses: Vec<f32> = rage.chunks_exact(0x140).map(|c| f(c, 0x11c)).collect();
+            let m: f32 = masses.iter().sum();
+            let c: Vec3 = (0..21).map(|k| pose_.rel[k] * masses[k] / m).sum();
+            // record+0x150, the hit in the part's frame (0x2a197d8 puts the force there; +0x130 isn't read by it): the NM rows of part 10
+            let nm = |i: usize| Vec3::new(f(&rage[10 * 0x140..], i * 4), f(&rage[10 * 0x140..], 0x10 + i * 4), f(&rage[10 * 0x140..], 0x20 + i * 4));
+            let r = nm(0) * bullet.0.x + nm(1) * bullet.0.y + nm(2) * bullet.0.z;
+            let _ = (c, com);
+            pose_.hit = (yaw * (pose_.rel[10] + r), yaw * bullet.1.normalize());
+            // no main bullet record at this index (the leg shot has none): the shot's own hit record, on its part
+            if let Some((l, d, game)) = shot_rec.filter(|_| bullet.0 == Vec3::ZERO) {
+                const TO_OURS: [usize; 21] = [0, 1, 4, 7, 2, 3, 5, 6, 8, 9, 10, 13, 17, 11, 14, 15, 16, 18, 19, 20, 12];
+                let nm = |i: usize| Vec3::new(f(&rage[game * 0x140..], i * 4), f(&rage[game * 0x140..], 0x10 + i * 4), f(&rage[game * 0x140..], 0x20 + i * 4));
+                pose_.hit = (yaw * (pose_.rel[game] + nm(0) * l.x + nm(1) * l.y + nm(2) * l.z), yaw * d.normalize());
+                pose_.part = TO_OURS[game];
+            }
+            pose = Some(pose_);
+        }
+        pose
+    }
+
+    fn sim_lift(sim: &mut Sim, z: f32) {
+        sim.nmx_lift = z;
+    }
+
+    /// Puts the doll in that pose, at rest: back axis on the room's +y, the pelvis over the room's origin, the lower
+    /// foot's lowest corner on the floor.
+    pub fn set_pose(sim: &mut Sim, pose: &Pose) {
+        let yaw = Quat::from_rotation_arc(pose.back, Vec3::Y);
+        let root = Transform::from_rotation(yaw * Quat::from_mat3(&pose.pelvis).normalize());
+        let root = if std::env::var_os("NMX_POSTPOSE").is_some() { root } else { Transform::from_rotation(yaw * (Quat::from_scaled_axis(pose.nmx_w * -pose.nmx_h) * Quat::from_mat3(&pose.pelvis).normalize()).normalize()) }; // NMXHOOK
+        let Some(ch) = sim.agent.character() else { return };
+        let mut frames = ch.pose(&sim.build, root, &pose.angles);
+        let mut low = f32::MAX;
+        for k in [3, 6] {
+            for c in 0..8 {
+                let s = |bit: i32| if c >> bit & 1 == 0 { -1.0 } else { 1.0 };
+                let l = Vec3::new(s(0) * 0.077, s(1) * 0.0375, s(2) * 0.15);
+                low = low.min((frames[k].translation + frames[k].rotation * l).z);
+            }
+        }
+        const GAME: [usize; 21] = [0, 1, 4, 5, 2, 6, 7, 3, 8, 9, 10, 13, 20, 11, 14, 15, 16, 12, 17, 18, 19];
+        let gaps: Vec<String> = GAME.iter().enumerate().map(|(k, g)| format!("{:.3}", (frames[k].translation - yaw * pose.rel[*g]).length())).collect();
+        for t in &mut frames {
+            t.translation.z += 0.001 - low;
+        }
+        sim_lift(sim, 0.001 - low);
+        for (k, t) in frames.iter().enumerate() {
+            sim.agent.doll.set_body(k, t.translation, t.rotation, pose.vel, Vec3::ZERO);
+        }
+        sim.agent.doll.nmx_forget_contacts();
+        if std::env::var_os("NMX_SOLVE0").is_none() { delirium::ragdoll::NMX_NC.store(true, std::sync::atomic::Ordering::Relaxed); } // NMXHOOK
+        let f = |k: usize| frames[k].translation.xy().distance(frames[0].translation.xy());
+        let s = format!("nmx  pose set: feet apart {:.3}, foot z {:.3} {:.3}, foot-pelvis xy {:.3} {:.3}; part distance from the recording's {}", frames[3].translation.distance(frames[6].translation), frames[3].translation.z, frames[6].translation.z, f(3), f(6), gaps.join(" "));
+        sim.say(s);
+    }
+
+    /// Per-frame state for comparison with RDR2 recordings (headless NMX_DUMP only).
+    pub struct Dump {
+        frames: std::io::BufWriter<std::fs::File>,
+        joints: std::io::BufWriter<std::fs::File>,
+        parts: std::io::BufWriter<std::fs::File>,
+    }
+    impl Dump {
+        pub fn new(p: &str) -> Dump {
+            let mut frames = std::io::BufWriter::new(std::fs::File::create(format!("{p}.frames.csv")).unwrap());
+            let mut joints = std::io::BufWriter::new(std::fs::File::create(format!("{p}.joints.csv")).unwrap());
+            let _ = writeln!(frames, "frame,t,com_x,com_y,com_z,comv_x,comv_y,comv_z,com_speed,fwd_x,fwd_y,fwd_z,up_x,up_y,up_z,tilt_deg,lowest_part_z,head_z,mass,bal_steps,bal_foot,health,active,tl_x,tl_y,tl_z,tr_x,tr_y,tr_z,cx,cy,cz,dflags,dl,dr,dlead,met");
+            let _ = writeln!(joints, "frame,t,joint,des0,des1,des2,act0,act1,act2,muscle_stiffness,strength,damping,oppose_gravity,injury");
+            let mut parts = std::io::BufWriter::new(std::fs::File::create(format!("{p}.parts.csv")).unwrap());
+            let _ = writeln!(parts, "frame,part,mass,cx,cy,cz,qx,qy,qz,qw,vx,vy,vz,wx,wy,wz,touch,contacts,lx,ly,lz");
+            Dump { frames, joints, parts }
+        }
+        pub fn frame(&mut self, sim: &Sim, i: usize) {
+            let d = &sim.agent.doll;
+            let n = sim.build.parts.len();
+            let m = d.mass();
+            let (mut c, mut v) = (Vec3::ZERO, Vec3::ZERO);
+            for k in 0..n {
+                c += d.centre(k) * d.part_mass(k) / m;
+                v += d.motion(k).0 * d.part_mass(k) / m;
+            }
+            let fr: Vec<Transform> = d.frames().collect();
+            let low = (0..n).map(|k| d.centre(k).z).fold(f32::MAX, f32::min);
+            let s = sim.ours();
+            // trunk up: pelvis (part 0) to the top spine part (10), as RDR2's COM-matrix up row is read
+            let up = (d.centre(10) - d.centre(0)).normalize_or(Vec3::Z);
+            let (steps, foot) = sim.agent.balance_steps().map_or((-1, -1), |(a, b)| (a as i64, b as i64));
+            for k in 0..n {
+                let (c, q, (v, w)) = (d.centre(k), fr[k].rotation, d.motion(k));
+                let cs: Vec<String> = d.nmx_contacts(k).iter().map(|(a, n, g)| format!("{:.4} {:.4} {:.4} {:.3} {:.3} {:.3} {:.4}", a.x, a.y, a.z, n.x, n.y, n.z, g)).collect();
+                let _ = writeln!(self.parts, "{i},{k},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}", d.part_mass(k), c.x, c.y, c.z, q.x, q.y, q.z, q.w, v.x, v.y, v.z, w.x, w.y, w.z, d.touch[k], cs.join(";"), d.nmx_spin(k).x, d.nmx_spin(k).y, d.nmx_spin(k).z);
+            }
+            let t = (i + 1) as f32 / 60.0;
+            let _ = writeln!(self.frames, "{i},{t},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{m},{steps},{foot},{},{}",
+                c.x, c.y, c.z, v.x, v.y, v.z, v.length(), s.fwd.x, s.fwd.y, s.fwd.z, up.x, up.y, up.z, up.z.clamp(-1.0, 1.0).acos().to_degrees(),
+                low, fr.get(12).map_or(0.0, |f| f.translation.z), sim.health, format!("{},{},{}", sim.agent.nmx_active().join(";"), sim.agent.nmx_targets().map_or(String::from("0,0,0,0,0,0,0,0,0"), |t| format!("{},{},{},{},{},{},{},{},{}", t[0].x, t[0].y, t[0].z, t[1].x, t[1].y, t[1].z, t[2].x, t[2].y, t[2].z)), sim.agent.nmx_decision().map_or(String::from("0,0,0,0,"), |d| format!("{},{},{},{},{}", d.0, d.1[0], d.1[1], d.2, sim.agent.nmx_met()))));
+            if let Some(ch) = sim.agent.character() {
+                for (j, e) in ch.eff.iter().enumerate() {
+                    let a = ch.read.get(j).copied().unwrap_or([f32::NAN; 3]);
+                    let _ = writeln!(self.joints, "{i},{t},{j},{},{},{},{},{},{},{},{},{},{},{}", e.desired[0], e.desired[1], e.desired[2], a[0], a[1], a[2],
+                        e.muscle_stiffness, e.strength, e.damping, e.oppose_gravity, e.injury);
+                }
+            }
         }
     }
 }
@@ -10221,11 +10469,74 @@ fn headless(mut sim: Sim, n: usize) {
     // test hook: RDR2_SEND="70:shot fallingReaction=2;90:..." sends those message lines at those frames
     let sends: Vec<(usize, String)> = std::env::var("RDR2_SEND").unwrap_or_default().split(';')
         .filter_map(|x| x.split_once(':')).filter_map(|(f, l)| Some((f.trim().parse().ok()?, l.trim().to_string()))).collect();
+    // comparison hooks (headless only; nothing changes unless set): NMX_FIRE="shot back@180;..." presses those buttons
+    // at those frames instead of the frame-60 chest shot; NMX_PUSH="frame:part:dvx,dvy,dvz" gives that part an impulse of
+    // (his whole mass x dv) in his own frame (x forward, y left, z up), part 99 every part its own mass x dv; NMX_DUMP=<path> writes per-frame state to
+    // <path>.frames.csv and <path>.joints.csv
+    let fires: Option<Vec<(usize, String)>> = std::env::var("NMX_FIRE").ok().map(|v| v.split(';')
+        .filter_map(|x| x.rsplit_once('@')).filter_map(|(b, f)| Some((f.trim().parse().ok()?, b.trim().to_string()))).collect());
+    let push: Option<(usize, usize, Vec3)> = std::env::var("NMX_PUSH").ok().and_then(|v| {
+        let mut it = v.splitn(3, ':');
+        let (f, k, d) = (it.next()?.parse().ok()?, it.next()?.parse().ok()?, it.next()?);
+        let d: Vec<f32> = d.split(',').filter_map(|x| x.parse().ok()).collect();
+        Some((f, k, Vec3::new(*d.first()?, *d.get(1)?, *d.get(2)?)))
+    });
+    let mut dump = std::env::var("NMX_DUMP").ok().map(|p| nmx::Dump::new(&p));
+    // NMX_POSE=<recording>: at the first NMX_FIRE frame the doll takes the recording's first-frame pose and the shot's
+    // task starts on that same frame, as RDR2's NM starts at the hit from its animated pose
+    let pose = std::env::var("NMX_POSE").ok().and_then(|p| nmx::first_pose(&p));
+    if let Some(p) = &pose { unsafe { std::env::set_var("NMX_BACK", p.back_k.to_string()) }; } // NMXHOOK
     let hold_incoming: Option<usize> = std::env::var("RDR2_HOLD_INCOMING").ok().and_then(|x| x.parse().ok());
     for i in 0..n {
-        // (test hook: RDR2_NO_SHOT leaves this out: the room's shot stops every behaviour first, sit too)
-        if i == 60 && std::env::var_os("RDR2_NO_SHOT").is_none() {
-            sim.button("shot");
+        if i == 30 { if let Some(n) = std::env::var("NMX_SEED0").ok().and_then(|v| v.parse::<u32>().ok()) { sim.agent.set_rng((n.wrapping_mul(2654435761) | 1, n.wrapping_mul(40503) ^ 0x5bd1e995)); } } // NMXHOOK
+        if let (Some(p), Some(f)) = (&pose, &fires) {
+            if f.first().is_some_and(|x| x.0 == i) {
+                nmx::set_pose(&mut sim, p);
+                if let Ok(p) = std::env::var("NMX_DUMP") { let d = &sim.agent.doll; let s: String = (0..21).map(|k| { let c = d.centre(k); format!("{} {} {} {}\n", k, c.x, c.y, c.z) }).collect(); let _ = std::fs::write(format!("{p}.pose"), s); } // NMXHOOK
+                // NMX_SEED=<n>: another random stream from the hit on, to see how far a measurement depends on it
+                if let Some(n) = std::env::var("NMX_SEED").ok().and_then(|v| v.parse::<u32>().ok()) {
+                    sim.agent.set_rng((n.wrapping_mul(2654435761) | 1, n.wrapping_mul(40503) ^ 0x5bd1e995));
+                }
+            }
+        }
+        // ... and bodyBalance takes the recording's turn states (a random draw there), as inputs
+        if let (Some(p), Some(f)) = (&pose, fires.as_ref().and_then(|f| f.first())) {
+            if i > f.0 {
+                let t = (i - f.0) as f32 / 60.0;
+                let s = p.turns.iter().rev().find(|x| x.0 <= t).or(p.turns.first()).map_or(2, |x| x.1);
+                sim.agent.nmx_turn(s, p.far, p.back_k);
+            }
+        }
+        match &fires {
+            None if i == 60 && std::env::var_os("RDR2_NO_SHOT").is_none() => sim.button("shot"),
+            Some(f) => for (_, b) in f.iter().filter(|(at, _)| *at == i) {
+                match &pose {
+                    // the recording's hit point and direction (the shooter's aim there), not the button's
+                    Some(p) => {
+                        let at = p.hit.0 + Vec3::Z * sim.nmx_lift;
+                        sim.fire(p.part, Some((at, p.hit.1, -p.hit.1)), false, &[]);
+                        if let Some(t) = sim.shot_task.as_mut() {
+                            t.1 = t.1.saturating_sub(2);
+                        }
+                    }
+                    None => sim.button(b),
+                }
+            },
+            _ => {}
+        }
+        if let Some((_, k, dv)) = push.filter(|p| p.0 == i) {
+            let s = sim.ours();
+            let fwd = s.fwd.with_z(0.0).normalize_or(Vec3::X);
+            let left = Vec3::Z.cross(fwd);
+            let dv = fwd * dv.x + left * dv.y + Vec3::Z * dv.z;
+            // part 99: every part gets its own mass x dv (the whole body moves at once)
+            let parts: Vec<usize> = if k == 99 { (0..sim.build.parts.len()).collect() } else { vec![k] };
+            for p in parts {
+                let at = sim.agent.doll.centre(p);
+                let j = dv * if k == 99 { sim.agent.doll.part_mass(p) } else { sim.agent.doll.mass() };
+                sim.agent.doll.impulse(p, at, j);
+            }
+            sim.say(format!("nmx  push part {k}: dv {dv:?}"));
         }
         for (_, l) in sends.iter().filter(|(f, _)| *f == i) {
             // (a line "press <button>" presses a button at that frame)
@@ -10241,6 +10552,9 @@ fn headless(mut sim: Sim, n: usize) {
         }
         sim.tick();
         sim.rise(1.0 / 60.0);
+        if let Some(d) = dump.as_mut() {
+            d.frame(&sim, i);
+        }
         let line: Vec<String> = sim.agent.doll.frames().map(|f| {
             let (p, r) = (f.translation, f.rotation);
             [p.x, p.y, p.z, r.x, r.y, r.z, r.w].map(|x| format!("{:08x}", x.to_bits())).join(" ")

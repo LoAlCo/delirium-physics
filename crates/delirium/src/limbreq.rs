@@ -105,6 +105,7 @@ impl Requests {
 
     /// What changed since the last mark is a request at this priority.
     pub fn mark(&mut self, eff: &[Effector], priority: u32) {
+        if std::env::var_os("NMX_MARK").is_some() { eprintln!("MARK {priority:#x} n{} sp0 {:?} neck {:?} sho {:?} hipl {:?}", self.list.iter().filter(|x| x.2 == 0).map(|x| format!("{:x}.{}:{}", x.0, x.3, x.4)).collect::<Vec<_>>().join(","), channels(&eff[6]), channels(&eff[10]), channels(&eff[13]), channels(&eff[0])); } // NMXHOOK
         self.mark_some(eff, priority, None, None);
     }
 

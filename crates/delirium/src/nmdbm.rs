@@ -451,6 +451,7 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
         if give.is_some() {
             f.stepping = 0;
         }
+        if f.stepping == 0 && give.is_none() && std::env::var("NMX_WAIT").ok().and_then(|v| v.parse::<f32>().ok()).is_some_and(|w| r.time < w) { return; } // NMXHOOK
         // "don't change step": early in the balance (dontStepTime), or fallType 1 once failing (0x2aba1cc)
         if give.is_none() && f.stepping == 0 && (!r.may_step() || r.force_balance || (r.failing.is_some() && r.p.fall_type == 1) || r.time < r.p.dont_step_time) {
             return;
@@ -521,6 +522,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
         Some(r) => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172 - r.p.step_decision_threshold,
         None => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172,
     };
+    if std::env::var_os("NMX_SUP").is_some() { eprintln!("SUP pc {pc:?} val {} up {up:?} L a {:?} c {:?} d {:?} R a {:?} c {:?} d {:?} k {} {}", support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up), s.legs[0].foot.m.a, s.legs[0].foot.m.c, s.legs[0].foot.m.d, s.legs[1].foot.m.a, s.legs[1].foot.m.c, s.legs[1].foot.m.d, delirium_data::kv!(68) as f32, delirium_data::kv!(9) as f32); }
     f.flags = (f.flags & !delirium_data::kv!(1 int)) | (inside as u8) << 2;
     f.inside_raw = inside;
     let (lpos, rpos) = (s.legs[0].foot.m.d, s.legs[1].foot.m.d);
@@ -654,6 +656,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
         }
         None => contact && !other,
     };
+    if std::env::var_os("NMX_DBG").is_some() { eprintln!("PLACE dist {:?} vel {:?} com {:?} Lf {:?} Rf {:?} lead {} stepping {} flags {:b} contact {} other {} speed {:.3} left {:.3} toe {:.3} passed {} landed {} lone {} running {:?}", f.dist, s.hvel, s.com, s.legs[0].foot.m.d, s.legs[1].foot.m.d, p.lead, f.stepping, s.flags, contact, other, speed, left_frac, toe, passed, landed, lone, p.rdr2.map(|r| r.running)); }
     if !waiting(f) && (landed || lone) {
         f.flags |= if two { delirium_data::kv!(253 int) } else { delirium_data::kv!(251 int) };
         f.stepping = 0;
@@ -752,6 +755,7 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
             pv.yaw[k] = if y > goal[k] { (y - step).max(goal[k]) } else { (y + step).min(goal[k]) };
         }
     }
+    if std::env::var_os("NMX_TW").is_some() { eprintln!("TW {:.3} yaw {:.3} {:.3} w {:.3} {:.3} toward {} pl {} pr {} fixed {} run {} y1 {:.3} y2 {:.3} pelvis b {:.3} {:.3} c {:.3} {:.3} a {:.3} {:.3}", p.rdr2.map_or(0.0, |r| r.time), pv.yaw[0], pv.yaw[1], w.x, w.y, toward, pl, pr, pv.fixed_vel, running, yaw(1.0, m, w, toward, false, s.angvel), yaw(-1.0, m, w, toward, false, s.angvel), m.b.x, m.b.y, m.c.x, m.c.y, m.a.x, m.a.y); } // NMXHOOK
     let hz = shz(s.m.c, up, b"zyx");
     let hx = shz(-s.m.a, up, b"xyz");
     let d = s.com - pv.centre;
@@ -1251,6 +1255,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     let slow = s.vel.length() < 1.0 && !p.rdr2.is_some_and(|r| r.stagger);
     let rd = p.rdr2.filter(|r| r.p.ankle_balance && !r.p.ankle_keep_pelvis);
     let stance_lean = if p.rdr2.is_some_and(|r| r.stagger) { 0.0 } else { lean };
+    if std::env::var_os("NMX_DBG").is_some() { eprintln!("ANK flat {:.3} {:.3} bal {:.3} {:.3} w {:?} aim {:?} act {:.3} {:.3} inside {} stepping {} lp {} rp {} slow {} lean {:.3} out1 {:.3} com {:?} centre {:?} lf {:?} rf {:?}", s.legs[0].ankle.desired[0], s.legs[1].ankle.desired[0], bal[0], bal[1], w, aim, s.legs[0].ankle.actual[0], s.legs[1].ankle.actual[0], f.inside_raw, f.stepping, lp, rp, slow, lean, pv.out[1], s.com, f.centre, s.legs[0].foot.m.d, s.legs[1].foot.m.d); }
     if let Some(r) = rd {
         for (i, sgn) in [(0, 1.0), (1, -1.0)] {
             // only this path asks a twist of the ankle (0x2aaeed8; recorded 0 otherwise)
@@ -2251,7 +2256,9 @@ pub fn oppose_gravity(b: &Body, attached: Option<(usize, Vec3, f32)>, out: &mut 
     }
 }
 
+pub static NMX_RELATCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub fn foot_yaw(b: &Body, yaw: &mut [f32; 2], dt: f32) -> Vec<Vec3> {
+    let relatch = NMX_RELATCH.swap(false, std::sync::atomic::Ordering::Relaxed);
     let mut out = vec![Vec3::ZERO; b.build.parts.len()];
     let up = b.ch.up;
     for i in 0..2 {
@@ -2270,7 +2277,7 @@ pub fn foot_yaw(b: &Body, yaw: &mut [f32; 2], dt: f32) -> Vec<Vec3> {
         let x = Vec3::X;
         let u = fneg(x.yzx().mul_add(up.zxy(), -(x.zxy() * up.yzx())));
         let now = atan2((m.c.y + m.c.z).mul_add(0.0, m.c.x), sdot(m.c, u, b"zyx"));
-        if t & delirium_data::kv!(1 int) == 0 || (b.ch.rdr2 && b.ch.core.foot_unlatch) {
+        if relatch || t & delirium_data::kv!(1 int) == 0 || (b.ch.rdr2 && b.ch.core.foot_unlatch) {
             yaw[i] = now;
         }
         let mut d = now - yaw[i];

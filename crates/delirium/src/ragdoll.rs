@@ -2113,6 +2113,29 @@ impl Ragdoll {
         self.comp(&inst).iter().map(|(_, c)| turn(&crate::rigid::rows_mul(c, &inst))).collect()
     }
 
+    /// NMX_DUMP: a part's world contacts as they stand (point, normal, gap).
+    pub fn nmx_contacts(&self, k: usize) -> Vec<(Vec3, Vec3, f32)> {
+        let (tm, bw) = (self.turns()[k], self.bound_world(k));
+        self.held[k].iter().map(|r| (if r.age == 1 { r.world } else { crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) }, r.n, r.gap)).collect()
+    }
+
+    /// NMX_POSE: the doll was moved outright, so the contacts it held (anchored where it stood) and the twists the last
+    /// step read go.
+    pub fn nmx_forget_contacts(&mut self) {
+        if std::env::var_os("NMX_FORGET").is_some() { self.held.iter_mut().for_each(|h| h.clear()); }
+        self.prep_twist.iter_mut().for_each(|t| *t = None);
+        crate::nmdbm::NMX_RELATCH.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.touch.iter_mut().for_each(|t| *t = 0);
+        let d = self.bodies[self.order[0]].x;
+        self.o += d;
+        self.bodies.iter_mut().for_each(|b| b.x -= d);
+    }
+
+    /// NMX_DUMP: a part's own angular momentum.
+    pub fn nmx_spin(&self, k: usize) -> Vec3 {
+        (self.bodies[k].tensor() * self.bodies[k].w.as_dvec3()).as_vec3()
+    }
+
     pub fn motion(&self, k: usize) -> (Vec3, Vec3) {
         (self.bodies[k].v, self.bodies[k].w)
     }
@@ -2388,6 +2411,7 @@ impl Ragdoll {
                     let n = artic.axis[k].unwrap_or_else(|| crate::rigid::hinge_axis(&j.jc, &cl));
                     let a = crate::rigid::hinge_about(&j.jc, &pl, &cl, n);
                     let (oh, ol) = (a - hi, a - lo);
+                    if k == 5 && std::env::var_os("NMX_LIM").is_some() { eprintln!("LIM lo {lo:.3} hi {hi:.3} a {a:.3} w {:.3}", speed(n)); } // NMXHOOK
                     if !(oh > 0.0) && ol >= 0.0 {
                         continue;
                     }
@@ -2404,7 +2428,9 @@ impl Ragdoll {
                         f
                     };
                     let r = sdot(n, artic.answer(k, n), b"yzx");
+                    if k == 5 && std::env::var_os("NMX_LIM").is_some() { eprintln!("GAIN {}", LIMIT_GAIN()); } // NMXHOOK
                     let t = -((if r != 0.0 { 1.0 / r } else { delirium_data::kv!(3) }) * LIMIT_GAIN() * f);
+                    let t = if std::env::var_os("NMX_LG").is_some() { t * std::env::var("NMX_LG").unwrap().parse::<f32>().unwrap() } else { t }; // NMXHOOK
                     pair(joints, k, (n * t).as_dvec3(), lt);
                     continue;
                 }
@@ -3344,6 +3370,7 @@ impl Ragdoll {
             p.map(|to| (x.lerp(to.translation, along), q.slerp(to.rotation, along)))
         }).collect();
         let first = self.wake_step;
+        let nmx_nc = NMX_NC.swap(false, std::sync::atomic::Ordering::Relaxed); // NMXHOOK
         let joints: Vec<Option<Joint>> = if std::mem::take(&mut self.wake_step) { joints.into_iter().map(|j| j.map(|j| Joint { stiff: delirium_data::kv!(35) * h, ..j })).collect() } else { joints };
         let was: Vec<Option<Joint>> = joints.iter().zip(&self.stiff).map(|(j, &stiff)| j.map(|j| Joint { stiff, ..j })).collect();
         let artic = self.artic(if was.len() == joints.len() { &was } else { &joints });
@@ -3455,6 +3482,7 @@ impl Ragdoll {
         self.seen_r = seen_r;
         self.coll = self.comp(&self.inst());
         let (mut rows, blocks, push_blocks, order, ghosts, turned) = self.contacts(build, world, &artic, h, &pose, obstacles, others, &free, &artic.forces(&lt, h), &joints, first);
+        let (blocks, push_blocks) = if nmx_nc { rows.clear(); (vec![], vec![]) } else { (blocks, push_blocks) }; // NMXHOOK
         let quiet = resquared && turned.is_none() && rows.is_empty() && blocks.is_empty() && push_blocks.is_empty();
         let artic = turned.unwrap_or(artic);
         let (mut lr, mut push) = self.limit_rows(&artic, &joints, h, &qd0, &dvw);
@@ -3711,6 +3739,7 @@ impl Ragdoll {
     }
 }
 
+pub static NMX_NC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false); // NMXHOOK
 struct Stage {
     joints: Vec<Option<Joint>>,
     pose: Vec<Option<(Vec3, Quat)>>,
