@@ -588,6 +588,8 @@ pub struct Character {
 /// RDR2 core: per-character values RDR2's core helpers read (rdr2_core2.md sections 1 and 4).
 #[derive(Clone, Copy, Debug)]
 pub struct CoreState {
+    /// RDR2's joint scale fields this step (k, damping, muscle): lowered by whoever asks, over any setStiffness
+    pub scale: [[f32; 3]; 32],
     /// the foot yaw hold's gains (RDR2's ctx+0x1034 / +0x1038): 60 and 10 until the balancer writes
     /// footSlipStiffness and its damping
     pub foot_slip: (f32, f32),
@@ -625,9 +627,18 @@ pub struct RdsKnee {
     pub poses: [bool; 2],
 }
 
+impl CoreState {
+    /// RDR2's scale(onlyLower): this step's scale fields of a joint, only ever lowered.
+    pub fn lower_scale(&mut self, j: usize, k: f32, d: f32, m: f32) {
+        if let Some(s) = self.scale.get_mut(j) {
+            *s = [s[0].min(k), s[1].min(d), s[2].min(m)];
+        }
+    }
+}
+
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
+        CoreState { scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 

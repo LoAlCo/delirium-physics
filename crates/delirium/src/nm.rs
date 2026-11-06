@@ -2340,6 +2340,15 @@ impl Agent {
         if let (Some(ch), Some(d), false) = (self.ch.as_mut(), self.balance.as_ref().and_then(|b| b.dbm.as_ref()), self.fallen) {
             d.drain(ch);
         }
+        // RDR2's scale fields, over whatever the behaviours asked this step
+        if let Some(ch) = self.ch.as_mut() {
+            let scale = std::mem::replace(&mut ch.core.scale, [[1.0; 3]; 32]);
+            for (e, s) in ch.eff.iter_mut().zip(scale) {
+                if s != [1.0; 3] {
+                    (e.strength, e.damping, e.muscle_stiffness) = (e.strength * s[0] * s[0], e.damping * s[1], e.muscle_stiffness * s[2]);
+                }
+            }
+        }
         let rigid = self.ch.as_ref().map_or(vec![], |ch| ch.rigid(dt, self.strength, self.most));
         let (mut torque, mut force, mut push) = (vec![], vec![], vec![]);
         let mut stay_at: Vec<(usize, Vec3, Vec3)> = vec![];
@@ -2831,6 +2840,8 @@ fn SHOCK_SPIN() -> f32 { delirium_data::kv!(68) }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Hit {
+    /// RDR2 core: the file's sets drive this shot (the room's RDR2_GAME_SETS), so the task only hands on the hit
+    pub game_sets: bool,
     pub health: f32,
     pub dying: bool,
     pub moving: bool,

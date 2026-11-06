@@ -1675,6 +1675,22 @@ pub struct ShotRdr2 {
     pub fling2_relax: [f32; 2],
     pub fling2_angle: [[f32; 2]; 2],
     pub fling2_length: [[f32; 2]; 2],
+    /// RDR2's looseness and strength block beyond GTA IV's (rdr2_shot_core.md 3.1, 4.3, 4.4)
+    pub looseness4_stagger: f32,
+    pub use_cstr: bool,
+    pub cstr_upper_min: f32,
+    pub cstr_upper_max: f32,
+    pub cstr_lower_min: f32,
+    pub cstr_lower_max: f32,
+    pub bullet_proof_vest: bool,
+    pub always_reset_looseness: bool,
+    pub always_reset_neck: bool,
+    pub spine_blend_exag_cpain: bool,
+    pub floor_weakness_time: f32,
+    pub floor_strength: f32,
+    pub floor_joint_time: f32,
+    pub floor_joint_strength: f32,
+    pub ang_vel_scale: f32,
 }
 
 impl Default for ShotRdr2 {
@@ -1688,6 +1704,7 @@ impl Default for ShotRdr2 {
                    braced_side_spin_mult: 1.0, shock_spin_max_twist_vel: -1.0, shock_spin_air_mult: 1.0, shock_spin_one_foot_mult: 1.0, shock_spin_scale_by_lever_arm: true,
                    fling2: false, fling2_side: [true; 2], fling2_override_stagger: false, fling2_before: 0.1, fling2_time: 0.5, fling2_mstiff: [0.95, -1.0],
                    fling2_stiff: [12.0; 2], fling2_damp: [0.7; 2], fling2_relax: [0.5; 2], fling2_angle: [[-1.5, 1.0]; 2], fling2_length: [[0.35, 0.6]; 2],
+                   looseness4_stagger: 0.0, use_cstr: false, cstr_upper_min: 0.1, cstr_upper_max: 1.0, cstr_lower_min: 0.1, cstr_lower_max: 1.0, bullet_proof_vest: false, always_reset_looseness: true, always_reset_neck: true, spine_blend_exag_cpain: false, floor_weakness_time: 0.1, floor_strength: 0.1, floor_joint_time: 0.1, floor_joint_strength: 0.01, ang_vel_scale: 1.0,
                    always_reach_time: 0.3, aw_speed_mult: 1.0, aw_radius_mult: 1.0, aw_stiffness_add: 4.0, release_wound: 1 }
     }
 }
@@ -1735,6 +1752,7 @@ pub(crate) struct Strength {
     pub min_arms_looseness: f32,
     pub stable_hands_and_neck: bool,
     pub balancing: bool,
+    pub vest: bool,
 }
 
 /// RDR2's biped strength applier: the trunk, legs, arms, neck and wrists from a strength block, looseness-blended
@@ -1757,7 +1775,13 @@ pub(crate) fn apply_strength(c: &mut Ctx, s: &Strength, dt: f32) {
     for &j in crate::nmrs::NECK().iter() {
         c.og(j, 1.0);
     }
-    c.ch.set_stiffness(m * s.body_stiffness, lc * s.spine_damping, "us", Some(lc));
+    // bulletProofVest: the spine alone, its own multiplier and muscle (trunk mask 0x700)
+    if s.vest {
+        let mv = ((1.0 - lc) * s.k_mult_on_loose + 1.0) * h;
+        c.ch.set_stiffness(mv * s.body_stiffness, lc * s.spine_damping, "us", Some((2.0 * lc).clamp(0.2, 1.0)));
+    } else {
+        c.ch.set_stiffness(m * s.body_stiffness, lc * s.spine_damping, "us", Some(lc));
+    }
     let lg = s.min_legs_looseness.max(lc).min(2.0);
     for i in 0..2 {
         c.ch.eff[(*KNEE())[i]].muscle_stiffness = 1.5 * lg;
@@ -1823,7 +1847,14 @@ impl Shot {
             (lean[0], lean[1]) = (-lean[0], -lean[1]);
         }
         let s = &mut self.rd;
-        (s.lean, s.started, s.k, s.kn, s.tk, s.tn, s.wrote) = (lean, true, 0.01, 0.01, 0.0, 0.0, 0.0);
+        (s.lean, s.started, s.wrote) = (lean, true, 0.0);
+        // the weakness and neck ramps restart when they are done or the alwaysReset flags say so (their first run too)
+        if s.k >= 1.0 || s.k == 0.0 || r.always_reset_looseness {
+            (s.k, s.tk) = (0.01, 0.0);
+        }
+        if s.kn >= 1.0 || s.kn == 0.0 || r.always_reset_neck {
+            (s.kn, s.tn) = (0.01, 0.0);
+        }
         if r.exag_duration > f32::EPSILON {
             let cur = [lean[0] * r.exag_mag, lean[1] * r.exag_mag, lean[2] * r.exag_twist_mag * 10.0];
             for (ch, x) in s.ramps.iter_mut().zip(cur) {
@@ -1904,14 +1935,50 @@ impl Shot {
             s.kn = 1.0;
         }
         let (k, kn) = (s.k, s.kn);
-        if !self.failed() {
+        let stagger = c.extras_on.contains(&"staggerFall");
+        if self.failed() {
+            // falling: while it lasts all but the arms take floorStrength, and the joints next to the hit part
+            // floorJointStrength, over whatever the behaviours ask (0x2a7f650 step 6)
+            let t = self.since_hit;
+            if r.floor_weakness_time > 0.0 && t < r.floor_weakness_time && r.floor_strength > 0.0 && r.floor_strength < 1.0 {
+                let arms = crate::nmrs::Character::mask("ua");
+                for j in 0..c.ch.eff.len() {
+                    if !arms.contains(&j) {
+                        c.ch.core.lower_scale(j, r.floor_strength, r.floor_strength, r.floor_strength);
+                    }
+                }
+            }
+            if r.floor_joint_time > 0.0 && t < r.floor_joint_time {
+                let part = p.body_part;
+                for j in 0..c.ch.joints.len() {
+                    if c.ch.joints[j].child == part || c.ch.joints[j].parent == part {
+                        c.ch.core.lower_scale(j, r.floor_joint_strength, r.floor_joint_strength, r.floor_joint_strength);
+                    }
+                }
+            }
+        } else if stagger && r.looseness4_stagger > 0.01 {
+            // staggering: looseness4Stagger's own blend as a scale over what the stagger asks (0x2a7f650 step 5b)
+            let ls = r.looseness4_stagger;
+            let l = ls * k + 1.0 - ls;
+            let lc = l.clamp(0.05, 1.0);
+            let arms = crate::nmrs::Character::mask("ua");
+            let la = r.min_arms_looseness.max(lc);
+            for j in 0..c.ch.eff.len() {
+                if !arms.contains(&j) {
+                    c.ch.core.lower_scale(j, 1.0 + (1.0 - l) * r.k_mult_on_loose, lc, lc);
+                } else if r.min_arms_looseness > 0.0 {
+                    c.ch.core.lower_scale(j, 1.0 + (1.0 - la) * r.k_mult_on_loose, la, la);
+                }
+            }
+            c.ch.set_stiffness(13.0, 1.0, "uw", Some(1.0));
+        } else {
             let ns = r.initial_neck_stiffness + (r.neck_stiffness - r.initial_neck_stiffness) * kn;
             let nd = r.initial_neck_damping + (r.neck_damping - r.initial_neck_damping) * kn;
             apply_strength(c, &Strength { k, body_stiffness: p.body_stiffness, arm_stiffness: r.arm_stiffness, spine_damping: r.spine_damping,
                                           neck: (ns, nd), upper: u, lower: w, looseness: c.ch.bcr.map_or(p.looseness_amount, |b| if b.3 <= p.looseness_amount { b.3 } else { p.looseness_amount }), k_mult_on_loose: r.k_mult_on_loose,
                                           k_mult_4_legs: r.k_mult_4_legs, min_legs_looseness: r.min_legs_looseness,
                                           min_arms_looseness: r.min_arms_looseness, stable_hands_and_neck: p.stable_hands_and_neck,
-                                          balancing: !self.no_balance && !c.dbm_failed }, dt);
+                                          balancing: !self.no_balance && !c.dbm_failed, vest: r.bullet_proof_vest }, dt);
         }
         let s = &mut self.rd;
         if r.initial_weakness_zero <= s.tk {
@@ -1932,6 +1999,12 @@ impl Shot {
         let low = if self.t194 > 0.0 { RDR2_RELAX_LOWER } else { 0.0 };
         self.rd.t_low = (self.rd.t_low + dt).min(low);
         self.fall[1] = 1.0 - self.rd.t_low / (low + 1e-6);
+        // cStr modulation: U and W scaled by the character's strength (0x2a7f650's ramps)
+        if p.rdr2.use_cstr {
+            let (s, r) = (c.ch.core.cfg.strength, p.rdr2);
+            self.fall[0] *= r.cstr_upper_min + (r.cstr_upper_max - r.cstr_upper_min) * s;
+            self.fall[1] *= r.cstr_lower_min + (r.cstr_lower_max - r.cstr_lower_min) * s;
+        }
         self.time += dt;
         self.since_hit += dt;
         if self.t190 == self.t194 && self.t194 != 0.0 && !self.failed() {
@@ -1961,7 +2034,7 @@ impl Shot {
         self.run(c, HIT(), Some(|s, _| s.new_hit), Some(Shot::hit_enter), Some(Shot::hit_tick), Some(|s, _| !s.new_hit), None, dt);
         self.wound = world(&c.b.part(p.body_part).m, self.hit_local);
         c.module(HIT() as u32);
-        self.spine_rdr2(c, dt);
+        let moved = self.spine_rdr2(c, dt);
         c.module(100);
         self.shock_spin(c, dt);
         c.module(101);
@@ -1986,6 +2059,26 @@ impl Shot {
                  Some(|s, _| s.failed() || s.new_hit), Some(|_, c| c.out.spine_twist_stop = true), dt);
         c.module(MELEE() as u32);
         c.module(102);
+        // spineBlendZero: a slow body's spine relaxes to zero, a fast one's keeps its pose; after a spine ramp's write it
+        // fades in over 0.5 s (0x9de396e2 >= 0, a pose index in place of zero, isn't here)
+        if p.rdr2.spine_blend_zero > 0.0 && (p.rdr2.spine_blend_exag_cpain || !moved) {
+            let mut v = (2.0 * c.b.doll.kinetic()).sqrt();
+            v = if v < 0.001 { 0.001 } else { v.min(1.0) };
+            let mut b = p.rdr2.spine_blend_zero;
+            if !p.rdr2.spine_blend_exag_cpain {
+                let d = self.since_hit - self.rd.wrote;
+                if d > 0.0 {
+                    let d = d.min(0.5);
+                    (v, b) = ((1.0 - 2.0 * d).min(1.0), 2.0 * d * p.rdr2.spine_blend_zero);
+                } else {
+                    (v, b) = (0.0, 0.0);
+                }
+            }
+            let weight = (1.0 - b) * (1.0 - v) + b;
+            for &j in SPINE().iter() {
+                c.ch.eff[j].blend_to_zero(weight);
+            }
+        }
         self.new_hit = false;
     }
 }
