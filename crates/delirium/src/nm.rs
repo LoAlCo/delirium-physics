@@ -1235,6 +1235,13 @@ impl Agent {
         self.balance.as_ref().and_then(|b| b.dbm.as_ref()).map(|d| [d.f.pos[0], d.f.pos[1], d.f.centre])
     }
 
+    /// NMX_DUMP: self pairs met; and once the whole list on stderr
+    pub fn nmx_met(&self) -> String {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| eprintln!("NMX pairs {:?} LEG {:?}", self.doll.pairs, *LEG_PAIRS()));
+        self.doll.self_met.iter().map(|p| format!("{}-{}", p.0, p.1)).collect::<Vec<_>>().join(" ")
+    }
+
     /// NMX_DUMP: the balancer's step-decision state.
     pub fn nmx_decision(&self) -> Option<(u8, [f32; 2], f32)> {
         self.balance.as_ref().and_then(|b| b.dbm.as_ref()).map(|d| (d.f.flags, d.f.dist, d.p.lead))
