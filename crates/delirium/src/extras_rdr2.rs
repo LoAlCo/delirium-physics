@@ -3844,6 +3844,10 @@ impl Lasso {
 }
 
 impl Extra for Lasso {
+    fn yanked_stirrups_set(&mut self, alive: Option<[bool; 2]>) {
+        self.r2.stirrups = alive;
+    }
+
     /// RDR2's pointGun reads yanked's lassoedtype (+0x184 = 1: the arm straight along the aim).
     fn pg_yanked(&self) -> Option<bool> {
         Some(self.kind == 1)
@@ -4033,6 +4037,11 @@ impl Sit {
 }
 
 impl Extra for Sit {
+    /// Constraint slot 1 is the right stirrup, 2 the left (RDR2's masks 2 and 4, 0x2a901f8).
+    fn sit_stirrups(&self) -> Option<[bool; 2]> {
+        Some([self.r2.cons[2].is_some(), self.r2.cons[1].is_some()])
+    }
+
     fn update(&mut self, p: &mut P) -> Result<(), Error> {
         for (i, n) in ["seatPos", "seatForward", "stirrupL", "stirrupR"].iter().enumerate() {
             let v = p.v(n, Vec3::ZERO)?;

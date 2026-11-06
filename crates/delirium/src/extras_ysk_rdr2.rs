@@ -407,6 +407,9 @@ pub struct YankedRdr2 {
     bolas_once: bool,
     roll_t: f32,
     pedal: [bool; 2],
+    /// A running sit's stirrups, left and right, alive
+    pub stirrups: Option<[bool; 2]>,
+    free: [bool; 2],
     fric: [f32; 21],
     writhe_mask: &'static str,
     wind_mask: &'static str,
@@ -434,7 +437,7 @@ impl YankedRdr2 {
             leg: [0; 2], leg_t: [0.0; 2], spine_raw: 0, spine_t: 0.0, head_raw: 0, head: 0, head_t: 0.0, neck_pose: 1.0, arm_k: 13.0,
             slow_latch: false, grab_latch: false, grab_first: 0, held_chest: false, held_feet: [false; 2], code: [12; 2], pose: [None; 2], jerks: 0,
             latched: false, latched_t: 0.0, touched: false, airborne: 0.0, air_t: 0.0, bump_mode: 1, bolas_t: 0.0, bolas_sign: 1.0, bolas_once: true,
-            roll_t: -0.1, pedal: [false; 2], fric: [1.0; 21], writhe_mask: "lb", wind_mask: "", kids: Kids::default(), look: Look::default(),
+            roll_t: -0.1, pedal: [false; 2], stirrups: None, free: [false; 2], fric: [1.0; 21], writhe_mask: "lb", wind_mask: "", kids: Kids::default(), look: Look::default(),
             scale: Scale::default(),
         }
     }
@@ -1249,13 +1252,21 @@ impl YankedRdr2 {
         if self.arm.contains(&0) {
             hand_fric = self.claw(c, neck, face_down, face_up, limp, speed, dt);
         }
-        // the legs: kicks (0), pedalling (2), back-pedalling (3). Ours: no stirrup's per-leg lock, so both legs together
-        let locked = self.p.stirrup && c.extras_on.contains(&"rdr2Sit");
+        // the legs: kicks (0), pedalling (2), back-pedalling (3). Dragged by a stirrup, a foot out of its stirrup pedals
+        let free = match (self.p.stirrup, self.stirrups) {
+            (true, Some(alive)) => [!alive[0], !alive[1]],
+            _ => [false; 2],
+        };
+        self.free = free;
+        if self.p.stirrup {
+            self.ran(48, &format!("dragged by a stirrup: sit's stirrups alive {:?}", self.stirrups));
+        }
         for i in 0..2 {
             if self.leg_t[i] < 0.0 {
                 let mut r = u(c);
                 let mut t = ty;
-                if locked {
+                if free[i] {
+                    self.ran(47, "a foot out of its stirrup: it pedals");
                     r *= 0.5;
                     t = 2;
                 }
@@ -1271,7 +1282,7 @@ impl YankedRdr2 {
         } else if self.leg_raw[0] == 3 && self.leg_raw[1] == 2 {
             self.leg[1] = 3;
         }
-        if !locked && (face_up || limp || speed <= 0.8) && (limp || !self.p.pedal_slow || !face_down) && (!air || limp) {
+        if free == [false; 2] && (face_up || limp || speed <= 0.8) && (limp || !self.p.pedal_slow || !face_down) && (!air || limp) {
             self.leg = [0; 2];
         }
         if self.leg.contains(&0) {
@@ -1547,8 +1558,9 @@ impl YankedRdr2 {
             }
             self.ran(40 + s as u32, "the spine's writhe");
         } else if s == 0 {
-            // still (the stirrup's lock bends it by a leftover register [P], left at none)
-            spine_writer(c, 0.0, 0.0, 0.0);
+            // still, bent to the side of a foot out of its stirrup
+            let x = if self.free[1] { 0.5 } else if self.free[0] { -0.5 } else { 0.0 };
+            spine_writer(c, 0.0, -x, x);
             self.ran(44, "the spine still");
         }
         let (sk, sd) = self.p.ground[2];
