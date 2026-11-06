@@ -2641,7 +2641,7 @@ impl ReachForWound {
                 let ((px, pz), (cx, cz)) = (frame(point), frame(at));
                 pz < cz + zone[0] && cz - zone[2] < pz && s * f * cx - f * zone[1] < s * f * px
             };
-            let sh = [0, 1].map(|i| c.b.joint_pos(SHOULDER()[i]));
+            let sh = [0, 1].map(|i| c.b.joint_pos(crate::nmrs::SHOULDER()[i]));
             if matches!(part, 0 | 7..=13 | 17) {
                 for (i, s) in [(1, 1.0), (0, -1.0)] {
                     if RFW_ZONE_NEAR.iter().any(|&z| inside(z, sh[i], s, 1.0)) || inside(RFW_ZONE_FAR, sh[1 - i], s, -1.0) {
