@@ -1238,7 +1238,7 @@ impl Agent {
     /// NMX_DUMP: self pairs met; and once the whole list on stderr
     pub fn nmx_met(&self) -> String {
         static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| eprintln!("NMX pairs {:?} LEG {:?}", self.doll.pairs, *LEG_PAIRS()));
+        ONCE.call_once(|| { let k: [u8; 9] = [delirium_data::kv!(0 int), delirium_data::kv!(1 int), delirium_data::kv!(7 int), delirium_data::kv!(23 int), delirium_data::kv!(54 int), delirium_data::kv!(107 int), delirium_data::kv!(251 int), delirium_data::kv!(252 int), delirium_data::kv!(253 int)]; eprintln!("NMX kv 0,1,7,23,54,107,251,252,253 = {k:?} ins {:?}", self.balance.as_ref().and_then(|b| b.dbm.as_ref()).map(|d| d.f.inside_raw)); eprintln!("NMX pairs {:?} LEG {:?}", self.doll.pairs, *LEG_PAIRS()); }); if let Some(d) = self.balance.as_ref().and_then(|b| b.dbm.as_ref()) { static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0); if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 60 == 0 { eprintln!("NMX p172 {} thr {:?} restep {:?} lead {} width {}", d.p.p172, d.p.rdr2.map(|r| r.p.step_decision_threshold), d.p.rdr2.map(|r| r.legs_apart()), d.p.lead, d.p.foot_width); } }
         self.doll.self_met.iter().map(|p| format!("{}-{}", p.0, p.1)).collect::<Vec<_>>().join(" ")
     }
 

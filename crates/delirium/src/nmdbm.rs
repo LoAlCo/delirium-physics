@@ -515,6 +515,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
         Some(r) => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172 - r.p.step_decision_threshold,
         None => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172,
     };
+    if std::env::var_os("NMX_SUP").is_some() { eprintln!("SUP pc {pc:?} val {} up {up:?} L a {:?} c {:?} d {:?} R a {:?} c {:?} d {:?} k {} {}", support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up), s.legs[0].foot.m.a, s.legs[0].foot.m.c, s.legs[0].foot.m.d, s.legs[1].foot.m.a, s.legs[1].foot.m.c, s.legs[1].foot.m.d, delirium_data::kv!(68) as f32, delirium_data::kv!(9) as f32); }
     f.flags = (f.flags & !delirium_data::kv!(1 int)) | (inside as u8) << 2;
     f.inside_raw = inside;
     let (lpos, rpos) = (s.legs[0].foot.m.d, s.legs[1].foot.m.d);
