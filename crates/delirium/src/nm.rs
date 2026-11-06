@@ -1876,6 +1876,7 @@ impl Agent {
             c.incoming = &self.incoming;
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             c.shot_on = self.nm_shot.is_some();
+            c.fall_on = self.nm_cf.as_ref().is_some_and(|f| f.active) || self.nm_ru.active;
             c.shot_scale = self.nm_shot.as_ref().map_or(1.0, |s| s.rdr2_scale());
             // RDR2 core: fall to knees caps it once kneeling (the shot's +0x6e4)
             if c.ch.rdr2 && c.ch.core.ftk.module_on && c.ch.core.ftk.kneeling {
@@ -1886,7 +1887,8 @@ impl Agent {
                 hip_pitch: d.p.rdr2.map_or(0.0, |r| r.owned.hip.value), steps: d.p.rdr2.map_or(0, |r| r.steps), leg: d.p.pelvis_height,
                 time: d.p.rdr2.map_or(0.0, |r| r.time), quality: d.p.rdr2.map_or(0.0, |r| r.quality), knee: d.p.rdr2.map_or(0.0, |r| r.owned.knee.value),
                 lean_on: !matches!(d.lean.mode, crate::nmdbm::LeanMode::None), straight: d.p.rdr2.map_or((0.99, d.p.pelvis_height), |r| r.straight),
-                fail_ratio: d.p.rdr2.map_or((0.0, 0.0), |r| r.fail_ratio), fail_caps: d.p.rdr2.and_then(|r| r.drain(d.p.leg_stiffness)) });
+                fail_ratio: d.p.rdr2.map_or((0.0, 0.0), |r| r.fail_ratio), fail_caps: d.p.rdr2.and_then(|r| r.drain(d.p.leg_stiffness)),
+                stable: d.p.rdr2.map_or((0.25, 0.25), |r| (r.p.stable_lin, r.p.stable_rot)) });
             if let Some(p) = self.nm_cf_msg.take() {
                 let b = walk_actives!(self);
                 start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);

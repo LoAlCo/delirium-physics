@@ -788,7 +788,7 @@ pub(crate) fn asin(x: f32) -> f32 {
     if x <= -1.0 { -std::f32::consts::FRAC_PI_2 } else if x >= 1.0 { std::f32::consts::FRAC_PI_2 } else { (x as f64).asin() as f32 }
 }
 
-fn arc(a: Vec3, b: Vec3) -> Quat {
+pub(crate) fn arc(a: Vec3, b: Vec3) -> Quat {
     let (na, mut nb) = (vnorm(a), vnorm(b));
     let d = na.y.fma(nb.y, na.z.fma(nb.z, na.x * nb.x));
     if (d - 1.0).abs() < delirium_data::kv!(50) {

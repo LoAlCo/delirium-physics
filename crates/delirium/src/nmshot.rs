@@ -395,6 +395,8 @@ pub struct Ctx<'a, 'b> {
     pub upright: bool,
     /// headLook is running; only the RDR2 core's duck reads it
     pub head_look_on: bool,
+    /// RDR2 core: catchFall or bodyRollUp runs
+    pub fall_on: bool,
     /// RDR2 core: what the balancer is doing, for the extras that read it (staggerFall); None without a balancer
     pub dbm: Option<DbmView>,
     /// RDR2 core: the shot behaviour is running (staggerFall leaves the fall to it)
@@ -451,6 +453,8 @@ pub struct DbmView {
     pub fail_ratio: (f32, f32),
     /// the timed fail's ramp while it runs (bal+0x62c..+0x640): knees and ankles, each hip
     pub fail_caps: Option<(f32, [f32; 2])>,
+    /// stableLinSpeedThresh and stableRotSpeedThresh (bal+0x6e0, +0x6e4)
+    pub stable: (f32, f32),
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {
@@ -458,7 +462,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
         Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed, head_look_on: false,
-              dbm: None, shot_on: false, rfw: None, bb_on: false, sit_state: None, extras_on: vec![], incoming: &[], shot_scale: 1.0 }
+              dbm: None, shot_on: false, fall_on: false, rfw: None, bb_on: false, sit_state: None, extras_on: vec![], incoming: &[], shot_scale: 1.0 }
     }
 
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.

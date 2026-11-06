@@ -160,10 +160,12 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "numStepsTillSlump", kind: Kind::Int, used: true, doc: "steps allowed before forcing a slump, 0.3 s each (3)" },
         Param { name: "stable2SlumpTime", kind: Kind::Float, used: true, doc: "still this long after impact: slump anyway, s (1.0)" },
         Param { name: "exclusionZone", kind: Kind::Float, used: true, doc: "RDR2 core: the balancer keeps his predicted COM this far off the wall, m (0.2); not done without it" },
-        Param { name: "footFrictionMultStart", kind: Kind::Float, used: false, doc: "(not done: 1)" },
-        Param { name: "footFrictionMultRate", kind: Kind::Float, used: false, doc: "(not done: 0)" },
-        Param { name: "backFrictionMultStart", kind: Kind::Float, used: false, doc: "(not done: 1)" },
-        Param { name: "backFrictionMultRate", kind: Kind::Float, used: false, doc: "(not done: 0)" },
+        Param { name: "?9f8c1522", kind: Kind::Float, used: true, doc: "RDR2 core: where the feet's friction ramp ends (0.05)" },
+        Param { name: "?a88467a8", kind: Kind::Float, used: true, doc: "RDR2 core: where the back's friction ramp ends (0.05)" },
+        Param { name: "footFrictionMultStart", kind: Kind::Float, used: true, doc: "RDR2 core: slump's friction ramp (1)" },
+        Param { name: "footFrictionMultRate", kind: Kind::Float, used: true, doc: "RDR2 core: slump's friction ramp (2)" },
+        Param { name: "backFrictionMultStart", kind: Kind::Float, used: true, doc: "RDR2 core: slump's friction ramp (1)" },
+        Param { name: "backFrictionMultRate", kind: Kind::Float, used: true, doc: "RDR2 core: slump's friction ramp (2)" },
         Param { name: "impactLegStiffReduction", kind: Kind::Float, used: true, doc: "leg stiffness dropped on impact, of its value (0.3)" },
         Param { name: "slumpLegStiffReduction", kind: Kind::Float, used: true, doc: "leg stiffness dropped when slumping, of its value (0.8)" },
         Param { name: "slumpLegStiffRate", kind: Kind::Float, used: true, doc: "slump drop reached at this per second (1.0)" },
@@ -2107,7 +2109,7 @@ impl Injured {
         let Some((hit, e)) = r.hit else { return false };
         let f = if r.push_t >= r.push_start - 0.7 { 1.0 } else { r.push_t / (r.push_start - 0.7) };
         let at = hit + e * ((1.0 - f) * 0.25 - 0.2);
-        let arms = crate::extras_fall_rdr2::brace_core(c, &mut r.brace, IOG_BRACE, at, Vec3::ZERO, dt);
+        let arms = crate::extras_fall_rdr2::brace_core(c, &mut r.brace, IOG_BRACE, at, Vec3::ZERO, None, dt);
         for i in 0..2 {
             used[i] |= arms[i];
         }
