@@ -30,6 +30,8 @@ const PARAMS: &[Param] = &[
     p!("fireWeapon", Bool, "ours: with no start, a shot (the arm relaxes)"),
     p!("leftHandTarget", Vec3, "where the left hand's gun points, world (zero)"),
     p!("rightHandTarget", Vec3, "where the right hand's gun points, world (zero)"),
+    p!("leftHandTargetInstance", Int, "RDR2's uncracked 1c7b6b2b: the object the left target is on, its frame and motion; -1 the world (-1)"),
+    p!("rightHandTargetInstance", Int, "RDR2's uncracked 5606fc8c: likewise the right (-1)"),
     p!("leftHandParentEffector", Int, "RDR2's joint the left aim starts from; -1 its shoulder (-1)"),
     p!("rightHandParentEffector", Int, "likewise the right (-1)"),
     p!("leftHandParentOffset", Vec3, "added to it, in the chest's frame (zero)"),
@@ -196,6 +198,7 @@ fn acos(x: f32) -> f32 {
 struct Params {
     weapon: [i32; 2],
     target: [Vec3; 2],
+    instance: [i32; 2],
     parent: [i32; 2],
     parent_offset: [Vec3; 2],
     lead: f32,
@@ -278,6 +281,7 @@ impl Params {
         Ok(Params {
             weapon: [p.i("leftWeapon", -1)?, p.i("weapon", -1)?],
             target: [p.v("leftHandTarget", Vec3::ZERO)?, p.v("rightHandTarget", Vec3::ZERO)?],
+            instance: [p.i("leftHandTargetInstance", -1)?, p.i("rightHandTargetInstance", -1)?],
             parent: [p.i("leftHandParentEffector", -1)?, p.i("rightHandParentEffector", -1)?],
             parent_offset: [p.v("leftHandParentOffset", Vec3::ZERO)?, p.v("rightHandParentOffset", Vec3::ZERO)?],
             lead: p.f("leadTarget", 0.0)?,
@@ -431,6 +435,8 @@ pub struct PointGun {
     yanked: bool,
     /// the pistol solver's limit factor, with its hysteresis (RDR2's global at 0x3cc7ca8, 1.15 to start)
     pik_limit: f32,
+    /// the objects: id, place, turn, velocity, spin
+    objects: Vec<(i32, Vec3, Quat, Vec3, Vec3)>,
     looking: bool,
     dt: f32,
     ws: [i32; 2],
@@ -451,7 +457,7 @@ impl PointGun {
             side_t: 0.0, broken_t: 0.0, conn_t: 0.0, conn_for: 0.0, extra: 0.0, turn_t: 0.0, look_t: 0.0, side_pose: 1, fed: 0, g: 1, s: 0,
             probe_hit: [false; 2], fall_rifle: false, fall_support: false, support_on: true, duck_neutral: false, two: false, below: false,
             support_mode: false, look_r: [false, true], connected: false, exists: false, allowed: true, connected_kept: true,
-            new_target: true, yanked: false, pik_limit: 1.15, looking: false, dt: 1.0 / 60.0, ws: [0; 2], ropes: vec![], pair_off: vec![], block: [false; 2],
+            new_target: true, yanked: false, pik_limit: 1.15, objects: vec![], looking: false, dt: 1.0 / 60.0, ws: [0; 2], ropes: vec![], pair_off: vec![], block: [false; 2],
             said: 0, out: vec![], fallback: None,
         };
         if fire {
@@ -1607,8 +1613,20 @@ impl PointGun {
             (a.was, a.state, a.pointing, a.facing) = (a.state, 0, false, facing[i]);
             a.prev = a.look;
             a.target = self.p.target[i];
+            let on_it = self.objects.iter().find(|o| o.0 == self.p.instance[i]);
+            if let Some(o) = on_it {
+                a.target = o.1 + o.2 * a.target;
+            }
             a.look = a.target;
-            a.vel = if a.prev.length_squared() >= 0.01 && dt > 0.0 { (a.target - a.prev) / dt } else { Vec3::ZERO };
+            a.vel = match on_it {
+                // 0x2a37784: the instance's own point velocity
+                Some(o) => o.3 + o.4.cross(a.target - o.1),
+                None if a.prev.length_squared() >= 0.01 && dt > 0.0 => (a.target - a.prev) / dt,
+                None => Vec3::ZERO,
+            };
+            if on_it.is_some() {
+                note(format_args!("pointGun: arm {i} targets object {} at {:.2?}", self.p.instance[i], a.target));
+            }
             a.led = a.target;
             if self.p.lead > 0.0 {
                 // (RDR2 clamps the lead by its large-step ramp too, ctx+0x7b8..: Delirium's step never reaches it)
@@ -1989,12 +2007,17 @@ impl Extra for PointGun {
                 continue;
             }
             let len = self.p.probe * if self.probe_hit[i] { 1.05 } else { 1.0 };
-            let hit = world.cast(a.anchor, dir, len).is_some() || obs.iter().any(|o| ray_box(o, a.anchor, dir, len));
+            // (not the target's own object: RDR2 leaves the hand targets' instances out)
+            let hit = world.cast(a.anchor, dir, len).is_some() || obs.iter().filter(|o| !self.p.instance.contains(&o.id)).any(|o| ray_box(o, a.anchor, dir, len));
             if hit && !self.probe_hit[i] {
                 note(format_args!("pointGun: the probe hit (arm {i})"));
             }
             self.probe_hit[i] = hit;
         }
+    }
+
+    fn objects(&mut self, obs: &[crate::ragdoll::Obstacle]) {
+        self.objects = obs.iter().map(|o| (o.id, o.at, o.rot, o.vel, o.spin)).collect();
     }
 
     fn ropes(&self) -> Vec<(usize, Vec3, Vec3, f32, f32)> {
