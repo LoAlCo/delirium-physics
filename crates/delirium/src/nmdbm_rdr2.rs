@@ -111,6 +111,8 @@ pub struct Params {
     /// share of shotInjuredLeg's legInjury the limp takes as its amount. Ours (0.25): RDR2's own source of the amount
     /// isn't known, and the whole legInjury (0.3) took a quarter-metre off the leg and dropped him
     pub limp_scale: f32,
+    /// ctx+0x103c, written straight into the character by this message: self contacts shallower than this aren't recorded (0x2a39ee0)
+    pub ignore_depth: f32,
     /// behaviours' joint writes resolved as RDR2's prioritised limb requests (limbreq.rs); off: the last write wins
     pub limb_requests: bool,
     /// limb requests resolved highest slot first: RDR2's queue order (read: a stable insertion sort, highest priority, then
@@ -242,7 +244,7 @@ impl Default for Params {
                  slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.7, 1.8], ankle_equilibrium: 0.0, legs_apart_restep: 0.2,
                  legs_apart_max: 2.0, legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
                  always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
-                 taper_knee_strength_run: false, limp_scale: 1.0, limb_requests: true, limb_order_reversed: true,
+                 taper_knee_strength_run: false, limp_scale: 1.0, ignore_depth: -100.0, limb_requests: true, limb_order_reversed: true,
                  max_foot_speed: 5.0, ramp_hip_pitch_on_fail: true, prediction_time: 0.2, prediction_time_variance: 0.0,
                  step_clamp_scale_variance: 0.0, lift_feet: 0.07, lift_feet_variance: 0.0, lean_against_velocity: 0.0,
                  stand_up: false, extra_feet_apart: 0.0, feet_apart_min: 1.0, feet_apart_max: 1.0, feet_apart_vel: 100.0,
@@ -311,6 +313,7 @@ impl Params {
             "feetApartVel" => self.feet_apart_vel = v,
             "stopWaddling" => self.stop_waddling = v as i32,
             "sidewaysCheatForce" => self.sideways_cheat_force = v,
+            "ignoredepth" => self.ignore_depth = v,
             "sidewaysThresh" => self.sideways_thresh = v,
             "stepIfInSupport" => self.step_if_in_support = v != 0.0,
             "ankleOffset" => self.ankle_offset = v,
@@ -594,6 +597,16 @@ pub enum Crouch {
     ReleaseHip(f32),
 }
 
+/// The limp's balancer fields, set by configureShotInjuredLeg (ctor's values: no shift, scales 1, the byte set).
+#[derive(Clone, Copy, Debug)]
+pub struct LimpCfg { pub bias: f32, pub width: f32, pub width_injured: f32, pub both: bool }
+
+impl Default for LimpCfg {
+    fn default() -> LimpCfg {
+        LimpCfg { bias: 0.0, width: 1.0, width_injured: 1.0, both: true }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Rdr2 {
     /// yanked's turn block: the "other foot farther" margin stays 0.2 leg lengths while turning
@@ -635,6 +648,10 @@ pub struct Rdr2 {
     pub falling: bool,
     /// the injured leg (0 left, 1 right) and how badly (0..1), from shotInjuredLeg
     pub limp: (usize, f32),
+    /// configureShotInjuredLeg's injuredbias, limpwidth, limpwidthinjured and both-legs byte (bal+0x5dc, +0x5a0, +0x5a4, +0xbeb)
+    pub limp_cfg: LimpCfg,
+    /// each leg's lift multiplier (bal+0x23c, +0x240; below 0 off): the swing target's greatest reach from the hip, by the leg's length
+    pub lift_mult: [f32; 2],
     /// RDR2's forced step: this foot (0 left, 1 right) steps next, for one step from the step count it was asked at;
     /// and whether to drop the step in progress first
     pub forced: Option<(usize, u32)>,
@@ -704,7 +721,7 @@ pub struct Rdr2 {
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
         Rdr2 { p, turn_margin: false, time: 0.0, still: 0.0, straight: (0.99, 1.0), steps: 0, extra_steps: 0, down_swing: [false; 2], up_now: bevy_math::Vec3::Z, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
-               since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, run_fast: false, wait: [0.0; 2], give_way: false, push_off: false, falling: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
+               since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, run_fast: false, wait: [0.0; 2], give_way: false, push_off: false, falling: false, limp: (0, 0.0), limp_cfg: LimpCfg::default(), lift_mult: [-1.0; 2], forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false, heading_only: false,
                leg_twist: RESET_LEG_TWIST, turn_lift: p.turn_lift_feet, turn_facing: None, force_balance: false, fail_ratio: (0.0, 0.0), quality: 0.0, abort: None, must_collide: false, kneeling: false, force_fail: false, pause: 0.0, aligned: false, landed: false, crouching: None,
@@ -875,13 +892,44 @@ impl Rdr2 {
     }
 
     /// Each foot's step width from the minimum spread `min` (GTA IV's: min x 0.3 + 0.08).
-    pub fn widths(&self, min: f32, speed: f32) -> [f32; 2] {
+    pub fn widths(&self, min: f32, speed: f32, stepping: u32) -> [f32; 2] {
         let w = (min + self.p.extra_feet_apart).mul_add(0.3, 0.08);
-        if speed <= self.p.feet_apart_vel {
-            return [w; 2];
+        let base = if speed <= self.p.feet_apart_vel {
+            [w; 2]
+        } else {
+            let w = w * self.width_scale;
+            [if self.p.stop_waddling == 1 { 0.0 } else { w }, if self.p.stop_waddling == 2 { 0.0 } else { w }]
+        };
+        self.limp_widths(base, w, stepping)
+    }
+
+    /// The limp (bal+0x244 over 0, in stage 1): no step, both as they were; stepping, both at limpwidthinjured, and when the
+    /// healthy foot steps its own at limpwidth (with the both-legs byte, both).
+    fn limp_widths(&self, base: [f32; 2], w: f32, stepping: u32) -> [f32; 2] {
+        if self.limp.1 <= 0.0 || stepping == 0 {
+            return base;
         }
-        let w = w * self.width_scale;
-        [if self.p.stop_waddling == 1 { 0.0 } else { w }, if self.p.stop_waddling == 2 { 0.0 } else { w }]
+        let (h, c) = (self.limp.0, self.limp_cfg);
+        let mut out = [c.width_injured * w; 2];
+        // the hurt leg is 0 left: the healthy foot steps as 2; hurt right, as 1
+        if stepping == if h == 0 { 2 } else { 1 } {
+            out[1 - h] = c.width * w;
+            if c.both {
+                out[h] = c.width * w;
+            }
+        }
+        crate::extras_core_rdr2::trace_once("balancer: limp widths", || format!("{out:?} of {w}, leg {h} hurt, foot {stepping} stepping"));
+        out
+    }
+
+    /// The support centre (bal+0x420): the middle, limping away from the hurt leg by injuredbias.
+    pub fn support(&self, l: bevy_math::Vec3, r: bevy_math::Vec3) -> bevy_math::Vec3 {
+        if self.limp.1 <= 0.0 || self.limp_cfg.bias == 0.0 {
+            return (l + r) * 0.5;
+        }
+        let w = if self.limp.0 == 0 { 0.5 + self.limp_cfg.bias } else { 0.5 - self.limp_cfg.bias };
+        crate::extras_core_rdr2::trace_once("balancer: limp bias", || format!("support at {w} from the left foot"));
+        l + (r - l) * w
     }
 
     /// Moving sideways: `along_side` is the velocity direction along the pelvis's side axis.
@@ -919,6 +967,12 @@ impl Rdr2 {
     pub fn gravity_share(&self) -> Option<f32> {
         let t = self.time - self.failing?;
         self.p.fall_reduce_gravity_comp.then(|| 1.0 / ((0.4 + self.asym) * self.p.fall_mult * t + 1.1))
+    }
+
+    /// 0x2ab617c: how deep a crouch goes, from `h` the pelvis's height over the lower foot (the same sum as the start's).
+    pub fn crouch_depth(h: f32, leg: f32, straight: f32) -> f32 {
+        let l = leg - 0.5 * FOOT_HEIGHT;
+        if l > 0.1 { (straight - h / l) * 0.79235 } else { 0.0 }
     }
 
     /// Crouch start, at his first step: `h` the COM's height over the lower foot, `leg` the leg scale, `straight` his

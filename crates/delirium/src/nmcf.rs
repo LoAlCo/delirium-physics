@@ -379,7 +379,8 @@ pub(crate) fn clav_follow(ch: &mut Character, clav: usize, shoulder: usize) {
 
 
 // RDR2's catchFall (with the RDR2 core), from a study of RDR2's own catchFall: GTA IV's catchFall on RDR2's terms.
-// Its hands-and-knees mode and the slope block stay off here (setFallingReaction's own extra does the hands and knees);
+// The balancer isn't kept beside it here, so the mode's hand-over of the legs to the balancer (+0x2b0, +0x467) has no use, and
+// its hip requests go nowhere unless one runs; the arm helpers' push flag (+0x5f, hips 12 not 8) isn't here;
 // the both-arms-down event, the teeter edge clamp and the big-spin
 // stiffness aren't here.
 
@@ -420,6 +421,12 @@ pub(crate) struct Rdr2Cf {
     friction_wait: f32,
     hand_friction: [f32; 2],
     rolling: bool,
+    /// the hands-and-knees mode (+0x2bb), its hands-down timer (+0x29c, off at 0 or under) and lost-contact grace (+0x2a0)
+    hk: bool,
+    hands_t: f32,
+    grace: f32,
+    /// +0x2b8: keeps the head off the ground, from the first touch or smartFall's forceHeadAvoid
+    head_away: bool,
 }
 
 impl Rdr2Cf {
@@ -456,7 +463,8 @@ impl CatchFall {
         }
         let mut r = Rdr2Cf { time: 0.0, on_ground: false, knee_amount: [0.0; 2], hip_gain: [0.0; 2], spine_lean2: 0.0, knee: [0.0; 2],
                              len: 0.0, reach_scale: 1.0, arm: [RArm::default(); 2], forward: 0.0, upright: 0.0, dir: Vec3::ZERO, roll: 0.0,
-                             roll_wait: fall.inhibit_rolling, friction_wait: fall.change_friction_time, hand_friction: [fall.arm_friction; 2], rolling: false };
+                             roll_wait: fall.inhibit_rolling, friction_wait: fall.change_friction_time, hand_friction: [fall.arm_friction; 2], rolling: false,
+                             hk: false, hands_t: -0.1, grace: 2.0, head_away: std::mem::take(&mut ch.core.cfg.fall.force_head) };
         r.draw_legs(ch);
         r.spine_lean2 = ch.random() * 0.2 - 0.1;
         for i in 0..2 {
@@ -507,6 +515,36 @@ impl CatchFall {
             }
         }
         let fall = c.ch.core.cfg.fall;
+        r.head_away |= r.on_ground;
+        // hands and knees (5.1): asked, health over the threshold (0: smartFall's own 0.5 isn't kept), inside the window
+        let hk_was = r.hk;
+        let stagger_short = fall.hk_window < 0.5 && c.extras_on.contains(&"staggerFall");
+        r.hk = fall.hk && c.ch.core.cfg.health > 0.0 && fall.hk_window > r.time;
+        if r.hk {
+            crate::extras_core_rdr2::trace_first("catchFall: hands and knees");
+        }
+        // the window ends this tick: the arms start over
+        if r.time < fall.hk_window && fall.hk_window < r.time + dt {
+            let keep = [r.arm[0].swing, r.arm[1].swing];
+            r.arm = [Rdr2Cf::arm_init(c.ch, r.len), Rdr2Cf::arm_init(c.ch, r.len)];
+            (r.arm[0].swing, r.arm[1].swing) = (keep[0], keep[1]);
+        }
+        if r.hk {
+            if r.hands_t > 0.0 {
+                r.hands_t += dt;
+            }
+            // the balancer's hip pitch, owner 15 (our sign is RDR2's negated)
+            if r.hands_t > 0.1 && r.hands_t < 0.5 {
+                c.out.dbm_crouch.push(crate::nmdbm_rdr2::Crouch::Hip(15, 0.5, 1e5));
+            }
+            if stagger_short {
+                c.out.dbm_crouch.push(crate::nmdbm_rdr2::Crouch::Hip(15, -0.5, 1e5));
+            }
+        }
+        // leaving the mode: the legs' draws over
+        if hk_was && !r.hk {
+            r.draw_legs(c.ch);
+        }
         // setFallingReaction's roll: moving fast enough once the delay is over, rollDownStairs takes him (with resistRolling
         // only with a trunk or arm part down); the stop on slowing isn't here
         let parts: Vec<usize> = (0..c.b.frames.len()).filter(|k| !(1..=6).contains(k)).collect();
@@ -522,7 +560,13 @@ impl CatchFall {
             && (fall.resist_rolling == 0.0 || c.b.doll.collided(&parts))
         {
             r.rolling = true;
-            c.out.rds = Some((crate::nmrds::RollDownStairs::rdr2_defaults(), None));
+            let mut rds = crate::nmrds::RollDownStairs::rdr2_defaults();
+            if let Some([stiffness, force, tlv, decay]) = fall.rds_smart {
+                (rds.stiffness, rds.forcemag) = (stiffness, force);
+                (rds.rdr2.limit_spin_reduction, rds.rdr2.target_linear_velocity, rds.rdr2.target_linear_velocity_decay_time) = (true, tlv, decay);
+                crate::extras_core_rdr2::trace(|| format!("rollDownStairs from smartFall's fields: force {force}, target speed {tlv} decaying over {decay}"));
+            }
+            c.out.rds = Some((rds, None));
             crate::extras_core_rdr2::trace(|| format!("catchFall: rolling at {:.2} m/s over {}", c.vel.length(), fall.com_vel_rds));
         }
         // the ground's normal: the arms' probes' mean once down
@@ -537,6 +581,9 @@ impl CatchFall {
             step = -step.abs();
         }
         self.k = (self.k + step).clamp(0.0, 1.0);
+        if r.hk && r.time < fall.k_time {
+            self.k = 1.0;
+        }
         let k = self.k;
         let weak = kl.min(kr);
         if weak < 0.30001 {
@@ -559,28 +606,48 @@ impl CatchFall {
         for i in 0..2 {
             let (hand, upper) = (limb(i).p[limb(i).p.len() - 1], limb(i).p[1]);
             let touching = c.b.doll.collided(&limb(i).p);
-            let fh = r.hand_friction[i];
+            let fh = if r.hk && r.time < fall.hand_window { 1.1 } else { r.hand_friction[i] };
             if fh <= 1.0 && fh < fall.ground_friction {
                 c.out.part_friction.push((hand, fh));
                 c.out.part_friction.push((upper, fh));
             }
-            if touching && fh <= 1.0 {
+            if touching && r.hand_friction[i] <= 1.0 {
                 r.hand_friction[i] += 2.0 * dt;
-            } else if !touching && fh >= fall.arm_friction {
+            } else if !touching && r.hand_friction[i] >= fall.arm_friction {
                 r.hand_friction[i] -= 0.666 * dt;
+            }
+        }
+        // the arms in the mode: muscle 1; hands down a while, stiffer; just then the legs' draws for kneeling (5.3 item 7)
+        let (mut m_a, mut x_a) = (0.5, 0.0);
+        if r.hk {
+            m_a = 1.0;
+            if r.hands_t > 0.3 || stagger_short {
+                if r.forward > -0.3 {
+                    x_a = 2.0;
+                }
+                if r.hands_t < 0.3 + 1.1 * dt && !stagger_short {
+                    r.knee_amount = [1.1 + c.ch.random() * 0.6, 1.1 + c.ch.random() * 0.6];
+                    r.hip_gain = [-0.3 - c.ch.random() * 0.11, -0.3 - c.ch.random() * 0.11];
+                    crate::extras_core_rdr2::trace_first("catchFall: hands down, the knees drawn in");
+                }
             }
         }
         let ch = &mut *c.ch;
         // the stiffness floors minSpine, minArm, minLegStiffness under k (rdr2_catchfall.md 5.4)
-        let (legs, torso_k, arms) = (p.legs_stiffness.max(fall.min_leg), p.torso_stiffness.max(fall.min_spine), p.arms_stiffness.max(fall.min_arm));
+        let (legs, torso_k, arms) = (p.legs_stiffness.max(fall.min_leg), p.torso_stiffness.max(fall.min_spine), (p.arms_stiffness + x_a).max(fall.min_arm));
         let torso = (torso_k - fall.min_spine) * k + fall.min_spine;
         ch.set_stiffness(torso, 0.5, "us", Some(0.5));
-        ch.set_stiffness(((arms - fall.min_arm) * kl + fall.min_arm).max(3.0).min(20.0), 1.0, "ul", Some(0.5));
-        ch.set_stiffness(((arms - fall.min_arm) * kr + fall.min_arm).max(3.0).min(20.0), 1.0, "ur", Some(0.5));
+        ch.set_stiffness(((arms - fall.min_arm) * kl + fall.min_arm).max(3.0).min(20.0), 1.0, "ul", Some(m_a));
+        ch.set_stiffness(((arms - fall.min_arm) * kr + fall.min_arm).max(3.0).min(20.0), 1.0, "ur", Some(m_a));
         // (one side's lerp is scaled by k twice in RDR2)
         let leg = (legs - fall.min_leg) * k + fall.min_leg;
         ch.set_stiffness((p.legs_stiffness * 0.25).max(leg * k).max(4.0), 0.5, "ll", None);
         ch.set_stiffness((p.legs_stiffness * 0.25).max(leg).max(4.0), 0.5, "lr", None);
+        if r.hk {
+            for i in 0..2 {
+                ch.eff[(*HIP())[i]].set_stiffness(8.0, 0.5, Some(0.5));
+            }
+        }
         for (i, ka) in [(0, kl), (1, kr)] {
             ch.eff[limb(i).e[3]].set_stiffness((6.5 + 0.5 * p.arms_stiffness) * ka.max(0.6), 1.0, Some(10.0));
             ch.eff[(*ANKLE())[i]].set_stiffness(10.0, 1.0, None);
@@ -599,7 +666,7 @@ impl CatchFall {
             ch.eff[(*ANKLE())[i]].desired[0] = 0.0;
         }
         for j in (*SPINE()) {
-            ch.eff[j].desired[0] = fall.spine_lean * (-f).clamp(0.0, 1.0);
+            ch.eff[j].desired[0] = if r.hk && r.knee_amount[0] > 0.6 { fall.spine_lean } else { fall.spine_lean * (-f).clamp(0.0, 1.0) };
             ch.eff[j].desired[1] = r.spine_lean2;
         }
         let arms: Vec<usize> = (0..2).flat_map(|i| limb(i).p).collect();
@@ -611,16 +678,22 @@ impl CatchFall {
             }
         }
         let ch = &mut *c.ch;
-        if !st.twisting {
+        if !st.twisting && !r.hk {
             let decay = 1.0 / (12.0f32).mul_add(dt, 1.0);
             for j in (*SPINE()) {
                 ch.eff[j].desired[2] *= decay;
             }
         }
+        // the curl (extraSit, its default 1: no message here sends it)
+        let curl = if r.hk && !stagger_short {
+            (k * ((2.0 * c.vel.dot(m.c)).clamp(0.0, 1.0) * r.upright - 0.5 * f)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         for i in 0..2 {
             let h = &mut ch.eff[(*HIP())[i]];
             h.blend_to_zero(1.0);
-            h.desired[0] = -0.7 * r.knee[i];
+            h.desired[0] = curl - 0.7 * r.knee[i];
             h.desired[1] = m.c.dot(ground).abs() * r.hip_gain[i];
         }
         let d = m.c.dot(ground);
@@ -633,7 +706,12 @@ impl CatchFall {
             }
             crate::extras_core_rdr2::trace_first("catchFall slope block");
         }
-        let most = 1.0 - 0.7 * d.clamp(0.0, 1.0);
+        if r.hk {
+            for i in 0..2 {
+                ch.eff[(*HIP())[i]].desired[2] = 0.0;
+            }
+        }
+        let most = if r.hk { 2.0 - 1.7 * (-d).clamp(0.0, 1.0) } else { 1.0 - 0.7 * d.clamp(0.0, 1.0) };
         for i in 0..2 {
             // rate limited at blendkneerate (by default 10^4 rad/s: at once)
             let want = -r.knee_amount[i].min(most);
@@ -667,13 +745,20 @@ impl CatchFall {
                 c.ch.eff[crate::nmrs::ELBOW()[i]].desired[0] = [0.9, 0.6][i];
             }
         }
-        let look = c.b.part(HEAD()).m.d + r.dir;
+        let mut look = c.b.part(HEAD()).m.d + r.dir;
         let chest = c.b.part(SPINE3());
+        let away = r.head_away && (fall.hk_head || !r.hk);
         if p.use_head_look {
+            // in the mode he looks ahead, level, off the second spine part's axes
+            if r.hk {
+                let s2 = c.b.pmat((*SPINE())[2] + 1).m;
+                let u = if up.dot(-s2.c) >= 0.0 { -s2.c - s2.a } else { -s2.c + s2.a };
+                look = c.b.part(HEAD()).m.d + (u - up * up.dot(u));
+            }
             // at catchFall's priority; once down, headLook leans the head away from the ground instead
             head.look(crate::nmhl::PRIO_CATCH_FALL, look, chest.v, true);
-            (head.stiffness, head.keep_head_away) = (2.0 + torso, r.on_ground);
-        } else if r.on_ground {
+            (head.stiffness, head.keep_head_away) = (2.0 + torso, away);
+        } else if away {
             let n = c.b.pmat(NECK_PART()).m;
             let away = -r.dir;
             for j in (*NECK()) {
@@ -742,7 +827,33 @@ impl Rdr2Cf {
         };
         a.normal = normal;
         a.k = cf.k;
-        let reach = self.len * self.reach_scale * (0.7 + 0.3 * (1.0 - (self.upright - 0.5).clamp(0.0, 1.0)));
+        let mut reach = self.len * self.reach_scale * (0.7 + 0.3 * (1.0 - (self.upright - 0.5).clamp(0.0, 1.0)));
+        // hands and knees: the hands' timers (6.4), the hand held under him when falling back (6.6), a touching arm reaches less (6.7)
+        if self.hk {
+            let on = c.b.doll.collided(&l.p);
+            if !on {
+                if self.grace < 1.0 {
+                    self.grace -= c.dt;
+                    if self.grace < 0.0 {
+                        self.hands_t = -1.0;
+                    }
+                }
+            } else if hit.is_some() {
+                if self.hands_t <= 0.0 {
+                    (self.hands_t, self.grace) = (1e-5, 0.1);
+                }
+                if self.grace > 1.0 {
+                    self.grace = 0.1;
+                }
+            }
+            if f < -0.3 {
+                target = c.b.part(l.p[3]).m.d - normal * 0.7;
+                c.out.dbm_crouch.push(crate::nmdbm_rdr2::Crouch::Hip(15, -(3.5 * f + 0.55).clamp(-2.0, 2.0), 1e5));
+            }
+            if on {
+                reach *= (c.b.part(l.p[3]).v.length().clamp(1.0, 1.7) - 1.0) * 0.1 + 0.93;
+            }
+        }
         // onto the sphere the arm reaches
         let rr = (target - shoulder).length().min(reach);
         let seg = target - start;

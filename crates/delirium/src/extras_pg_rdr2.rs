@@ -391,6 +391,8 @@ pub struct PointGun {
     started: bool,
     /// +0x774 arm length, +0x770 the grip's ramp, +0x778 the rifle constraint's length (None: none), the hand constraint's
     arm_len: f32,
+    /// the shot's hand-over module (+0x7b8)
+    held_off: bool,
     ramp: f32,
     rifle_len: Option<f32>,
     hand_len: Option<f32>,
@@ -452,7 +454,7 @@ impl PointGun {
     fn new(p: &mut P) -> Result<PointGun, Error> {
         let fire = p.b("fireWeapon", false)?;
         let mut g = PointGun {
-            p: Params::new(p)?, arms: [Arm::default(); 2], started: false, arm_len: 0.0, ramp: -1.0, rifle_len: None, hand_len: None,
+            p: Params::new(p)?, arms: [Arm::default(); 2], started: false, arm_len: 0.0, held_off: false, ramp: -1.0, rifle_len: None, hand_len: None,
             grip_rows: [Vec3::X, Vec3::Y, Vec3::Z], grip_pos: Vec3::ZERO, grip_meas: Vec3::ZERO, measured: [Vec3::ZERO; 2], tw: 1.0,
             side_t: 0.0, broken_t: 0.0, conn_t: 0.0, conn_for: 0.0, extra: 0.0, turn_t: 0.0, look_t: 0.0, side_pose: 1, fed: 0, g: 1, s: 0,
             probe_hit: [false; 2], fall_rifle: false, fall_support: false, support_on: true, duck_neutral: false, two: false, below: false,
@@ -1915,7 +1917,17 @@ fn on_rows(r: &[Vec3; 3], d: Vec3, p: Vec3) -> Vec3 {
 }
 
 impl Extra for PointGun {
+    fn hold(&mut self, on: bool) {
+        if on != self.held_off {
+            crate::extras_core_rdr2::trace(|| format!("pointGun: the shot's hand-over {}", if on { "lets it go" } else { "takes it up again" }));
+        }
+        self.held_off = on;
+    }
+
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if self.held_off {
+            return;
+        }
         if !c.ch.rdr2 {
             // without the core: Delirium's pointGun, pointArm at the gun hand's target
             if self.fallback.is_none() {

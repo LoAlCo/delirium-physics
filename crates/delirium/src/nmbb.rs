@@ -74,13 +74,34 @@ pub struct Rdr2Params {
     pub backwards_auto_turn: bool,
     /// moving backwards: the elbows bent at least 1.5 and the spine's twist left alone (backwardsArms; likewise)
     pub backwards_arms: bool,
+    /// a target moving past inside this turns him aside (turnWithBumpRadius; <= 0 off)
+    pub bump_radius: f32,
+    /// the upper body weak for this long from the start, unless hit, and by how much
+    pub bump_time: f32,
+    pub bump_weak: f32,
+    /// the arms' brace: at this distance (<= 0 off), a target behind him cancels it till this long, the target raised by this
+    pub brace_distance: f32,
+    pub back_brace: f32,
+    pub brace_offset: f32,
+    /// the COM lean of a target moving past, him still (the force lean takes the moving amounts)
+    pub lean_still: f32,
+    /// turning to the target asks a real turn step (+0x139)
+    pub turn_block: bool,
+    pub gs_help: bool,
+    /// the balancer gone: 0 catchFall, 1 rollDownStairs, 2 rollDownStairs till the upper body lands
+    pub falling_reaction: i32,
+    pub start_balancer: bool,
+    /// the rest pose is the rig's zero pose
+    pub zero_pose: bool,
 }
 
 impl Default for Rdr2Params {
     fn default() -> Rdr2Params {
         Rdr2Params { shoulder_l1: 0.0, shoulder_l2: 0.5, hip_l2_arm_l2: 0.3, shoulder_twist: -0.35, airborne_arms: 0.0,
                      axis_weights_simulation_blocked: true, move_radius: -1.0, move_amount: 0.3, move_amount_still: 0.3,
-                     move_when_bracing: false, backwards_auto_turn: false, backwards_arms: false }
+                     move_when_bracing: false, backwards_auto_turn: false, backwards_arms: false,
+                     bump_radius: -1.0, bump_time: 0.0, bump_weak: 0.0, brace_distance: -1.0, back_brace: 0.5, brace_offset: 0.0, lean_still: 0.05,
+                     turn_block: false, gs_help: false, falling_reaction: 0, start_balancer: true, zero_pose: false }
     }
 }
 
@@ -110,6 +131,16 @@ pub struct Out {
     pub turn: Option<Vec3>,
     /// RDR2: a lean asked of the balancer (leaning away from a target moving past)
     pub lean: Option<(crate::nmdbm::LeanMode, f32, bool)>,
+    /// RDR2: this tick's turn is a real turn step (+0x139, the bump turn)
+    pub turn_step: bool,
+    /// RDR2: the arms' brace this tick: target, its velocity, distance, back time
+    pub brace: Option<(Vec3, Vec3, f32, f32)>,
+    /// RDR2, fallingReaction: rollDownStairs started if it isn't running, softened, and the fall's end (catchFall's stop)
+    pub rds: bool,
+    pub rds_soft: bool,
+    pub rds_end: bool,
+    /// RDR2: gshelp's writes on the core
+    pub gs_help: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -134,6 +165,10 @@ pub struct BodyBalance {
 /// RDR2's further state (with the RDR2 core).
 #[derive(Clone, Copy, Debug, Default)]
 struct Rdr2Bb {
+    /// bump weakness's clock (+0x2e4); the falling reaction's two clocks (+0x2f8, +0x2fc: below -1 not yet)
+    bump_t: f32,
+    fall_soft: f32,
+    fall_end: f32,
     /// the clock of sit's noisy elbows (+0x304)
     noise_t: f32,
     noisy_said: bool,
@@ -485,7 +520,7 @@ impl BodyBalance {
         for i in (*CLAVICLE()) {
             ch.eff[i].blend_to_zero(1.0);
         }
-        let mut rd = Rdr2Bb { last_dt: 1.0 / 60.0, back_steps: 4, ..Default::default() };
+        let mut rd = Rdr2Bb { last_dt: 1.0 / 60.0, back_steps: 4, fall_soft: -2.0, fall_end: -2.0, ..Default::default() };
         // the backwards turn's first side: RDR2 draws it at every activation (bit 0 of a fresh generator state);
         // here only when backwardsAutoTurn is on, so every other bodyBalance draws as before
         if p.rdr2.backwards_auto_turn {
@@ -519,14 +554,54 @@ impl BodyBalance {
         let p = self.p;
         let r = p.rdr2;
         let mut out = Out::default();
-        if failed {
-            // fallingReaction 0: catchFall with its defaults (8.25, 10, 13) scaled by armStiffness / 9
-            if !catching {
-                ch.stabilise = None;
-                let k = p.body_stiffness / 9.0;
-                out.catch_fall = Some([8.25 * k, 10.0 * k, 13.0 * k]);
+        // with startbalancer off a balancer gone is none of its business (+0x3d1)
+        if failed && r.start_balancer {
+            if catching {
+                return out;
             }
+            ch.stabilise = None;
+            // fallingReaction 1, 2: rollDownStairs, softer 0.4 s after the upper back lands (+0x2f8); 2 ends when any of the
+            // upper body has touched (+0x2fc) [ours: mode 2's catchFall on the arms alone isn't here: the masks aren't]
+            if r.falling_reaction == 1 || r.falling_reaction == 2 {
+                out.rds = true;
+                let upper = [(*SPINE())[2] + 1, (*SPINE())[3] + 1, (*NECK())[0] + 1, (*NECK())[1] + 1];
+                if self.rd.fall_soft < -1.0 && b.doll.collided(&upper) {
+                    self.rd.fall_soft = 0.0;
+                }
+                if self.rd.fall_soft >= 0.0 {
+                    self.rd.fall_soft += dt;
+                }
+                out.rds_soft = self.rd.fall_soft > 0.4;
+                if r.falling_reaction == 1 {
+                    return out;
+                }
+                let body: Vec<usize> = std::iter::once(0).chain(7..b.frames.len()).collect();
+                if self.rd.fall_end < -1.0 && b.doll.collided(&body) {
+                    self.rd.fall_end = 0.0;
+                }
+                if self.rd.fall_end >= 0.0 {
+                    self.rd.fall_end += dt;
+                    out.rds_end = true;
+                }
+                if self.rd.fall_end < 0.0 {
+                    return out;
+                }
+            }
+            // fallingReaction 0: catchFall with its defaults (8.25, 10, 13) scaled by armStiffness / 9
+            let k = p.body_stiffness / 9.0;
+            out.catch_fall = Some([8.25 * k, 10.0 * k, 13.0 * k]);
             return out;
+        }
+        // gshelp, unless braceForImpact runs (it has its own)
+        out.gs_help = r.gs_help;
+        // bump weakness: the first bumpweaknesstime s, unless a reaction is ramping (0x2a50ff4 on all but legs and wrists)
+        if !ch.bb_hit && r.bump_time > 0.0 && self.rd.bump_t < r.bump_time {
+            let wrists = *crate::nmrs::WRIST();
+            for j in Character::mask("ub").into_iter().chain(Character::mask("ua")).filter(|j| !wrists.contains(j)) {
+                ch.core.lower_scale(j, 0.9, 1.0 - r.bump_weak, 1.0 - r.bump_weak);
+            }
+            crate::extras_core_rdr2::trace_once("bodyBalance: bump weakness", || format!("{} for {} s", r.bump_weak, r.bump_time));
+            self.rd.bump_t += dt;
         }
         // moving backwards (only looked at with backwardsAutoTurn or backwardsArms)
         let up = ch.up;
@@ -592,7 +667,10 @@ impl BodyBalance {
                 }
             }
             let d = match self.rd.turn {
-                1 => Some(target - snap.com),
+                1 => {
+                    out.turn_step = r.turn_block;
+                    Some(target - snap.com)
+                }
                 2 => Some(snap.vel),
                 3 => Some(snap.com - target),
                 4 => Some(from_own(Vec3::new(-1.0, 0.0, 0.0), b).0 - snap.com),
@@ -613,10 +691,31 @@ impl BodyBalance {
             self.rd.paused = true;
         }
         (self.rd.moved, self.rd.target, self.rd.last_dt) = (dv.length(), target, dt);
+        // the arms' brace on the target, raised by braceOffset (0x2a16654, run by the agent with its Ctx)
+        let raised = target + up * r.brace_offset;
+        if r.brace_distance > 0.0 {
+            out.brace = Some((raised, self.rd.target_vel, r.brace_distance, r.back_brace));
+        }
+        // the bump turn: a target moving past inside turnWithBumpRadius turns him to a side, over the body turn; the side by
+        // which way it goes past (+0x3d3), the same point in his own frame as the backwards turn
+        let vb = self.rd.target_vel;
+        let dh = flat(snap.com - raised);
+        let bumped = r.bump_radius > 0.0 && vb.length() > 0.2 && dh.length() < r.bump_radius;
+        if bumped {
+            self.rd.back_left = up.cross(vb).dot(snap.com - raised) < 0.0;
+            let x = if self.rd.back_left { -2.0 } else { 2.0 };
+            let d = flat(from_own(Vec3::new(x, 2.0, 0.0), b).0 - snap.com);
+            if f > RDR2_TURN_SPEED {
+                out.turn = Some(d.normalize_or_zero());
+                out.turn_step = true;
+            }
+            crate::extras_core_rdr2::trace_once("bodyBalance: bump turn", || format!("left {}", self.rd.back_left));
+        }
         // the backwards turn (owner 2, over the body turn): the side from the stepping foot while the counter is 3 or
         // more ([P]: the note's "otherwise 4" read as not moving backwards), a point 2 m to that side and 2 m ahead
         // in his own frame
-        if back && r.backwards_auto_turn {
+        if bumped {
+        } else if back && r.backwards_auto_turn {
             if self.rd.back_steps >= 3 && stepping != 0 {
                 (self.rd.back_left, self.rd.back_steps) = (stepping == 1, 3);
             }
@@ -639,6 +738,9 @@ impl BodyBalance {
             // RDR2 also asks something of the balancer here (+0x44c, unknown) before the still amount
             let amount = if snap.vel.length() < 1.0 { r.move_amount_still } else { r.move_amount };
             out.lean = Some((crate::nmdbm::LeanMode::Dir(side.normalize_or_zero()), amount, true));
+            // the COM lean's channel (+0x760, 0.05, or leanamountstill still) has no second slot here: as far as the step, a hip lean
+            let com = if snap.vel.length() < 1.0 { r.lean_still } else { 0.05 };
+            crate::extras_core_rdr2::trace_once("bodyBalance: lean away", || format!("force {amount}, COM {com} (COM's channel not applied)"));
         }
         // spine and neck
         for i in (*NECK()) {
@@ -749,6 +851,15 @@ impl BodyBalance {
         // toward rest, more the slower he goes: clavicles and wrists 0, elbows 0.4, shoulders lean2 0.5; spine, neck
         // and head 0
         let w = 0.2 + 0.8 * (1.0 - f);
+        // blendToZeroPose: toward the rig's zero pose, every joint having one here, in place of the fixed rest below
+        if r.zero_pose {
+            for j in Character::mask("ub").into_iter().chain(Character::mask("ua")) {
+                ch.eff[j].blend_to_zero(w);
+            }
+            crate::extras_core_rdr2::trace_first("bodyBalance: blend to the zero pose");
+            ch.stabilise = None;
+            return out;
+        }
         // sit's noisy elbows (+0x150, set by a riding sit, cleared here)
         self.rd.noise_t += dt;
         let noisy = std::mem::take(&mut ch.bb_noisy);

@@ -114,8 +114,8 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "spreadLegs", kind: Kind::Float, used: true, doc: "RDR2 core: pedalLegs' spread (0.1)" },
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "body stiffness while airborne (10)" },
         Param { name: "bodydamping", kind: Kind::Float, used: true, doc: "its damping ratio (0.6)" },
-        Param { name: "pdStrength", kind: Kind::Float, used: false, doc: "(not done: 0)" },
-        Param { name: "pdDamping", kind: Kind::Float, used: false, doc: "(not done: 0)" },
+        Param { name: "pdStrength", kind: Kind::Float, used: true, doc: "RDR2 core: read by its smartFall (0)" },
+        Param { name: "pdDamping", kind: Kind::Float, used: true, doc: "RDR2 core: read by its smartFall (1)" },
         Param { name: "catchfalltime", kind: Kind::Float, used: true, doc: "catchFall runs this long after a land, s (1.5)" },
         Param { name: "catchFallCutOff", kind: Kind::Float, used: true, doc: "speed under which a landing counts settled, m/s (0.3)" },
         Param { name: "crashOrLandCutOff", kind: Kind::Float, used: true, doc: "ends this long after the landing at the latest, s (4)" },
@@ -131,10 +131,10 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "sideD", kind: Kind::Float, used: false, doc: "(not done: 0)" },
         Param { name: "forwardOffsetOfLegIK", kind: Kind::Float, used: true, doc: "pedalLegs centreForwards, m (0)" },
         Param { name: "legStrength", kind: Kind::Float, used: true, doc: "pedalLegs leg stiffness (8)" },
-        Param { name: "arms2LegsPhase", kind: Kind::Float, used: false, doc: "(not done: 0)" },
-        Param { name: "arms2LegsSync", kind: Kind::Bool, used: false, doc: "(not done: false)" },
-        Param { name: "adaptiveCircling", kind: Kind::Bool, used: false, doc: "(not done: false)" },
-        Param { name: "hula", kind: Kind::Float, used: false, doc: "(not done: 0)" },
+        Param { name: "arms2LegsPhase", kind: Kind::Float, used: true, doc: "RDR2 core: read by its smartFall (0)" },
+        Param { name: "arms2LegsSync", kind: Kind::Bool, used: true, doc: "RDR2 core: read by its smartFall (1)" },
+        Param { name: "adaptiveCircling", kind: Kind::Bool, used: true, doc: "RDR2 core: read by its smartFall (true)" },
+        Param { name: "hula", kind: Kind::Float, used: true, doc: "RDR2 core: read by its smartFall (true)" },
         Param { name: "aimAngleBase", kind: Kind::Float, used: false, doc: "(not done: 0)" },
         Param { name: "forwardVelRotation", kind: Kind::Float, used: false, doc: "(not done: 0)" },
         Param { name: "footVelCompScale", kind: Kind::Float, used: false, doc: "(not done: 0)" },
@@ -146,13 +146,17 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "landingNormal", kind: Kind::Vec3, used: true, doc: "the surface he lands on (no ground sense here: given; 0 0 1)" },
         Param { name: "balance", kind: Kind::Bool, used: true, doc: "bodyBalance on a land (true)" },
         Param { name: "forwardRoll", kind: Kind::Bool, used: true, doc: "a roll is bodyRollUp even on a slope (false)" },
-        Param { name: "useZeroPose_withForwardRoll", kind: Kind::Bool, used: false, doc: "(not done: false)" },
-        Param { name: "ignorWorldCollisions", kind: Kind::Bool, used: false, doc: "(not done: false)" },
+        Param { name: "useZeroPose_withForwardRoll", kind: Kind::Bool, used: true, doc: "RDR2 core: read by its smartFall (false)" },
+        Param { name: "ignorWorldCollisions", kind: Kind::Bool, used: true, doc: "RDR2 core: read by its smartFall (false)" },
         Param { name: "alanRickman", kind: Kind::Bool, used: true, doc: "limp, no flail: straight down (false)" },
+        Param { name: "reboundScale", kind: Kind::Float, used: true, doc: "RDR2 core: +0x10c: the first 0.2 s on the floor the mask's touching parts are thrown off by the peak speed (0)" },
+        Param { name: "reboundMask", kind: Kind::Str, used: true, doc: "RDR2 core: +0x12c: those parts, by name (uk)" },
+        Param { name: "forceHeadAvoid", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x110: catchFall keeps the head off the ground from its start (false)" },
+        Param { name: "ignoredeath", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x128: no health doesn't count as dead (false)" },
         Param { name: "rdsForceMag", kind: Kind::Float, used: true, doc: "rollDownStairs forcemag on a crash down a slope (2)" },
         Param { name: "tumble", kind: Kind::Float, used: true, doc: "forward somersault in the air, rad/s, about the way he is going (0: none)" },
-        Param { name: "rdsTargetLinearVelocity", kind: Kind::Float, used: false, doc: "(not done: 0)" },
-        Param { name: "rdsTargetLinearVelocityDecayTime", kind: Kind::Float, used: false, doc: "(not done: 0)" },
+        Param { name: "rdsTargetLinearVelocity", kind: Kind::Float, used: true, doc: "RDR2 core: read by its smartFall (1)" },
+        Param { name: "rdsTargetLinearVelocityDecayTime", kind: Kind::Float, used: true, doc: "RDR2 core: read by its smartFall (0.5)" },
         Param { name: "initialState", kind: Kind::Int, used: true, doc: "RDR2 core only: the state it starts in, 0 airborne .. 6 hard landing .. 8 settle (0)" },
         Param { name: "stopRollingTime", kind: Kind::Float, used: true, doc: "RDR2 core only (2)" },
         Param { name: "splatWhenStopped", kind: Kind::Float, used: true, doc: "RDR2 core only: after a hard landing, lie still below this speed, m/s (0: off)" },
@@ -2410,6 +2414,10 @@ struct SfParams {
     teeter: bool,
     teeter_offset: f32,
     cf_spin: f32,
+    rebound: f32,
+    rebound_mask: [u8; 2],
+    force_head: bool,
+    ignore_death: bool,
     splat: f32,
 }
 
@@ -2436,8 +2444,18 @@ impl SfParams {
             rds_force_vel: f(p, "rdsForceVelThreshold", 10.0)?, initial_state: p.get("initialState").map_or(Ok(0), Value::i)?.clamp(0, 8) as u8,
             stop_rolling_time: f(p, "stopRollingTime", 2.0)?, teeter: b(p, "teeter", false)?, teeter_offset: f(p, "teeterOffset", 0.3)?,
             cf_spin: f(p, "cfZAxisSpinReduction", 0.5)?, splat: f(p, "splatWhenStopped", 0.0)?,
+            rebound: f(p, "reboundScale", 0.0)?, rebound_mask: rebound_mask(p)?, force_head: b(p, "forceHeadAvoid", false)?, ignore_death: b(p, "ignoredeath", false)?,
         })
     }
+}
+
+/// reboundMask's two letters, "uk" when none or a mask by hash.
+fn rebound_mask(p: &mut P) -> Result<[u8; 2], Error> {
+    let Some(v) = p.get("reboundMask") else { return Ok(*b"uk") };
+    Ok(match v.s()?.as_bytes() {
+        [a @ (b'f' | b'u' | b'l' | b'h'), b, ..] => [*a, *b],
+        _ => *b"uk",
+    })
 }
 
 /// RDR2's smartFall (with the RDR2 core): a nine-state machine that runs the fall by starting and configuring other
@@ -2605,6 +2623,18 @@ impl SfRdr2 {
             }
         }
         let floor = self.ground.dot(up) > 0.7;
+        // the rebound: the first 0.2 s from the floor's first touch, the mask's touching parts (0x2a19174)
+        if self.contact && p.rebound > 0.0 && self.first_floor >= 0.0 && self.t <= self.first_floor + 0.2 {
+            let speed = self.peak.length().clamp(0.0, 15.0);
+            for j in crate::nmrs::Character::mask(std::str::from_utf8(&p.rebound_mask).unwrap_or("uk")) {
+                let k = c.ch.joints[j].child;
+                if let Some((q, n, depth)) = c.b.doll.hit_out.get(k).copied().flatten() {
+                    let imp = n * (p.rebound * speed * 6666.67 * c.b.build.parts[k].mass * depth.max(0.0));
+                    c.out.impulse.push((k, q, imp));
+                    crate::extras_core_rdr2::trace_first("smartFall rebound");
+                }
+            }
+        }
         if self.contact && floor && self.first_floor < 0.0 && self.state != 7 {
             self.first_floor = self.t;
         }
@@ -2623,7 +2653,9 @@ impl SfRdr2 {
         self.recoverable &= (1.0 - slope) * v.dot(up) > -p.max_recoverable;
         let high = !impact && self.tti > 0.4 && !contact && self.height > 1.5;
         let vertical = share > 0.3;
-        let dead = false;
+        // (ctx+0x1030: no health message reaches this port, so it stays 1 and this doesn't fire)
+        let dead = c.ch.core.cfg.health <= 0.0 && !p.ignore_death;
+        c.ch.core.cfg.fall.force_head = p.force_head;
         self.orientate(c, dt);
         self.t += dt;
         // the state machine: the update, then the transitions it asks for
@@ -2833,6 +2865,10 @@ impl SfRdr2 {
                 if !p.balance {
                     c.ch.set_stiffness(6.0, 1.0, "fb", Some(0.5));
                 }
+                // rollDownStairs' fields, for the one catchFall may start (0x2a82dc0; a running one keeps what it started with [P])
+                let force = if v.length() < p.rds_force_vel { p.rds_force_mag } else { 0.0 };
+                let tlv = if p.rds_tlv >= 0.0 { p.rds_tlv } else { v.length() };
+                c.ch.core.cfg.fall.rds_smart = Some([p.body_stiffness, force, tlv, p.rds_tlv_decay]);
                 if v.length() < 0.075 {
                     self.feedback(c, false);
                 }

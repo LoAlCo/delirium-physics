@@ -553,6 +553,8 @@ pub struct Character {
     pub busy: [bool; 2],
     /// RDR2 core: sit on bodyBalance: noisy elbows (+0x150, cleared by its tick), the joints out of its mask, its target
     pub bb_noisy: bool,
+    /// RDR2: a reaction ramps its strength (shot+0x48 under 0.99): bodyBalance's "hit"
+    pub bb_hit: bool,
     pub bb_off: Vec<usize>,
     pub bb_target: Option<Vec3>,
     pub stabilise: Option<(f32, f32)>,
@@ -617,6 +619,10 @@ pub struct CoreState {
     pub ftk: crate::nmftk_rdr2::Ftk,
     /// what RDR2's core messages hold (extras_core_rdr2.rs)
     pub cfg: crate::extras_core_rdr2::CoreCfg,
+    /// the room's props that have touched him lately: id (-1 none), kg, m^3
+    pub props: [(i32, f32, f32); 8],
+    /// a prop's contact since BCR last looked: part (-1 none), point, normal, id
+    pub prop_hit: [(i32, bevy_math::Vec3, bevy_math::Vec3, i32); 4],
     /// the foot yaw hold runs (ctx+0x47fd), and its latches are let go this step (ctx+0x4800, +0x4801)
     pub foot_hold: bool,
     pub foot_unlatch: bool,
@@ -661,7 +667,7 @@ impl CoreState {
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
+        CoreState { props: [(-1, 0.0, 0.0); 8], prop_hit: [(-1, bevy_math::Vec3::ZERO, bevy_math::Vec3::ZERO, -1); 4], lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 
@@ -703,7 +709,7 @@ fn targets(j: &JointDef, e: &Effector) -> [f32; 3] {
 
 impl Character {
     pub fn new(joints: Vec<JointDef>, frames: &[Transform]) -> Character {
-        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], bb_noisy: false, bb_off: vec![], bb_target: None, stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, bcr_probe: None, cf_exclude: [false; 2], fow_state: None, core: CoreState::default() };
+        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], bb_noisy: false, bb_hit: false, bb_off: vec![], bb_target: None, stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, bcr_probe: None, cf_exclude: [false; 2], fow_state: None, core: CoreState::default() };
         c.seed(0);
         c.eff = (0..c.joints.len()).map(|i| Effector::new(&c.joints[i], c.angle(i, frames))).collect();
         static ONCE: std::sync::Once = std::sync::Once::new();

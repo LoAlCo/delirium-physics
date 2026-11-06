@@ -226,6 +226,11 @@ pub struct Out {
     pub dbm_must_collide: Option<bool>,
     pub dbm_kneeling: Option<bool>,
     pub dbm_force_fail: bool,
+    /// RDR2 core: configureShotInjuredLeg's limp fields for the balancer, and one leg's lift multiplier (bal+0x23c, +0x240)
+    pub dbm_limp_cfg: Option<crate::nmdbm_rdr2::LimpCfg>,
+    /// RDR2 core: the shot's hand-over module holds pointGun off (true) or lets it take up again (false)
+    pub pg_hold: Option<bool>,
+    pub dbm_lift: Option<(usize, f32)>,
 }
 
 impl Out {
@@ -307,6 +312,8 @@ pub struct Shot {
     spin_blend: f32,
     t190: f32,
     pub t194: f32,
+    /// RDR2 core: shotRelax's lower period (None: its default)
+    pub relax_lower: Option<f32>,
     behind: f32,
     side: f32,
     reach_part: [Option<usize>; 2],
@@ -562,7 +569,7 @@ impl Shot {
             fling2: None, p, new_hit: false, no_balance: false, since_hit: 0.0, reach_t: [0.0; 2], time: 0.0,
             s150: delirium_data::kv!(117), s154: bs, s158: 1.0, s15c: bs * delirium_data::kv!(540), s160: 1.0, s164: bs / delirium_data::kv!(117) * delirium_data::kv!(25), s168: delirium_data::kv!(27) * dt,
             s16c: bs * delirium_data::kv!(541), s170: delirium_data::kv!(27) * dt, t174: if p.fling { delirium_data::kv!(201) } else { delirium_data::kv!(542) }, head_t: p.head_look_at_wound_max_timer,
-            fall: [1.0; 2], spin: INIT_SPIN[0], spin_blend: INIT_SPIN[1], t190: 0.0, t194: 0.0, behind: 0.0, side: 0.0, reach_part: [None; 2],
+            fall: [1.0; 2], spin: INIT_SPIN[0], spin_blend: INIT_SPIN[1], t190: 0.0, t194: 0.0, relax_lower: None, behind: 0.0, side: 0.0, reach_part: [None; 2],
             loose: delirium_data::kv!(51), wound: Vec3::ZERO, hit_local: Vec3::ZERO, normal_local: Vec3::ZERO, reach_pos: [Vec3::ZERO; 2],
             reach_normal: [Vec3::ZERO; 2], chicken_t: 0.0, react_t: 0.0, react_elbow: 0.0, react_phase: 0.0,
             reach: [Reach::default(); 2], cur_reach: 0, cur_arm: 0, m228: 0.0, m248: 0.0, m24c: 0.0, m250: 0.0, m254: 0.0,
@@ -583,6 +590,19 @@ impl Shot {
         // RDR2's reset points the fall-to-knees module at the character's record and inits it (0x2a966b8)
         if c.ch.rdr2 {
             crate::nmftk_rdr2::init(c);
+            c.ch.core.cfg.snap_sign = 1.0;
+            // angVelScale: every part in the mask has its angular velocity scaled, once (0x2a4b1ac)
+            let k = p.rdr2.ang_vel_scale;
+            if (k - 1.0).abs() >= 1.2e-7 {
+                let mask = std::str::from_utf8(&p.rdr2.ang_vel_mask).unwrap_or("fb").to_string();
+                let joints = Character::mask(&mask);
+                let parts: Vec<usize> = joints.iter().map(|&j| c.ch.joints[j].child).chain((mask == "fb").then_some(0)).collect();
+                for &q in &parts {
+                    let w = c.b.part(q).w;
+                    c.out.key_vel.push((q, Vec3::ZERO, w * (k - 1.0)));
+                }
+                crate::extras_core_rdr2::trace_once("shot: angVelScale", || format!("{k} on {} parts", parts.len()));
+            }
         }
         if !s.no_balance && !(c.ch.rdr2 && c.sit_state.is_some()) {
             c.out.dbm = Some(true);
@@ -626,6 +646,24 @@ impl Shot {
 
     pub fn failed(&self) -> bool {
         self.flags & 1 != 0
+    }
+
+    /// RDR2 core: 0x2a8c4b8 whole: the shot's strength scale, with looseness4Fall while falling, else looseness4Stagger while
+    /// staggerFall runs.
+    pub(crate) fn rdr2_scale_read(&self, stagger: bool) -> f32 {
+        let k = self.rdr2_scale();
+        if !self.rd.started {
+            return k;
+        }
+        let r = self.p.rdr2;
+        if self.failed() && r.looseness4_fall > 0.01 {
+            crate::extras_core_rdr2::trace_first("shot: looseness4Fall on the scale other behaviours read");
+            k * r.looseness4_fall
+        } else if stagger && r.looseness4_stagger > 0.01 {
+            k * r.looseness4_stagger
+        } else {
+            k
+        }
     }
 
     /// RDR2 core: the shot's strength scale as other behaviours read it (0x2a8c4b8): the weakness ramp once its core
@@ -1710,6 +1748,11 @@ pub struct ShotRdr2 {
     /// RDR2's looseness and strength block beyond GTA IV's (rdr2_shot_core.md 3.1, 4.3, 4.4)
     pub looseness4_stagger: f32,
     pub use_cstr: bool,
+    /// angVelScale and its mask's two letters: applied once, at the shot's activation
+    pub ang_vel_mask: [u8; 2],
+    /// configureArms' PointGun (+0x289): the hand-over module
+    pub point_gun: bool,
+    pub looseness4_fall: f32,
     pub cstr_upper_min: f32,
     pub cstr_upper_max: f32,
     pub cstr_lower_min: f32,
@@ -1736,7 +1779,7 @@ impl Default for ShotRdr2 {
                    braced_side_spin_mult: 1.0, shock_spin_max_twist_vel: -1.0, shock_spin_air_mult: 1.0, shock_spin_one_foot_mult: 1.0, shock_spin_scale_by_lever_arm: true,
                    fling2: false, fling2_side: [true; 2], fling2_override_stagger: false, fling2_before: 0.1, fling2_time: 0.5, fling2_mstiff: [0.95, -1.0],
                    fling2_stiff: [12.0; 2], fling2_damp: [0.7; 2], fling2_relax: [0.5; 2], fling2_angle: [[-1.5, 1.0]; 2], fling2_length: [[0.35, 0.6]; 2],
-                   looseness4_stagger: 0.0, use_cstr: false, cstr_upper_min: 0.1, cstr_upper_max: 1.0, cstr_lower_min: 0.1, cstr_lower_max: 1.0, bullet_proof_vest: false, always_reset_looseness: true, always_reset_neck: true, spine_blend_exag_cpain: false, floor_weakness_time: 0.1, floor_strength: 0.1, floor_joint_time: 0.1, floor_joint_strength: 0.01, ang_vel_scale: 1.0,
+                   looseness4_stagger: 0.0, use_cstr: false, ang_vel_mask: *b"fb", point_gun: false, looseness4_fall: 0.0, cstr_upper_min: 0.1, cstr_upper_max: 1.0, cstr_lower_min: 0.1, cstr_lower_max: 1.0, bullet_proof_vest: false, always_reset_looseness: true, always_reset_neck: true, spine_blend_exag_cpain: false, floor_weakness_time: 0.1, floor_strength: 0.1, floor_joint_time: 0.1, floor_joint_strength: 0.01, ang_vel_scale: 1.0,
                    always_reach_time: 0.3, aw_speed_mult: 1.0, aw_radius_mult: 1.0, aw_stiffness_add: 4.0, release_wound: 1 }
     }
 }
@@ -1762,7 +1805,7 @@ struct ShotRdr2State {
     fall_writhe: bool,
 }
 
-/// RDR2's relax: shotRelax's lower-body period with its default (ours: our relax message gives only the upper one).
+/// RDR2's relax: shotRelax's lower-body period, its registered default for a message with no value.
 const RDR2_RELAX_LOWER: f32 = 0.4;
 
 /// RDR2's strength block (the shot's, shared with meleeReact): the weakness k, the base stiffnesses, the neck's
@@ -2027,9 +2070,17 @@ impl Shot {
     /// sub-module from the first bullet, the fall (fallingReaction) and the arm shapes, then the spine blend.
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
         let p = self.p;
+        // the prologue: for a while after a bullet the spine's limits take the shotspin block's (0x2a4eaa0 on the four joints)
+        let lim = c.ch.core.cfg.shot_spine;
+        if lim[3] > self.since_hit {
+            for j in (*SPINE()) {
+                c.ch.lim_raise(j, [lim[0], lim[1], lim[2]]);
+            }
+            crate::extras_core_rdr2::trace_once("shot: the spine's limits raised", || format!("to {lim:?}, {} s after the bullet", self.since_hit));
+        }
         self.t190 = (self.t190 + dt).min(self.t194);
         self.fall[0] = 1.0 - self.t190 / (self.t194 + 1e-6);
-        let low = if self.t194 > 0.0 { RDR2_RELAX_LOWER } else { 0.0 };
+        let low = if self.t194 > 0.0 { self.relax_lower.unwrap_or(RDR2_RELAX_LOWER) } else { 0.0 };
         self.rd.t_low = (self.rd.t_low + dt).min(low);
         self.fall[1] = 1.0 - self.rd.t_low / (low + 1e-6);
         // cStr modulation: U and W scaled by the character's strength (0x2a7f650's ramps)
@@ -2092,6 +2143,14 @@ impl Shot {
         self.run(c, MELEE(), Some(|s, _| s.p.melee && s.new_hit), Some(Shot::melee_enter), Some(Shot::melee_tick),
                  Some(|s, _| s.failed() || s.new_hit), Some(|_, c| c.out.spine_twist_stop = true), dt);
         c.module(MELEE() as u32);
+        // module 16, the pointGun hand-over (0x2aa2770): sit gone or past its riding states, and the pelvis's velocity along
+        // its second and third rows against up at most 0.7, pointGun stops, remembered (+0x7b8); else it starts again. Ours: it's
+        // held, not stopped; the test's other half, bal+0x64 under 0.7, wasn't found written, so it stands as true [G]
+        if p.rdr2.point_gun {
+            let m = c.b.part(0).m;
+            let along = m.b.dot(c.vel) * c.up.y + m.c.dot(c.vel) * c.up.z;
+            c.out.pg_hold = Some(c.sit_state.is_none_or(|s| s > 2) && along <= 0.7);
+        }
         c.module(102);
         // spineBlendZero: a slow body's spine relaxes to zero, a fast one's keeps its pose; after a spine ramp's write it
         // fades in over 0.5 s (0x9de396e2 >= 0, a pose index in place of zero, isn't here)

@@ -1491,7 +1491,8 @@ impl BcrRdr2 {
     /// The probes (state 0, moving faster than 0.5 m/s): spheres of 0.25 m from the pelvis and 0.1 m from the chest
     /// along his horizontal velocity for half a second of it. And the probe down the wall's face, when it is asked.
     pub fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
-        self.small = obs.iter().filter(|o| o.inv_mass > 0.0 && (1.0 / o.inv_mass < self.p.mass || 8.0 * o.half.x * o.half.y * o.half.z < self.p.volume)).map(|o| o.id).collect();
+        self.small = obs.iter().filter(|o| o.inv_mass > 0.0 && (1.0 / o.inv_mass < self.p.mass || 8.0 * o.half.x * o.half.y * o.half.z < self.p.volume)).map(|o| o.id)
+            .chain(c.ch.core.props.iter().filter(|o| o.0 >= 0 && (o.1 < self.p.mass || o.2 < self.p.volume)).map(|o| o.0)).collect();
         if let Some((from, d)) = self.second.take() {
             self.second_hit = Some(self.sweep(world, obs, from, d, 0.001, 1.0).map(|h| h.at));
         }
@@ -1575,6 +1576,7 @@ impl BcrRdr2 {
         let fow_on = c.extras_on.contains(&"fallOverWall");
         self.fow_starting = false;
         self.machine(c, dt, fow_on, out);
+        c.ch.core.prop_hit = [(-1, Vec3::ZERO, Vec3::ZERO, -1); 4];
         let speed = (c.vel - up * up.dot(c.vel)).length();
         if let Some((at, n)) = self.wall {
             // the balancer's exclusion plane (BCR's wins over teeter's once he has hit it)
@@ -1732,9 +1734,12 @@ impl BcrRdr2 {
             let low_foot = [2, 3].map(|i| up.dot(c.b.at(limb(i).p[3]))).into_iter().fold(f32::MAX, f32::min);
             let lows = if self.p.high { 6 } else { 5 };
             for (i, &k) in BCR_PARTS.iter().enumerate() {
-                if let Some((q, cn, depth)) = c.b.doll.hit_out[k] {
+                // the room's props push him from another physics world: their contacts come by the core (depth: the record's floor, 0.01)
+                let prop = c.ch.core.prop_hit.iter().find(|h| h.0 == k as i32).copied();
+                let found = c.b.doll.hit_out[k].map(|h| (h, c.b.doll.hit_out_id[k])).or(prop.map(|h| ((h.1, h.2, 0.01), h.3)));
+                if let Some(((q, cn, depth), id)) = found {
                     // ignoreColMassBelow, ignoreColVolumeBelow: a moving object below either isn't a contact (0x2a748bf)
-                    if self.small.contains(&c.b.doll.hit_out_id[k]) {
+                    if self.small.contains(&id) {
                         crate::extras_core_rdr2::trace_once("bcr ignores a small object", || format!("part {k}"));
                         continue;
                     }

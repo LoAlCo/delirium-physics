@@ -353,6 +353,9 @@ pub struct Agent {
     nm_hit_next: Vec<(Shot, bool)>,
     pub(crate) nm_hit_hold: bool,
     nm_relax: Option<f32>,
+    nm_relax_lower: Option<f32>,
+    /// RDR2's bodyBalance: its arms' brace state
+    bb_brace: crate::extras_fall_rdr2::BcrBrace,
     pub(crate) nm_head: crate::nmhl::HeadLook,
     nm_cf: Option<crate::nmcf::CatchFall>,
     nm_cf_msg: Option<crate::nmcf::Params>,
@@ -464,7 +467,7 @@ impl Agent {
         let pelvis_up = facing.inverse() * frames[roles.pelvis].rotation;
         let mut a = Agent { core_cb: vec![], core_base: None, locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
                 stiffness: (delirium_data::kv!(31), 1.0), relax: None, config: ConfigureBalance::default(), feedback: vec![], balance: None, lean: None,
-                shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, fow_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
+                shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_relax_lower: None, bb_brace: Default::default(), nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, fow_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
                 brace: None, head_look: vec![], shot_look: false, eff_override: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(200), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0 * build.parts[0].grown, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
                 ch: crate::nmrs::ASSET[build.nm].get().and_then(|a| crate::nmrs::joints(build, a)).map(|j| {
                     let mut c = crate::nmrs::Character::new(j, &frames);
@@ -717,6 +720,11 @@ impl Agent {
             self.lean_bias = -delirium_data::kv!(200);
             self.balance = Some(Balance { params, dbm: Some(dbm), bb: Some(bb), feet: [Foot::Planted(Transform::IDENTITY); 2], steps: 0,
                                           stand_height: dbm.p.pelvis_height.max(delirium_data::kv!(74)), stepping: 0, still: 0.0, idle: false });
+            // RDR2's startbalancer off: bodyBalance alone
+            if core && !p.rdr2.start_balancer {
+                self.balance.as_mut().unwrap().dbm = None;
+                crate::extras_core_rdr2::trace_first("bodyBalance: no balancer started");
+            }
             return;
         }
         let mut feet = [Foot::Planted(Transform::IDENTITY); 2];
@@ -872,8 +880,66 @@ impl Agent {
         }
     }
 
+    /// RDR2's bodyBalance, what it asks of the rest: the arms' brace, its falling reaction's rollDownStairs, gshelp.
+    fn bb_rdr2(&mut self, build: &Build, out: &crate::nmbb::Out, dt: f32) {
+        if out.rds && !self.rds_on {
+            let mut r = crate::nmrds::RollDownStairs::rdr2_defaults();
+            (r.damping, r.stiffness, r.z_axis_spin_reduction, r.forcemag) = (1.0, 8.0, 0.0, 0.8);
+            r.asymmetrical_legs = 0.2 + 0.2 * self.random.next();
+            (r.use_arm_to_slow_down, r.arm_reach_amount, r.arm_reach_length) = (-0.9, 1.4, 0.4);
+            r.rdr2 = crate::nmrds::Rdr2Params { muscle_stiffness: 0.7, foetal_legs: false, limit_spin_reduction: true, target_linear_velocity: 1.0,
+                                                target_linear_velocity_decay_time: 0.5, ..Default::default() };
+            self.roll_down_stairs(r);
+            crate::extras_core_rdr2::trace_first("bodyBalance: falling reaction, rollDownStairs");
+        }
+        if out.rds_soft {
+            self.nm_rds.stiffness = 6.0;
+        }
+        if out.rds_end && self.rds_on {
+            self.rds_on = false;
+            crate::extras_core_rdr2::trace_first("bodyBalance: falling reaction 2, the upper body is down");
+        }
+        let Some(ch) = self.ch.as_mut() else { return };
+        // gshelp: ctx+0x1114 = 0, ctx+0x1116 = 1
+        if out.gs_help && !self.extras.on.iter().any(|(n, _)| *n == "braceForImpact") {
+            (ch.core.cfg.coll.on, ch.core.cfg.coll.foot_slip) = (true, false);
+            crate::extras_core_rdr2::trace_first("bodyBalance: gshelp");
+        }
+        if let Some((t, vel, distance, back_time)) = out.brace {
+            let frames: Vec<Transform> = self.doll.frames().collect();
+            let snap = ch.clone();
+            let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
+            let mut o = crate::nmshot::Out::default();
+            let mut c = crate::nmshot::Ctx::new(&mut *ch, &body, &mut o, false);
+            // the record bodyBalance copies: its distance, and rdr2_bodybalance.md 2.3's reset values
+            let rec = crate::extras_fall_rdr2::BraceRecord { distance, stiffness: 12.0, predict: 0.45, min_brace: 0.3, back_time, absorb: 0.15 };
+            let arms = crate::extras_fall_rdr2::brace_core(&mut c, &mut self.bb_brace, rec, t, vel, None, dt);
+            if arms.contains(&true) {
+                crate::extras_core_rdr2::trace_once("bodyBalance: bracing", || format!("arms {arms:?}"));
+            }
+        }
+    }
+
+    /// RDR2 core: a thrown or dropped thing touched a part. The room's props are another physics world and push him by
+    /// impulses, so they never were the ragdoll's contacts (`hit_out`), and BCR never saw one; it reads them from here.
+    pub fn prop_contact(&mut self, k: usize, at: Vec3, n: Vec3, id: i32, mass: f32, volume: f32) {
+        if self.rdr2_core.is_none() {
+            return;
+        }
+        if let Some(ch) = self.ch.as_mut() {
+            ch.core.prop_hit[k % 4] = (k as i32, at, n, id);
+            ch.core.props[id as usize % 8] = (id, mass, volume);
+        }
+    }
+
     pub fn shot_relax(&mut self, period: f32) {
         self.nm_relax = Some(period);
+    }
+
+    /// The message: RDR2's has two periods, upper and lower (the port's relaxPeriod stands for the upper one).
+    pub fn shot_relax_rdr2(&mut self, m: &crate::msg::ShotRelax) {
+        self.nm_relax = Some(if self.rdr2_core.is_some() && m.upper >= 0.0 { m.upper } else { m.relax_period });
+        self.nm_relax_lower = (self.rdr2_core.is_some() && m.lower >= 0.0).then_some(m.lower);
     }
 
     pub fn shot(&mut self, s: Shot) {
@@ -1347,6 +1413,10 @@ impl Agent {
         if tick {
             if let Some(r) = self.nm_relax.take() {
                 s.t194 = r;
+                if let Some(l) = self.nm_relax_lower.take() {
+                    s.relax_lower = Some(l);
+                    crate::extras_core_rdr2::trace(|| format!("shot: relax periods {r} upper, {l} lower"));
+                }
             }
             c.reqs = self.limb_reqs.as_mut();
             if cf_was {
@@ -1359,6 +1429,9 @@ impl Agent {
         }
         if out.rfw_release != [false; 2] {
             self.extras.on.iter_mut().filter(|(n, _)| *n == "reachForWound").for_each(|(_, e)| e.rfw_release(out.rfw_release));
+            if let Some(h) = out.pg_hold {
+                self.extras.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.hold(h));
+            }
         }
         match out.dbm {
             Some(true) => {
@@ -1422,6 +1495,12 @@ impl Agent {
             }
             if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
                 r.limp = x;
+            }
+            if let (Some(x), Some(r)) = (out.dbm_limp_cfg, d.p.rdr2.as_mut()) {
+                r.limp_cfg = x;
+            }
+            if let (Some((i, x)), Some(r)) = (out.dbm_lift, d.p.rdr2.as_mut()) {
+                r.lift_mult[i] = x;
             }
             if let Some(r) = d.p.rdr2.as_mut() {
                 for &(o, k, h) in &out.dbm_owned {
@@ -1625,6 +1704,10 @@ impl Agent {
         let n = build.parts.len();
         let (body_k, body_d) = self.stiffness;
         let mut catch = None;
+        let mut bb_out = None;
+        if let Some(ch) = self.ch.as_mut() {
+            ch.bb_hit = self.nm_shot.as_ref().is_some_and(|s| s.rdr2_scale() < 0.99);
+        }
         let mut dbm_lost = false;
         let mut fall_assist = 0.0;
         let awake = self.doll.awake();
@@ -1771,7 +1854,7 @@ impl Agent {
                     (dbm.pv.fixed_vel, dbm.pv.vel) = (out.turn.is_some(), out.turn.unwrap_or(Vec3::ZERO));
                     // RDR2: its heading alone (+0x3b2, +0x360) doesn't arm the turn step; that needs a posted block (+0x5e4)
                     if let Some(r) = dbm.p.rdr2.as_mut() {
-                        r.heading_only = out.turn.is_some();
+                        r.heading_only = out.turn.is_some() && !out.turn_step;
                     }
                     if let Some(k) = out.step_clamp {
                         self.config.step_clamp_scale = k;
@@ -1784,6 +1867,7 @@ impl Agent {
                         self.lean = Some((mode, amount, 0.1, as_force));
                     }
                     catch = out.catch_fall;
+                    bb_out = Some(out);
                 }
             } else if let Some(bb) = b.bb.as_mut().filter(|_| !b.idle) {
                 let snap = ch.clone();
@@ -1803,7 +1887,11 @@ impl Agent {
                     self.lean = Some((mode, amount, 0.1, as_force));
                 }
                 catch = out.catch_fall;
+                bb_out = Some(out);
             }
+        }
+        if let Some(out) = bb_out.filter(|_| self.rdr2_core.is_some()) {
+            self.bb_rdr2(build, &out, dt);
         }
         let mut bb_walked = 0u32;
         if let Some([legs, torso, arms]) = catch {
@@ -1930,7 +2018,8 @@ impl Agent {
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             c.shot_on = self.nm_shot.is_some();
             c.fall_on = self.nm_cf.as_ref().is_some_and(|f| f.active) || self.nm_ru.active;
-            c.shot_scale = self.nm_shot.as_ref().map_or(1.0, |s| s.rdr2_scale());
+            let stagger = self.extras.on.iter().any(|(n, _)| *n == "staggerFall");
+            c.shot_scale = self.nm_shot.as_ref().map_or(1.0, |s| s.rdr2_scale_read(stagger));
             // RDR2 core: fall to knees caps it once kneeling (the shot's +0x6e4)
             if c.ch.rdr2 && c.ch.core.ftk.module_on && c.ch.core.ftk.kneeling {
                 c.shot_scale = c.shot_scale.min(0.35);
@@ -2265,6 +2354,12 @@ impl Agent {
                 if let (Some(x), Some(r)) = (out.dbm_limp, d.p.rdr2.as_mut()) {
                     r.limp = x;
                 }
+                if let (Some(x), Some(r)) = (out.dbm_limp_cfg, d.p.rdr2.as_mut()) {
+                    r.limp_cfg = x;
+                }
+                if let (Some((i, x)), Some(r)) = (out.dbm_lift, d.p.rdr2.as_mut()) {
+                    r.lift_mult[i] = x;
+                }
                 // RDR2 core: yanked's turn block
                 if let (Some(x), Some(r)) = (out.dbm_turn_margin, d.p.rdr2.as_mut()) {
                     r.turn_margin = x;
@@ -2566,6 +2661,9 @@ impl Agent {
         if self.rdr2_core.is_some() {
             self.doll.set_part_scales(&part_scales.0, &[]);
             self.doll.fric_clamp = fric_clamp;
+            if let Some(p) = self.rdr2_core.as_ref() {
+                self.doll.ignore_depth = p.ignore_depth;
+            }
             self.doll.set_part_radii(&part_radii);
             if dbm_aside {
                 match self.balance.as_mut() {

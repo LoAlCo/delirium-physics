@@ -165,6 +165,18 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "airbornearms", kind: Kind::Float, used: true, doc: "RDR2 core only: the arms swing within this long (s) without a foot down (0)" },
         Param { name: "axisweightssimulationblocked", kind: Kind::Bool, used: true, doc: "RDR2 core only: arms out ignores each arm's on/off windows (true)" },
         Param { name: "moveRadius", kind: Kind::Float, used: true, doc: "RDR2 core only: lean away from a target moving past closer than this (-1: off)" },
+        Param { name: "turnWithBumpRadius", kind: Kind::Float, used: true, doc: "RDR2 core: +0xf8: a target moving past inside this turns him aside (-1: off)" },
+        Param { name: "bumpweaknesstime", kind: Kind::Float, used: true, doc: "RDR2 core: +0xfc: s from the start the upper body goes weak, unless hit (0)" },
+        Param { name: "bumpweakness", kind: Kind::Float, used: true, doc: "RDR2 core: +0x100: how weak (0)" },
+        Param { name: "braceDistance", kind: Kind::Float, used: true, doc: "RDR2 core: +0x104: the target this near, the arms brace (-1: off)" },
+        Param { name: "timeToBackwardsBrace", kind: Kind::Float, used: true, doc: "RDR2 core: +0x110: s braced before a target behind him counts (0.5)" },
+        Param { name: "braceOffset", kind: Kind::Float, used: true, doc: "RDR2 core: +0x124: the target raised by this for the brace and the moves (0)" },
+        Param { name: "leanamountstill", kind: Kind::Float, used: true, doc: "RDR2 core: +0x134: the COM lean of a target moving past, him still (0.05)" },
+        Param { name: "?01d67b58", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x139: turning to the target asks a turn step of the balancer (false)" },
+        Param { name: "gshelp", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x13a: setCharacterCollisions' friction override on, its yaw hold off (false)" },
+        Param { name: "fallingReaction", kind: Kind::Int, used: true, doc: "RDR2 core: +0x13c: the balancer gone: 0 catchFall, 1 rollDownStairs, 2 rollDownStairs till the upper body lands (0)" },
+        Param { name: "startbalancer", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x140: bodyBalance starts the balancer and reacts to its failure (true)" },
+        Param { name: "blendToZeroPose", kind: Kind::Bool, used: true, doc: "RDR2 core: +0xf6: the rest it blends to is the rig's zero pose (false)" },
         Param { name: "moveAmount", kind: Kind::Float, used: true, doc: "RDR2 core only (0.3)" },
         Param { name: "moveamountstill", kind: Kind::Float, used: true, doc: "RDR2 core only: moveAmount when nearly still (0.3)" },
         Param { name: "moveWhenBracing", kind: Kind::Bool, used: true, doc: "RDR2 core only: lean away only while bracing (no bracing here) (false)" },
@@ -254,6 +266,7 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "backwardsMinArmOffset", kind: Kind::Float, used: true, doc: "" },
     ] },
     Message { name: "configureBalance", params: &[
+        Param { name: "ignoredepth", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x103c: self contacts shallower than this don't count as touching (-100)" },
         Param { name: "backwardsLeanCutoff", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
         Param { name: "stableLinSpeedThresh", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
         Param { name: "stableRotSpeedThresh", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
@@ -611,6 +624,7 @@ pub static MESSAGES: [Message; 30] = [
     Message { name: "shot", params: &[
         Param { name: "looseness4Stagger", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "useCStrModulation", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "PointGun", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x289: the module that lets pointGun go when he moves backward and takes it up again (false)" },
         Param { name: "cStrUpperMin", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "cStrUpperMax", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "cStrLowerMin", kind: Kind::Float, used: true, doc: "RDR2 core only" },
@@ -623,9 +637,9 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "floorStrength", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "floorJointWeaknessTime", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "floorJointStrength", kind: Kind::Float, used: true, doc: "RDR2 core only" },
-        Param { name: "angVelScale", kind: Kind::Float, used: false, doc: "RDR2 core: taken, not used: Delirium has no scale on a part's angular velocity here; every set on the three shots sends 1" },
-        Param { name: "angVelScaleMask", kind: Kind::Str, used: false, doc: "with angVelScale" },
-        Param { name: "looseness4Fall", kind: Kind::Float, used: false, doc: "RDR2's: no reader in its core functions" },
+        Param { name: "angVelScale", kind: Kind::Float, used: true, doc: "RDR2 core: +0xc8: at the shot's start the parts in the mask have their angular velocity times this (1)" },
+        Param { name: "angVelScaleMask", kind: Kind::Str, used: true, doc: "RDR2 core: +0xcc: those parts, a mask by name (fb)" },
+        Param { name: "looseness4Fall", kind: Kind::Float, used: true, doc: "RDR2 core: +0x128: over 0, the shot's strength scale times this while it falls (0x2a8c4b8) (0)" },
         Param { name: "flingTime", kind: Kind::Float, used: false, doc: "RDR2's fling: its start needs a field only its own enter fills, so it doesn't start" },
         Param { name: "deathTime", kind: Kind::Float, used: false, doc: "RDR2's: gated on two dying flags Delirium doesn't have" },
         Param { name: "spineBlendPose", kind: Kind::Int, used: false, doc: "RDR2's 9de396e2: a pose index for the spine blend, not here" },
@@ -730,6 +744,8 @@ pub static MESSAGES: [Message; 30] = [
     ] },
     Message { name: "shotRelax", params: &[
         Param { name: "relaxPeriod", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "relaxPeriodUpper", kind: Kind::Float, used: true, doc: "RDR2 core: +0x6fc: s the upper body's strength falls over (2)" },
+        Param { name: "relaxPeriodLower", kind: Kind::Float, used: true, doc: "RDR2 core: +0x704: s the lower body's falls over (0.4)" },
     ] },
     Message { name: "stayUpright", params: &[
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "" },
@@ -915,10 +931,13 @@ impl Default for ActivePose {
 #[derive(Clone, Debug)]
 pub struct ShotRelax {
     pub relax_period: f32,
+    /// RDR2 core: the game's two periods, when the message gives them (below 0: not given)
+    pub upper: f32,
+    pub lower: f32,
 }
 impl Default for ShotRelax {
     fn default() -> ShotRelax {
-        ShotRelax { relax_period: 2.0 }
+        ShotRelax { relax_period: 2.0, upper: -1.0, lower: -1.0 }
     }
 }
 
@@ -1086,7 +1105,7 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
         "leanToPosition" => { let p = &st.lean_to_position; a.lean_to(crate::nmdbm::LeanMode::Pos(p.pos), p.lean_amount, p.apply_as_force); }
         "leanTowardsObject" => { let p = &st.lean_towards_object; a.lean_to(crate::nmdbm::LeanMode::Object(p.offset, -1), p.lean_amount, p.apply_as_force); }
         "setStiffness" => { let p = &st.set_stiffness; a.set_stiffness_mask(p.body_stiffness, p.damping, &p.mask); }
-        "shotRelax" => a.shot_relax(st.shot_relax.relax_period),
+        "shotRelax" => a.shot_relax_rdr2(&st.shot_relax),
         "stopAllBehaviours" => a.stop_all_behaviours(),
         // RDR2 core: a message with RDR2's parameters, or a stop, is RDR2's; GTA IV's two alone stay GTA IV's stabiliser
         "stayUpright" if a.rdr2_core.is_some() && (start == Some(false) || params.iter().any(|(n, _)| !matches!(*n, "start" | "stiffness" | "dampingScale"))) => {
@@ -1253,6 +1272,18 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("bodyBalance", "airbornearms") => { let p = &mut st.body_balance; p.rdr2.airborne_arms = v.f()?; }
         ("bodyBalance", "axisweightssimulationblocked") => { let p = &mut st.body_balance; p.rdr2.axis_weights_simulation_blocked = v.b()?; }
         ("bodyBalance", "moveRadius") => { let p = &mut st.body_balance; p.rdr2.move_radius = v.f()?; }
+        ("bodyBalance", "blendToZeroPose") => { let p = &mut st.body_balance; p.rdr2.zero_pose = v.b()?; }
+        ("bodyBalance", "startbalancer") => { let p = &mut st.body_balance; p.rdr2.start_balancer = v.b()?; }
+        ("bodyBalance", "fallingReaction") => { let p = &mut st.body_balance; p.rdr2.falling_reaction = v.i()?; }
+        ("bodyBalance", "gshelp") => { let p = &mut st.body_balance; p.rdr2.gs_help = v.b()?; }
+        ("bodyBalance", "?01d67b58") => { let p = &mut st.body_balance; p.rdr2.turn_block = v.b()?; }
+        ("bodyBalance", "leanamountstill") => { let p = &mut st.body_balance; p.rdr2.lean_still = v.f()?; }
+        ("bodyBalance", "braceOffset") => { let p = &mut st.body_balance; p.rdr2.brace_offset = v.f()?; }
+        ("bodyBalance", "timeToBackwardsBrace") => { let p = &mut st.body_balance; p.rdr2.back_brace = v.f()?; }
+        ("bodyBalance", "braceDistance") => { let p = &mut st.body_balance; p.rdr2.brace_distance = v.f()?; }
+        ("bodyBalance", "bumpweakness") => { let p = &mut st.body_balance; p.rdr2.bump_weak = v.f()?; }
+        ("bodyBalance", "bumpweaknesstime") => { let p = &mut st.body_balance; p.rdr2.bump_time = v.f()?; }
+        ("bodyBalance", "turnWithBumpRadius") => { let p = &mut st.body_balance; p.rdr2.bump_radius = v.f()?; }
         ("bodyBalance", "moveAmount") => { let p = &mut st.body_balance; p.rdr2.move_amount = v.f()?; }
         ("bodyBalance", "moveamountstill") => { let p = &mut st.body_balance; p.rdr2.move_amount_still = v.f()?; }
         ("bodyBalance", "moveWhenBracing") => { let p = &mut st.body_balance; p.rdr2.move_when_bracing = v.b()?; }
@@ -1534,7 +1565,11 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("shot", "minArmsLooseness") => { let p = &mut st.shot; p.rdr2.min_arms_looseness = v.f()?; }
         ("shot", "minLegsLooseness") => { let p = &mut st.shot; p.rdr2.min_legs_looseness = v.f()?; }
         ("shot", "looseness4Stagger") => { let p = &mut st.shot; p.rdr2.looseness4_stagger = v.f()?; }
+        ("shot", "angVelScale") => { let p = &mut st.shot; p.rdr2.ang_vel_scale = v.f()?; }
+        ("shot", "angVelScaleMask") => { let p = &mut st.shot; p.rdr2.ang_vel_mask = v.s()?.as_bytes().first().copied().zip(v.s()?.as_bytes().get(1).copied()).map_or(*b"fb", |(a, b)| [a, b]); }
         ("shot", "useCStrModulation") => { let p = &mut st.shot; p.rdr2.use_cstr = v.b()?; }
+        ("shot", "looseness4Fall") => { let p = &mut st.shot; p.rdr2.looseness4_fall = v.f()?; }
+        ("shot", "PointGun") => { let p = &mut st.shot; p.rdr2.point_gun = v.b()?; }
         ("shot", "cStrUpperMin") => { let p = &mut st.shot; p.rdr2.cstr_upper_min = v.f()?; }
         ("shot", "cStrUpperMax") => { let p = &mut st.shot; p.rdr2.cstr_upper_max = v.f()?; }
         ("shot", "cStrLowerMin") => { let p = &mut st.shot; p.rdr2.cstr_lower_min = v.f()?; }
@@ -1618,6 +1653,8 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("shot", "flingWidth") => { let p = &mut st.shot; p.fling_width = v.f()?; }
         ("shot", "headLook") => { let p = &mut st.shot; p.head_look = v.v()?; }
         ("shotRelax", "relaxPeriod") => { let p = &mut st.shot_relax; p.relax_period = v.f()?; }
+        ("shotRelax", "relaxPeriodUpper") => { let p = &mut st.shot_relax; p.upper = v.f()?; }
+        ("shotRelax", "relaxPeriodLower") => { let p = &mut st.shot_relax; p.lower = v.f()?; }
         ("stayUpright", "stiffness") => { let p = &mut st.stay_upright; p.stiffness = v.f()?; }
         ("stayUpright", "dampingScale") => { let p = &mut st.stay_upright; p.damping_scale = v.f()?; }
         ("stayUpright", "side") => st.stay_upright.side = Some(v.i()?),
@@ -1710,6 +1747,18 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("bodyBalance", "airbornearms") => { let p = &st.body_balance; Value::Float(p.rdr2.airborne_arms) }
         ("bodyBalance", "axisweightssimulationblocked") => { let p = &st.body_balance; Value::Bool(p.rdr2.axis_weights_simulation_blocked) }
         ("bodyBalance", "moveRadius") => { let p = &st.body_balance; Value::Float(p.rdr2.move_radius) }
+        ("bodyBalance", "blendToZeroPose") => { let p = &st.body_balance; Value::Bool(p.rdr2.zero_pose) }
+        ("bodyBalance", "startbalancer") => { let p = &st.body_balance; Value::Bool(p.rdr2.start_balancer) }
+        ("bodyBalance", "fallingReaction") => { let p = &st.body_balance; Value::Int(p.rdr2.falling_reaction) }
+        ("bodyBalance", "gshelp") => { let p = &st.body_balance; Value::Bool(p.rdr2.gs_help) }
+        ("bodyBalance", "?01d67b58") => { let p = &st.body_balance; Value::Bool(p.rdr2.turn_block) }
+        ("bodyBalance", "leanamountstill") => { let p = &st.body_balance; Value::Float(p.rdr2.lean_still) }
+        ("bodyBalance", "braceOffset") => { let p = &st.body_balance; Value::Float(p.rdr2.brace_offset) }
+        ("bodyBalance", "timeToBackwardsBrace") => { let p = &st.body_balance; Value::Float(p.rdr2.back_brace) }
+        ("bodyBalance", "braceDistance") => { let p = &st.body_balance; Value::Float(p.rdr2.brace_distance) }
+        ("bodyBalance", "bumpweakness") => { let p = &st.body_balance; Value::Float(p.rdr2.bump_weak) }
+        ("bodyBalance", "bumpweaknesstime") => { let p = &st.body_balance; Value::Float(p.rdr2.bump_time) }
+        ("bodyBalance", "turnWithBumpRadius") => { let p = &st.body_balance; Value::Float(p.rdr2.bump_radius) }
         ("bodyBalance", "moveAmount") => { let p = &st.body_balance; Value::Float(p.rdr2.move_amount) }
         ("bodyBalance", "moveamountstill") => { let p = &st.body_balance; Value::Float(p.rdr2.move_amount_still) }
         ("bodyBalance", "moveWhenBracing") => { let p = &st.body_balance; Value::Bool(p.rdr2.move_when_bracing) }
@@ -1963,6 +2012,8 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("shot", "flingWidth") => { let p = &st.shot; Value::Float(p.fling_width) }
         ("shot", "headLook") => { let p = &st.shot; Value::Vec3(p.head_look) }
         ("shotRelax", "relaxPeriod") => { let p = &st.shot_relax; Value::Float(p.relax_period) }
+        ("shotRelax", "relaxPeriodUpper") => { let p = &st.shot_relax; Value::Float(p.upper) }
+        ("shotRelax", "relaxPeriodLower") => { let p = &st.shot_relax; Value::Float(p.lower) }
         ("stayUpright", "stiffness") => { let p = &st.stay_upright; Value::Float(p.stiffness) }
         ("stayUpright", "dampingScale") => { let p = &st.stay_upright; Value::Float(p.damping_scale) }
         ("stayUpright", "side") => Value::Int(st.stay_upright.side.unwrap_or(-1)),
