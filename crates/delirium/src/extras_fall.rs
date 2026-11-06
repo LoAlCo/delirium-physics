@@ -51,6 +51,7 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "different", kind: Kind::Bool, used: true, doc: "the two arms brace differently (false)" },
     ] },
     Message { name: "staggerFall", params: &[
+        Param { name: "upperBodyReaction", kind: Kind::Bool, used: true, doc: "RDR2 core: the upper body's reaction runs (true)" },
         Param { name: "armStiffness", kind: Kind::Float, used: true, doc: "arm muscle stiffness once ramped (6)" },
         Param { name: "armDamping", kind: Kind::Float, used: true, doc: "arm damping once ramped (0.5)" },
         Param { name: "spineStiffness", kind: Kind::Float, used: true, doc: "spine stiffness once ramped (8)" },
@@ -105,6 +106,12 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "useHeadLook", kind: Kind::Bool, used: true, doc: "head look on (true)" },
     ] },
     Message { name: "smartFall", params: &[
+        Param { name: "rdsUseStartingFriction", kind: Kind::Bool, used: true, doc: "RDR2 core: state 6's enter sets the body's friction (false)" },
+        Param { name: "rdsStartingFriction", kind: Kind::Float, used: true, doc: "RDR2 core: to this (0)" },
+        Param { name: "changeExtremityFriction", kind: Kind::Bool, used: true, doc: "RDR2 core: also head and neck, and a third of it on hands and feet (false)" },
+        Param { name: "rdsStartingFrictionMin", kind: Kind::Float, used: true, doc: "RDR2 core: over 0, the friction's floor (0)" },
+        Param { name: "blendHeadWhenStopped", kind: Kind::Float, used: true, doc: "RDR2 core: state 6: under this speed the neck and head blend to straight (0)" },
+        Param { name: "spreadLegs", kind: Kind::Float, used: true, doc: "RDR2 core: pedalLegs' spread (0.1)" },
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "body stiffness while airborne (10)" },
         Param { name: "bodydamping", kind: Kind::Float, used: true, doc: "its damping ratio (0.6)" },
         Param { name: "pdStrength", kind: Kind::Float, used: false, doc: "(not done: 0)" },
@@ -1869,7 +1876,7 @@ impl Injured {
         self.rd.rfw_block = None;
         self.rd.time += dt;
         // the log: last tick's friction and floors reached the body, a shoulder went past the rig's limit
-        if let (Some(&f), Some(&g)) = (c.b.doll.fric.get(13), c.b.doll.lim_floor.get(SHOULDER()[0] + 1)) {
+        if let (Some(&f), Some(g)) = (c.b.doll.fric.get(13), c.ch.core.lim.get(SHOULDER()[0]).map(|t| t.live)) {
             self.say(11, format!("#say iog body has arm friction {f} and shoulder limit floors {g:?}"));
         }
         for i in 0..2 {

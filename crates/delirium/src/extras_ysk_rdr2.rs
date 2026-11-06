@@ -1945,25 +1945,28 @@ pub struct KeyframeRdr2 {
     prev: Vec<Transform>,
     count: Vec<i32>,
     err: f32,
-    hold: Vec<(usize, Option<Vec3>, Option<Quat>)>,
-    release: Vec<(usize, Vec3, Vec3)>,
+    /// the hard keys' first step is behind (0x2a4e8c8's mode 2, 3 after it)
+    keyed: bool,
+    /// joints whose limits take in their desired angles next (0x2a4ee5c)
+    around: Vec<usize>,
+    release: Vec<(usize, Transform, (Vec3, Vec3))>,
     logged: u8,
     seen_incoming: bool,
 }
 
 /// The shortest rotation's axis times its angle.
-fn turn(q: Quat) -> Vec3 {
+pub(crate) fn turn(q: Quat) -> Vec3 {
     (if q.w < 0.0 { -q } else { q }).to_scaled_axis()
 }
 
-fn clamp3(v: Vec3, l: Vec3) -> Vec3 {
+pub(crate) fn clamp3(v: Vec3, l: Vec3) -> Vec3 {
     Vec3::new(v.x.clamp(-l.x, l.x), v.y.clamp(-l.y, l.y), v.z.clamp(-l.z, l.z))
 }
 
 /// The tracking's braking along the way to the target (twice in 0x2a1c45c, for the velocity and the turn): if he
 /// comes at it faster than its own speed and can't slow in the distance left at these limits, the wanted speed along
 /// the way is what he can still shed.
-fn brake(want: Vec3, now: Vec3, own: Vec3, way: Vec3, dist: f32, lim: Vec3) -> Vec3 {
+pub(crate) fn brake(want: Vec3, now: Vec3, own: Vec3, way: Vec3, dist: f32, lim: Vec3) -> Vec3 {
     let (cur, anim) = (now.dot(way), own.dot(way));
     if anim < cur {
         let t = dist / (cur - anim);
@@ -1993,7 +1996,7 @@ impl KeyframeRdr2 {
             momentum: p.b("softpreservemomentum", false)?, forces: p.b("useForces", false)?, target_vel: p.b("usetargetvel", false)?,
             spikes: p.i("spikes", 0)?, cool: p.i("spikecooldown", 3)?, spike_ang: p.v("spikeangaccel", Vec3::splat(1000.0))?,
             started: false, failed: false, ramp: (0.0, 0.0), pose: vec![], angles: vec![], prev: vec![], count: vec![], err: 0.0,
-            hold: vec![], release: vec![], logged: 0, seen_incoming: false,
+            keyed: false, around: vec![], release: vec![], logged: 0, seen_incoming: false,
         })
     }
 
@@ -2047,6 +2050,9 @@ impl KeyframeRdr2 {
                     }
                 }
             }
+            // 0x2a4ee5c(body, 0, m) -> 0x2a459e0: this tick the keyed joints' limits take in their desired angles, margin 0.2
+            let keyed: Vec<usize> = self.active.iter().copied().chain(self.hard.iter().chain(&self.soft).chain(&self.alt).filter(|&&k| k > 0).map(|&k| k - 1)).collect();
+            self.around = keyed;
             self.say(1, format!("keyframe: activate, hard {} soft {} alt {} muscle {} active {}, foot hold and ZMP off",
                                    self.hard.len(), self.soft.len(), self.alt.len(), self.muscle.len(), self.active.len()));
         }
@@ -2060,16 +2066,35 @@ impl KeyframeRdr2 {
                 c.ch.eff[j].desired = *a;
             }
         }
-        // the hard keyed parts: 0x2a1b1a4 sets their pose from the buffer and their velocities to nothing while the mode
-        // is 3 (ours: Delirium's hard constraints on the pose)
-        self.hold = self.hard.iter().filter_map(|&k| target.get(k).map(|t| (k, Some(t.translation), Some(t.rotation)))).collect();
-        // what mode 4 gives them when it ends: the pose buffers' velocities (0x2a1ec9c)
-        self.release = self.hard.iter().filter_map(|&k| {
+        if !self.around.is_empty() {
+            let keyed = std::mem::take(&mut self.around);
+            let before: Vec<[f32; 6]> = keyed.iter().map(|&j| c.ch.limits(j)).collect();
+            for &j in &keyed {
+                let a = c.ch.eff[j].desired;
+                c.ch.lim_around(j, a, 0.2);
+            }
+            let _ = before;
+            self.say(32, format!("keyframe: limits take in the desired angles on {} joints", keyed.len()));
+        }
+        // the hard keyed parts (0x2a1b1a4): the first step (mode 2, which 0x2a740c4 turns to 3) their pose is set from the
+        // buffer with the buffers' velocities (0x2a1ec9c), or none with no previous buffer; after it (mode 3) the pose with
+        // velocities nothing
+        let first = !self.keyed;
+        self.keyed = true;
+        let vels: Vec<(usize, Vec3, Vec3)> = self.hard.iter().filter_map(|&k| {
             let (t, p) = (target.get(k)?, self.prev.get(k)?);
             let (axis, angle) = (t.rotation * p.rotation.inverse()).to_axis_angle();
             let angle = if angle > std::f32::consts::PI { angle - std::f32::consts::TAU } else { angle };
             Some((k, (t.translation - p.translation) / dt.max(1e-4), axis * (angle / dt.max(1e-4))))
         }).collect();
+        for &k in &self.hard {
+            let Some(&t) = target.get(k) else { continue };
+            let (v, w) = if first { vels.iter().find(|x| x.0 == k).map_or((Vec3::ZERO, Vec3::ZERO), |x| (x.1, x.2)) } else { (Vec3::ZERO, Vec3::ZERO) };
+            c.out.key_part.push((k, Some(t), v, w));
+        }
+        self.say(64, format!("keyframe: hard keys, mode {} on {} parts", if first { 2 } else { 3 }, self.hard.len()));
+        // what mode 4 gives them when it ends
+        self.release = target.iter().enumerate().filter(|(k, _)| self.hard.contains(k)).map(|(k, t)| (k, *t, vels.iter().find(|x| x.0 == k).map_or((Vec3::ZERO, Vec3::ZERO), |x| (x.1, x.2)))).collect();
         if !self.failed {
             if self.brk >= 0.0 && self.brk < self.err {
                 self.failed = true;
@@ -2269,27 +2294,24 @@ impl KeyframeRdr2 {
     }
 
     pub fn constraints(&self) -> Vec<(usize, Option<Vec3>, Option<Quat>)> {
-        self.hold.clone()
+        vec![]
     }
 
     /// Deactivate: hard keying off; with the core, the foot yaw hold and ZMP gravity compensation back on.
     pub fn stop(&mut self, c: &mut Ctx) {
-        self.hold.clear();
-        // mode 4, one step (0x2a1b1a4): the hard parts leave with the animation's velocities
+        // mode 4, one step (0x2a1b1a4): the hard parts leave posed, with the buffers' velocities; if the root is among them
+        // the others get its velocity added
         if c.ch.rdr2 && !self.release.is_empty() {
             let mut most = 0.0f32;
-
-
-            for (k, v, w) in std::mem::take(&mut self.release) {
-                let p = c.b.part(k);
-                let dv = v - p.v;
-                most = most.max(dv.length());
-                c.out.impulse.push((k, c.b.doll.centre(k), dv * c.b.doll.part_mass(k)));
-                let dw = w - p.w;
-                let l = dw.length();
-                if l > 1e-6 {
-                    let i = c.b.doll.inertia(k, dw / l);
-                    c.out.torque(k, dw * (i * 60.0));
+            let root = self.release.iter().find(|r| r.0 == 0).map(|r| r.2);
+            for (k, t, (v, w)) in std::mem::take(&mut self.release) {
+                most = most.max((v - c.b.part(k).v).length());
+                c.out.key_part.push((k, Some(t), v, w));
+            }
+            if let Some((rv, rw)) = root {
+                for k in (0..c.b.frames.len()).filter(|k| !self.hard.contains(k)) {
+                    let p = c.b.part(k);
+                    c.out.key_part.push((k, None, p.v + rv, p.w + rw));
                 }
             }
             note(format_args!("keyframe: mode 4, the hard parts released, up to {most:.2} m/s changed"));

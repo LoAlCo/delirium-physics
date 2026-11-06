@@ -489,6 +489,10 @@ impl CatchFall {
         let p = self.p;
         let Some(mut r) = self.rd.take() else { return };
         let up = c.up;
+        // the wrists' limits this tick (0x2a4eaa0 at the head of its tick)
+        for i in 0..2 {
+            c.ch.lim_raise(crate::nmrs::WRIST()[i], [1.1, 2.0, 1.1]);
+        }
         // on the ground: any part but the lower legs and feet touching
         let legs: Vec<usize> = (0..2).flat_map(|i| [(*KNEE())[i] + 1, (*ANKLE())[i] + 1]).collect();
         let others: Vec<usize> = (0..c.b.frames.len()).filter(|k| !legs.contains(k)).collect();
@@ -506,7 +510,15 @@ impl CatchFall {
         // setFallingReaction's roll: moving fast enough once the delay is over, rollDownStairs takes him (with resistRolling
         // only with a trunk or arm part down); the stop on slowing isn't here
         let parts: Vec<usize> = (0..c.b.frames.len()).filter(|k| !(1..=6).contains(k)).collect();
-        if !r.rolling && fall.call_rds != 0.0 && r.roll_wait < 0.0 && c.vel.length() > fall.com_vel_rds
+        // the slope (item 9): stopOnSlopes's time over, its size off the mean of the arms' normals; stopManual a floor under it
+        let ground_n = if r.on_ground { nrm(r.arm[0].normal + r.arm[1].normal) } else { up };
+        let (slope_side, slope) = if r.time > fall.stop_on_slopes {
+            (nrm(ground_n.vx(up)).dot(c.m.b), 10.0 * (1.0 - up.dot(ground_n)).clamp(0.0, 0.1))
+        } else {
+            (1.0, 0.0)
+        };
+        let slope = slope.max(fall.stop_manual);
+        if !r.rolling && fall.call_rds != 0.0 && r.roll_wait < 0.0 && c.vel.length() > 2.0 * slope + fall.com_vel_rds
             && (fall.resist_rolling == 0.0 || c.b.doll.collided(&parts))
         {
             r.rolling = true;
@@ -612,10 +624,21 @@ impl CatchFall {
             h.desired[1] = m.c.dot(ground).abs() * r.hip_gain[i];
         }
         let d = m.c.dot(ground);
+        // the slope block (item 7): on a slope, or with stopManual, slower than 2 m/s or resisting, the hips close and open
+        if (r.time > fall.stop_on_slopes || fall.stop_manual > 0.0) && (c.vel.length() < 2.0 || fall.resist_rolling != 0.0) && slope_side.abs() * slope > 0.0 && r.on_ground {
+            let x = slope_side.abs() * slope * -d.abs();
+            for i in 0..2 {
+                let h = &mut ch.eff[(*HIP())[i]];
+                h.desired[1] = h.desired[1] * (1.0 + x) + 0.7 * x;
+            }
+            crate::extras_core_rdr2::trace_first("catchFall slope block");
+        }
         let most = 1.0 - 0.7 * d.clamp(0.0, 1.0);
         for i in 0..2 {
-            // rate limited at 10^4 rad/s: at once
-            r.knee[i] = -r.knee_amount[i].min(most);
+            // rate limited at blendkneerate (by default 10^4 rad/s: at once)
+            let want = -r.knee_amount[i].min(most);
+            let step = fall.knee_rate * dt;
+            r.knee[i] = if want.abs() < 1e4 && step < 1e3 { r.knee[i] + (want - r.knee[i]).clamp(-step, step) } else { want };
             ch.eff[(*KNEE())[i]].desired[0] = r.knee[i];
         }
         for i in 0..2 {
@@ -695,8 +718,9 @@ impl Rdr2Cf {
         };
         let flat = c.b.pmat(l.p[1]).m.b * -0.2 - ch3 * (g * h);
         start += Vec3::new(flat.x, flat.y, 0.0);
-        // the swing circle
-        let e = 1.0 - 5.0 * ((-(a.target - shoulder).z).clamp(0.3, 0.5) - 0.3);
+        // the swing circle (with ?7dad7aaf on)
+        let circle = c.ch.core.cfg.fall.swing_circle != 0.0;
+        let e = if circle { 1.0 - 5.0 * ((-(a.target - shoulder).z).clamp(0.3, 0.5) - 0.3) } else { 0.0 };
         if e > 0.8 {
             self.reach_scale = 0.96;
         }
@@ -770,8 +794,11 @@ impl Rdr2Cf {
         } else {
             c.ch.eff[clav].desired = [0.0, 0.0, c.ch.actual(clav, c.b.frames)[2]];
         }
-        if a.k < 0.3 && f < 0.0 {
+        if (a.k < 0.3 || c.ch.core.cfg.fall.anti_prop_clav != 0.0) && f < 0.0 {
             c.ch.eff[clav].desired = [0.0; 3];
+            if c.ch.core.cfg.fall.anti_prop_clav != 0.0 {
+                crate::extras_core_rdr2::trace_first("catchFall antiPropClav");
+            }
         }
         // the hand's normal: from the forearm's axes toward the hit's as the reach opens
         let fa = c.b.pmat(l.p[2]).m;

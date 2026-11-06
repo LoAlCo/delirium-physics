@@ -11,7 +11,78 @@ use bevy_math::Vec3;
 /// A message line can say start=false: on=false here, since an extra only starts with start=true.
 const ON: Param = Param { name: "on", kind: Kind::Bool, used: true, doc: "false: RDR2's start=false for this record (true)" };
 
-pub static MESSAGES: [Message; 7] = [
+pub static MESSAGES: [Message; 16] = [
+    Message { name: "configureLimits", params: &[
+        Param { name: "mask", kind: Kind::Str, used: true, doc: "the joints (fb)" },
+        Param { name: "index", kind: Kind::Int, used: true, doc: "one joint, by number (-1: the mask's)" },
+        Param { name: "enable", kind: Kind::Bool, used: true, doc: "false: the limits wide open this tick (true)" },
+        Param { name: "?a45afe45", kind: Kind::Bool, used: true, doc: "back to the base limits (false)" },
+        Param { name: "toDesired", kind: Kind::Bool, used: true, doc: "wide enough for the desired angles (false)" },
+        Param { name: "toCurAnimation", kind: Kind::Bool, used: true, doc: "wide enough for the actual angles and the margin (false)" },
+        Param { name: "margin", kind: Kind::Float, used: true, doc: "toCurAnimation's margin, rad (0.19635)" },
+        Param { name: "lean1", kind: Kind::Float, used: true, doc: "else: a half-range at least this; a hinge's high end (1.5708)" },
+        Param { name: "lean2", kind: Kind::Float, used: true, doc: "a half-range at least this (1.5708)" },
+        Param { name: "twist", kind: Kind::Float, used: true, doc: "a half-range at least this; a hinge's low end at most this (1.5708)" },
+    ] },
+    Message { name: "configureConstraints", params: &[
+        Param { name: "mask", kind: Kind::Str, used: true, doc: "RDR2's constraint config; the joints' limits take in where they are, for good (not sent by any set)" },
+    ] },
+    Message { name: "SoftKey", params: &[
+        Param { name: "mask", kind: Kind::Str, used: true, doc: "the joints (fb)" },
+        Param { name: "gravityCompensation", kind: Kind::Float, used: true, doc: "the gravity share after the clamp (0)" },
+        Param { name: "?b7cd5720", kind: Kind::Vec3, used: true, doc: "the linear acceleration limit per axis (50)" },
+        Param { name: "?996bb59c", kind: Kind::Vec3, used: true, doc: "the angular acceleration limit per axis (50)" },
+    ] },
+    Message { name: "configureSelfAvoidance", params: &[
+        Param { name: "useSelfAvoidance", kind: Kind::Bool, used: true, doc: "the arms' IK targets go round the trunk (false)" },
+        Param { name: "overwriteDragReduction", kind: Kind::Bool, used: true, doc: "from the target before its lead (false)" },
+        Param { name: "torsoSwingFraction", kind: Kind::Float, used: true, doc: "the share of the angle to the hand the target turns by (0.75)" },
+        Param { name: "maxTorsoSwingAngleRad", kind: Kind::Float, used: true, doc: "at most this (0.758)" },
+        Param { name: "selfAvoidIfInSpineBoundsOnly", kind: Kind::Bool, used: true, doc: "only with the target along the trunk (false)" },
+        Param { name: "selfAvoidAmount", kind: Kind::Float, used: true, doc: "the arm's length share kept out when the target is behind (0.5)" },
+        Param { name: "overwriteTwist", kind: Kind::Bool, used: true, doc: "the IK's twist comes from the shoulder's angle (false)" },
+        Param { name: "usePolarPathAlgorithm", kind: Kind::Bool, used: true, doc: "the polar path round a capsule instead (false)" },
+        Param { name: "radius", kind: Kind::Float, used: true, doc: "the capsule's radius (0.3)" },
+    ] },
+    Message { name: "shotNewBullet", params: &[
+        Param { name: "bodyPart", kind: Kind::Int, used: true, doc: "the part hit (the pelvis)" },
+        Param { name: "localHitPointInfo", kind: Kind::Bool, used: true, doc: "hitPoint and normal are in the part's space (false)" },
+        Param { name: "hitPoint", kind: Kind::Vec3, used: true, doc: "the point (the part's centre)" },
+        Param { name: "normal", kind: Kind::Vec3, used: true, doc: "its normal" },
+        Param { name: "?06c06365", kind: Kind::Bool, used: true, doc: "the shot's reaction takes it" },
+        Param { name: "?4d7dfd89", kind: Kind::Bool, used: true, doc: "the duck's takes it" },
+        Param { name: "?2f471f82", kind: Kind::Bool, used: true, doc: "the third behaviour's takes it" },
+    ] },
+    Message { name: "setCharacterCollisions", params: &[
+        Param { name: "spin", kind: Kind::Float, used: true, doc: "the hit's spin (0)" },
+        Param { name: "maxVelocity", kind: Kind::Float, used: true, doc: "only under this speed (8)" },
+        Param { name: "footSlip", kind: Kind::Bool, used: true, doc: "the foot yaw hold lets go while in contact" },
+        Param { name: "gsfricscale1", kind: Kind::Float, used: true, doc: "friction of mask 1's parts (8)" },
+        Param { name: "gsfricscale2", kind: Kind::Float, used: true, doc: "friction of mask 2's parts (0.2)" },
+        Param { name: "?b11746eb", kind: Kind::Float, used: true, doc: "under 0: the scale applies; else the friction's cap (-0.2)" },
+        Param { name: "vehicleflags", kind: Kind::Str, used: false, doc: "the object types (object types aren't kept here: any moving obstacle)" },
+        Param { name: "applyToAll", kind: Kind::Bool, used: true, doc: "" },
+        Param { name: "applyToSpine", kind: Kind::Bool, used: true, doc: "" },
+        Param { name: "applyToThighs", kind: Kind::Bool, used: true, doc: "" },
+        Param { name: "applyToClavicles", kind: Kind::Bool, used: true, doc: "" },
+        Param { name: "applyToUpperArms", kind: Kind::Bool, used: true, doc: "" },
+    ] },
+    Message { name: "setCharacterDamping", params: &[
+        Param { name: "somersaultThresh", kind: Kind::Float, used: true, doc: "the contact spin limiter: the angular momentum about the COM's x before it acts (34)" },
+        Param { name: "somersaultDamp", kind: Kind::Float, used: true, doc: "its gain (0)" },
+        Param { name: "cartwheelThresh", kind: Kind::Float, used: true, doc: "about the COM's z (27)" },
+        Param { name: "cartwheelDamp", kind: Kind::Float, used: true, doc: "its gain (0)" },
+        Param { name: "vehicleCollisionTime", kind: Kind::Float, used: true, doc: "seconds it runs from a contact with an object of setCharacterCollisions' types (0)" },
+        Param { name: "v2", kind: Kind::Float, used: true, doc: "only if the COM is slower than this (0)" },
+    ] },
+    Message { name: "spinLimit", params: &[
+        Param { name: "somersaultThresh", kind: Kind::Float, used: true, doc: "?b7960dec, the shot's spin limiter: the angular momentum about the COM's x before it acts" },
+        Param { name: "somersaultDamp", kind: Kind::Float, used: true, doc: "its gain" },
+        Param { name: "cartwheelThresh", kind: Kind::Float, used: true, doc: "about the COM's z" },
+        Param { name: "cartwheelDamp", kind: Kind::Float, used: true, doc: "its gain" },
+        Param { name: "?7d54085f", kind: Kind::Float, used: true, doc: "seconds it runs from a bullet's start (0)" },
+        Param { name: "?27795104", kind: Kind::Float, used: true, doc: "only if the COM is slower than this at the bullet (0.1)" },
+    ] },
     Message { name: "setOpposeGravity", params: &[
         Param { name: "oppose", kind: Kind::Float, used: true, doc: "the joints' gravity opposition, this step's request (1)" },
         Param { name: "mask", kind: Kind::Str, used: true, doc: "the joints (fb)" },
@@ -42,6 +113,13 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "characterStrength", kind: Kind::Float, used: true, doc: "ctx+0x102c: scales the bullets' leak and torque share (1)" },
     ] },
     Message { name: "configureBullets", params: BULLET_PARAMS },
+    Message { name: "quadLimbLimit", params: &[
+        Param { name: "limb", kind: Kind::Int, used: false, doc: "?e35a5d1a: its handler returns at once on a biped" },
+        Param { name: "type", kind: Kind::Int, used: false, doc: "" },
+        Param { name: "min", kind: Kind::Float, used: false, doc: "" },
+        Param { name: "max", kind: Kind::Float, used: false, doc: "" },
+        Param { name: "direction", kind: Kind::Float, used: false, doc: "" },
+    ] },
     Message { name: "setcharacterunderwater", params: &[
         Param { name: "Underwater", kind: Kind::Bool, used: true, doc: "ctx+0x10c4: the core's water is on" },
         Param { name: "surfacePoint", kind: Kind::Vec3, used: true, doc: "a point on the water (0 0 1)" },
@@ -163,17 +241,40 @@ pub struct FallCfg {
     pub min_arm: f32,
     pub call_rds: f32,
     pub resist_rolling: f32,
+    /// stopManual (+0x90): a floor on the slope factor; over 0 it also turns the slope block on
+    pub stop_manual: f32,
+    /// stopOnSlopes (+0xbc): the time after which slopes count
+    pub stop_on_slopes: f32,
+    /// blendkneerate (+0xa4): the knees' rate
+    pub knee_rate: f32,
+    /// antiPropClav (+0xc1): falling backward, no clavicle
+    pub anti_prop_clav: f32,
+    /// ?7dad7aaf (+0xc3): the arm's swing circle offset (the ctor's 1, the message's 0)
+    pub swing_circle: f32,
+    /// ?dcd030d5 (ctx+0x1068): the knee and foot tweak in the core's step
+    pub knee_tweak: f32,
+    /// zmpgroundcollision (ctx+0x105c): the tweaked knee's limit
+    pub knee_limit: f32,
+    /// ?7579162f (ctx+0x1060): that knee's limit narrows back at this rate
+    pub limit_rate: f32,
+    /// ?4fe4ab89 (ctx+0x1064): a bent knee's foot's friction, lying down
+    pub foot_friction: f32,
 }
 
 impl Default for FallCfg {
     fn default() -> FallCfg {
-        FallCfg { com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
+        FallCfg { stop_manual: 0.0, stop_on_slopes: f32::MAX, knee_rate: 10000.0, anti_prop_clav: 0.0, swing_circle: 1.0, knee_tweak: 1.0, knee_limit: 3.0, limit_rate: 1.0, foot_friction: 0.0, com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
     }
 }
 
 impl FallCfg {
+    /// What the message's handler (0x2a74c3c) writes before its values: where the registered default isn't the ctor's.
+    pub fn message_defaults() -> FallCfg {
+        FallCfg { stop_on_slopes: 10000.0, swing_circle: 0.0, knee_tweak: 0.0, ..FallCfg::default() }
+    }
+
     /// One value by the port's name; the names of the parameters the message takes for these.
-    pub const NAMES: [&'static str; 16] = ["comVelRDSThresh", "inhibitRollingTime", "changeFrictionTime", "groundFriction", "armFriction", "frictionMin", "frictionMax", "stoppedStrengthDecay", "kTime", "spineLeanGain", "successStrength", "minLegStiffness", "minSpineStiffness", "minArmStiffness", "callRDS", "resistRolling"];
+    pub const NAMES: [&'static str; 25] = ["stopManual", "stopOnSlopes", "blendkneerate", "antiPropClav", "?7dad7aaf", "?dcd030d5", "zmpgroundcollision", "?7579162f", "?4fe4ab89", "comVelRDSThresh", "inhibitRollingTime", "changeFrictionTime", "groundFriction", "armFriction", "frictionMin", "frictionMax", "stoppedStrengthDecay", "kTime", "spineLeanGain", "successStrength", "minLegStiffness", "minSpineStiffness", "minArmStiffness", "callRDS", "resistRolling"];
 
     pub fn set(&mut self, name: &str, v: f32) {
         match name {
@@ -193,9 +294,72 @@ impl FallCfg {
             "minArmStiffness" => self.min_arm = v,
             "callRDS" => self.call_rds = v,
             "resistRolling" => self.resist_rolling = v,
+            "stopManual" => self.stop_manual = v,
+            "stopOnSlopes" => self.stop_on_slopes = v,
+            "blendkneerate" => self.knee_rate = v,
+            "antiPropClav" => self.anti_prop_clav = v,
+            "?7dad7aaf" => self.swing_circle = v,
+            "?dcd030d5" => self.knee_tweak = v,
+            "zmpgroundcollision" => self.knee_limit = v,
+            "?7579162f" => self.limit_rate = v,
+            "?4fe4ab89" => self.foot_friction = v,
             _ => {}
         }
     }
+}
+
+/// The arms' IK target with self avoidance on (0x2a4b520): round the trunk. A is the top of the spine, B the pelvis, n the
+/// top part's second axis negated; T the target, F the hand. Returns the new target, and the twist overwriteTwist gives.
+pub fn self_avoid_target(r: &SelfAvoid, a: Vec3, b: Vec3, n: Vec3, t: Vec3, hand: Vec3, shoulder: Vec3, elbow: Vec3) -> (Vec3, Option<f32>) {
+    let u = (a - b).normalize_or_zero();
+    let perp = |p: Vec3, o: Vec3| { let d = p - o; d - u * d.dot(u) };
+    if r.polar {
+        // 0x2a36710: a path round a capsule, in the plane across it
+        let len = (a - b).length();
+        let along = (t - b).dot(u);
+        if along < -r.radius || along > len + r.radius {
+            return (t, None);
+        }
+        let e2 = u.cross(n).normalize_or_zero();
+        let e1 = u.cross(e2).normalize_or_zero();
+        let flat = |p: Vec3| { let d = p - b; bevy_math::Vec2::new(d.dot(e1), d.dot(e2)) };
+        let (f2, t2) = (flat(hand), flat(t));
+        let d = t2 - f2;
+        let s = if d.length_squared() > 0.0 { (-f2.dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+        let near = f2 + d * s;
+        let cross = f2.x * t2.y - f2.y * t2.x;
+        let rho = near.length() * if cross < 0.0 { -1.0 } else { 1.0 };
+        let dphi = t2.y.atan2(t2.x) - f2.y.atan2(f2.x);
+        let lam = ((r.radius - rho) / (f2.length().min(t2.length()) - rho)).clamp(0.0, 1.0);
+        let f_unit = f2.normalize_or_zero();
+        let arc = f2 + f_unit * (t2.length() - f2.length()) + bevy_math::Vec2::new(-f2.y, f2.x) * dphi;
+        let out = t2 * (1.0 - lam) + arc * lam;
+        return (b + u * along + e1 * out.x + e2 * out.y, None);
+    }
+    // 0x2a36cec: turned about the axis toward the hand by a capped share (0x2a21930), then moved out or in
+    let v = u.cross(n).normalize_or_zero();
+    let rr = (v - u * v.dot(u)).normalize_or_zero();
+    let (tp, fp) = (perp(t, a).normalize_or_zero(), perp(hand, a).normalize_or_zero());
+    let phi_t = tp.dot(rr).clamp(-1.0, 1.0).acos();
+    let axis = rr.cross(tp).normalize_or_zero();
+    let sign = if rr.cross(fp).dot(axis) <= 0.0 { -1.0 } else { 1.0 };
+    let phi_f = fp.dot(rr).clamp(-1.0, 1.0).acos() * sign;
+    let turn = ((phi_f - phi_t) * r.fraction).clamp(-r.most, r.most);
+    let t1 = a + bevy_math::Quat::from_axis_angle(axis, turn) * (t - a);
+    let radial = perp(t1, a);
+    let r1 = radial.length();
+    let chain = (hand - elbow).length() + (elbow - shoulder).length();
+    let along = (t - b).dot(u);
+    let inside = !r.in_spine || (along >= -r.amount && along <= (a - b).length() + r.amount);
+    if chain <= r1 || !inside {
+        return (t, None);
+    }
+    let c = tp.dot(fp).clamp(-1.0, 1.0);
+    let cs = perp(shoulder, a).normalize_or_zero().dot(fp).clamp(-1.0, 1.0);
+    let far = if c >= 0.0 { r1 } else { chain * r.amount };
+    let d = (r1 - ((1.0 - c.abs()) * perp(hand, a).length() + c.abs() * far)).abs();
+    let twist = r.twist.then(|| if cs >= 0.0 { -std::f32::consts::FRAC_PI_2 } else { -std::f32::consts::FRAC_PI_4 } * cs);
+    (t1 + radial.normalize_or_zero() * d, twist)
 }
 
 /// The core's water (setcharacterunderwater, 0x2a4d8b8; ctx+0x1090..+0x10c6).
@@ -244,11 +408,67 @@ pub struct CoreCfg {
     pub torque_sign: i32,
     pub fall: FallCfg,
     pub water: Water,
+    pub self_avoid: SelfAvoid,
+    pub spin: SpinRec,
+    pub spin_hit: SpinRec,
+    pub coll: CollRec,
+}
+
+/// What configureSelfAvoidance leaves on the arm limbs (+0x3f0..+0x404), ctor's defaults.
+#[derive(Clone, Copy, Debug)]
+pub struct SelfAvoid {
+    pub on: bool,
+    pub drag: bool,
+    pub fraction: f32,
+    pub most: f32,
+    pub in_spine: bool,
+    pub amount: f32,
+    pub twist: bool,
+    pub polar: bool,
+    pub radius: f32,
+}
+
+impl Default for SelfAvoid {
+    fn default() -> SelfAvoid {
+        SelfAvoid { on: false, drag: false, fraction: 0.75, most: 0.758, in_spine: false, amount: 0.5, twist: false, polar: false, radius: 0.3 }
+    }
+}
+
+/// The bullet's spin limiter's record (ctx+0x2bc8), its ctor's values: off until a bullet arms it.
+#[derive(Clone, Copy, Debug)]
+pub struct SpinRec {
+    pub lim: [f32; 2],
+    pub gain: [f32; 2],
+    pub time: f32,
+    pub speed: f32,
+    pub left: f32,
+}
+
+impl Default for SpinRec {
+    fn default() -> SpinRec {
+        SpinRec { lim: [2.0; 2], gain: [5.0; 2], time: 0.0, speed: 0.1, left: -0.1 }
+    }
+}
+
+/// setCharacterCollisions' fields (ctx+0x10e8..+0x1110).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CollRec {
+    pub on: bool,
+    pub spin: f32,
+    pub max_speed: f32,
+    pub foot_slip: bool,
+    pub scale: [f32; 2],
+    pub cap: f32,
+    pub spine: bool,
+    pub thighs: bool,
+    pub clavicles: bool,
+    pub upper: bool,
+    pub all: bool,
 }
 
 impl Default for CoreCfg {
     fn default() -> CoreCfg {
-        CoreCfg { water: Default::default(), soft: Default::default(), soft_was: [false; 4], fric: [1.0; 32], fric_used: false, fric_min: 0.0, fric_max: 9999.0, fric_clamp: false, muscle: None, strength: 1.0,
+        CoreCfg { self_avoid: Default::default(), spin: Default::default(), spin_hit: SpinRec { lim: [34.0, 27.0], gain: [0.0; 2], time: 0.0, speed: 0.0, left: -0.1 }, coll: Default::default(), water: Default::default(), soft: Default::default(), soft_was: [false; 4], fric: [1.0; 32], fric_used: false, fric_min: 0.0, fric_max: 9999.0, fric_clamp: false, muscle: None, strength: 1.0,
                   bullets: Default::default(), reduction: 0.15, min_leak: 0.2, recovery: None, leak_scaled: false, torques: 0, torque_sign: 0, fall: Default::default() }
     }
 }
@@ -388,7 +608,8 @@ pub fn core_tick(c: &mut Ctx) {
 struct Once(Box<dyn FnMut(&mut Ctx) + Send + Sync>, bool);
 
 impl Extra for Once {
-    fn tick(&mut self, c: &mut Ctx, _dt: f32) {
+    fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        c.dt = dt;
         if c.ch.rdr2 && !self.1 {
             (self.0)(c);
         }
@@ -412,12 +633,212 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "setOpposeGravity" => oppose(p),
         "configureBullets" => bullets(p),
         "setcharacterunderwater" => underwater(p),
+        "configureLimits" => limits(p),
+        "configureConstraints" => constraints(p),
+        "SoftKey" => soft_key(p),
+        "configureSelfAvoidance" => self_avoid(p),
+        "shotNewBullet" => new_bullet(p),
+        "setCharacterCollisions" => collisions(p),
+        "spinLimit" => spin_limit(p),
+        "setCharacterDamping" => damping(p),
+        "quadLimbLimit" => limb_limit(p),
         _ => return None,
     })
 }
 
 const NOT_SENT: f32 = -1e30;
 
+/// A trace line once per text, for paths with no state of their own to keep it in.
+pub fn trace_first(s: &'static str) {
+    trace_once(s, || s.to_string());
+}
+
+/// configureLimits (0x2a27f68), on one joint or a mask's. What it asks lasts this tick: the drive puts the limits back
+/// to their base after it, and they narrow back at the core's rate. On a hinge lean1 is the high end and twist the low [C].
+fn limits(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let mask = p.s("mask", "fb")?;
+    let idx = p.i("index", -1)?;
+    let (enable, base, to_desired, to_actual) = (p.b("enable", true)?, p.b("?a45afe45", false)?, p.b("toDesired", false)?, p.b("toCurAnimation", false)?);
+    let (margin, l1, l2, tw) = (p.f("margin", 0.19635)?, p.f("lean1", 1.570796)?, p.f("lean2", 1.570796)?, p.f("twist", 1.570796)?);
+    Ok(once(move |c| {
+        let on = joint_mask(&mask);
+        // (the index by RDR2's numbers: a joint is its child part less one)
+        let joints: Vec<usize> = if idx >= 0 { vec![crate::extras_ysk_rdr2::rp(idx as usize + 1).saturating_sub(1)] } else { (0..c.ch.eff.len()).filter(|&j| on.get(j).copied().unwrap_or(false)).collect() };
+        let n = c.ch.eff.len();
+        for &j in joints.iter().filter(|&&j| j < n) {
+            if !enable {
+                c.ch.lim_open(j);
+            } else if base {
+                c.ch.lim_to_base(j);
+            } else if to_desired {
+                let a = c.ch.eff[j].desired;
+                c.ch.lim_around(j, a, 0.0);
+            } else if to_actual {
+                let a = c.ch.actual(j, c.b.frames);
+                c.ch.lim_around(j, a, margin);
+            } else if c.ch.joints[j].three {
+                c.ch.lim_raise(j, [l1, l2, tw]);
+            } else {
+                c.ch.lim_raise_hinge(j, tw, l1);
+            }
+        }
+        trace(|| format!("configureLimits on {} joints: enable {enable} base {base} toDesired {to_desired} toCurAnimation {to_actual}", joints.len()));
+    }))
+}
+
+/// configureConstraints' limit half (0x2a27178): each joint's limits take in where it is (slot +0x110, 1, 0), and the base
+/// takes that for good (slot +0xf0, 0).
+fn constraints(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let mask = p.s("mask", "fb")?;
+    Ok(once(move |c| {
+        let on = joint_mask(&mask);
+        for j in (0..c.ch.eff.len()).filter(|&j| on.get(j).copied().unwrap_or(false)) {
+            let a = c.ch.actual(j, c.b.frames);
+            c.ch.lim_around(j, a, 0.0);
+            c.ch.lim_commit(j);
+        }
+        trace(|| format!("configureConstraints: limits committed on {mask}"));
+    }))
+}
+
+/// SoftKey (0x2a58364 -> 0x2a572a0 -> each limb's slot +0x58 -> each joint record's 0x2a57378): each joint's child part,
+/// once per message, is driven at the incoming pose as keyframe's soft tracking drives it, without the weights, the spikes
+/// or the COM frame: the velocity that closes the gap this step, braked along the way to what the limits can shed, the
+/// acceleration clamped per axis, the gravity share after the clamp. Nothing without an incoming pose.
+fn soft_key(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let mask = p.s("mask", "fb")?;
+    let (lim_a, lim_w) = (p.v("?b7cd5720", Vec3::splat(50.0))?, p.v("?996bb59c", Vec3::splat(50.0))?);
+    let grav = p.f("gravityCompensation", 0.0)?;
+    Ok(once(move |c| {
+        if c.incoming.len() < c.b.frames.len() || !c.incoming.iter().any(|t| t.translation != Vec3::ZERO) {
+            trace(|| "SoftKey: no incoming pose, nothing".to_string());
+            return;
+        }
+        let dt = c.dt.max(1e-4);
+        let on = joint_mask(&mask);
+        let up = c.up;
+        let mut n = 0;
+        for j in (0..c.ch.eff.len()).filter(|&j| on.get(j).copied().unwrap_or(false)) {
+            let k = j + 1;
+            let part = c.b.part(k);
+            let now = c.b.frames[k];
+            let t = c.incoming[k];
+            let was = c.incoming_prev.get(k).copied().unwrap_or(t);
+            let gap = t.translation - now.translation;
+            let own = (t.translation - was.translation) / dt;
+            let v = crate::extras_ysk_rdr2::brake(gap / dt, part.v, own, gap.normalize_or_zero(), gap.length(), lim_a);
+            let a = crate::extras_ysk_rdr2::clamp3((v - part.v) / dt, lim_a) + up * (9.8 * grav);
+            let err = crate::extras_ysk_rdr2::turn(t.rotation * now.rotation.inverse());
+            let own_w = crate::extras_ysk_rdr2::turn(t.rotation * was.rotation.inverse()) / dt;
+            let w = crate::extras_ysk_rdr2::brake(err / dt, part.w, own_w, err.normalize_or_zero(), err.length(), lim_w);
+            let al = crate::extras_ysk_rdr2::clamp3((w - part.w) / dt, lim_w);
+            c.out.key_vel.push((k, a * dt, al * dt));
+            n += 1;
+        }
+        trace(|| format!("SoftKey: {n} parts driven at the incoming pose"));
+    }))
+}
+
+/// configureSelfAvoidance (0x2a28ca4 -> 0x2a28a14), on both arms' limbs: read by every arm IK request (0x2a2bebc).
+fn self_avoid(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let r = SelfAvoid {
+        on: p.b("useSelfAvoidance", false)?, drag: p.b("overwriteDragReduction", false)?, fraction: p.f("torsoSwingFraction", 0.75)?,
+        most: p.f("maxTorsoSwingAngleRad", 0.758)?, in_spine: p.b("selfAvoidIfInSpineBoundsOnly", false)?, amount: p.f("selfAvoidAmount", 0.5)?,
+        twist: p.b("overwriteTwist", false)?, polar: p.b("usePolarPathAlgorithm", false)?, radius: p.f("radius", 0.3)?,
+    };
+    Ok(once(move |c| {
+        c.ch.core.cfg.self_avoid = r;
+        trace(|| format!("configureSelfAvoidance: {r:?}"));
+    }))
+}
+
+/// ?b7960dec (0x2a4ce2c): the spin limiter a bullet arms (ctx+0x2bc8; 0x2a40518), `spin_limit` in the core's step.
+fn spin_limit(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let rec = SpinRec {
+        lim: [p.f("somersaultThresh", 2.0)?, p.f("cartwheelThresh", 2.0)?], gain: [p.f("somersaultDamp", 5.0)?, p.f("cartwheelDamp", 5.0)?],
+        time: p.f("?7d54085f", 0.0)?, speed: p.f("?27795104", 0.1)?, left: -0.1,
+    };
+    Ok(once(move |c| {
+        c.ch.core.cfg.spin = rec;
+        trace(|| format!("spin limit: {rec:?}"));
+    }))
+}
+
+/// setCharacterDamping (0x2a4d570): the limiter a contact arms (ctx+0x2ba0), `spin_limit` in the core's step.
+fn damping(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let rec = SpinRec {
+        lim: [p.f("somersaultThresh", 34.0)?, p.f("cartwheelThresh", 27.0)?], gain: [p.f("somersaultDamp", 0.0)?, p.f("cartwheelDamp", 0.0)?],
+        time: p.f("vehicleCollisionTime", 0.0)?, speed: p.f("v2", 0.0)?, left: -0.1,
+    };
+    Ok(once(move |c| {
+        c.ch.core.cfg.spin_hit = rec;
+        trace(|| format!("spin limit on contact: {rec:?}"));
+    }))
+}
+
+/// 0x2a1d9e4, one record: while its timer runs, slower than its speed, the angular momentum past its limits about the COM's
+/// x and z axes is opposed at the pelvis, not proportional: -e gain / clamp(60 dt, 1, 60). Returns the torque.
+pub fn spin_limit_step(r: &mut SpinRec, h: Vec3, a: Vec3, z: Vec3, speed: f32, dt: f32) -> Vec3 {
+    if r.left <= 0.0 {
+        return Vec3::ZERO;
+    }
+    r.left -= dt;
+    if speed >= r.speed {
+        return Vec3::ZERO;
+    }
+    let mut out = Vec3::ZERO;
+    let div = (60.0 * dt).clamp(1.0, 60.0);
+    for (axis, lim, gain) in [(a, r.lim[0], r.gain[0]), (z, r.lim[1], r.gain[1])] {
+        let x = h.dot(axis);
+        if x.abs() > lim {
+            out -= axis * ((x - lim * x.signum()) * gain / div);
+        }
+    }
+    out
+}
+
+/// setCharacterCollisions (0x2a4d0bc): held; `collisions` in the contact pass reads it.
+fn collisions(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let r = CollRec {
+        on: true, spin: p.f("spin", 0.0)?, max_speed: p.f("maxVelocity", 8.0)?, foot_slip: p.b("footSlip", false)?, scale: [p.f("gsfricscale1", 8.0)?, p.f("gsfricscale2", 0.2)?],
+        cap: p.f("?b11746eb", -0.2)?, spine: p.b("applyToSpine", false)?, thighs: p.b("applyToThighs", false)?, clavicles: p.b("applyToClavicles", false)?, upper: p.b("applyToUpperArms", false)?, all: p.b("applyToAll", false)?,
+    };
+    let _ = p.s("vehicleflags", "");
+    Ok(once(move |c| {
+        c.ch.core.cfg.coll = r;
+        trace(|| format!("setCharacterCollisions: {r:?}"));
+    }))
+}
+
+/// shotNewBullet (0x2a546c8): a new bullet record for the behaviours asked (shot's 0x2ad4a10, duck's 0x2ad2bc8), without a
+/// new impulse: the point from the message, in the part's space if it says so, else the part's centre.
+fn new_bullet(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let part = crate::extras_ysk_rdr2::rp(p.i("bodyPart", 0)?.max(0) as usize);
+    let local = p.b("localHitPointInfo", false)?;
+    let at = p.get("hitPoint").is_some().then(|| p.v("hitPoint", Vec3::ZERO)).transpose()?;
+    let n = p.v("normal", Vec3::Z)?;
+    let (shot, duck, third) = (p.b("?06c06365", false)?, p.b("?4d7dfd89", false)?, p.b("?2f471f82", false)?);
+    Ok(once(move |c| {
+        let k = part.min(c.b.frames.len().saturating_sub(1));
+        let f = c.b.frames[k];
+        let point = match (at, local) {
+            (Some(q), true) => f.translation + f.rotation * q,
+            (Some(q), false) => q,
+            (None, _) => f.translation,
+        };
+        let _ = n;
+        if shot || duck || third {
+            c.ch.core.bullet_new = Some((k, point, Vec3::ZERO));
+            c.out.shot_bullet = shot.then_some((k, point));
+        }
+        trace(|| format!("shotNewBullet: part {k} at {point}, shot {shot} duck {duck}"));
+    }))
+}
+
+/// ?e35a5d1a's handler returns at once on a biped: its records are the quadruped legs' (`rdr2_quadruped.md` 15.2).
+fn limb_limit(_p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    Ok(once(move |_| trace(|| "?e35a5d1a: nothing on a biped, as the code".to_string())))
+}
 fn soft_limit(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     let on = p.b("on", true)?;
     let fresh = p.b("fresh", false)?;

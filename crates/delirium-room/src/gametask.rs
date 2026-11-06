@@ -365,14 +365,15 @@ fn shot_block(hash: u32) -> bool {
 
 /// The core messages: an extra here, so each carries start=true, and the game's start in on and fresh.
 fn core_message(hash: u32) -> bool {
-    ["configuresoftlimit", "setfrictionscale", "setmusclestiffness", "setcharacterstrength", "configurebullets", "configurebulletsextra", "setopposegravity", "setcharacterunderwater"].iter().any(|n| joaat(n) == hash)
+    ["configuresoftlimit", "setfrictionscale", "setmusclestiffness", "setcharacterstrength", "configurebullets", "configurebulletsextra", "setopposegravity", "setcharacterunderwater",
+     "configurelimits", "configureconstraints", "softkey", "configureselfavoidance", "shotnewbullet", "setcharactercollisions", "setcharacterdamping"].iter().any(|n| joaat(n) == hash) || hash == 0xb7960dec || hash == 0xe35a5d1a
 }
 
 /// The port's own message for the game's. The same name by hash, or one of the port's own names for it.
 pub fn port_message(hash: u32) -> Option<&'static Message> {
     let alias = [("sit", "rdr2Sit"), ("configurebolas", "rdr2Bolas"), ("configureshotinjuredleg", "shotInjuredLeg"), ("configureshotinjuredarm", "shotInjuredArm"),
                  ("shotconfigurearms", "shot"), ("shotshockspin", "shot"), ("shotheadlook", "shot"), ("configurebulletsextra", "configureBullets"),];
-    let name = alias.iter().find(|a| joaat(a.0) == hash).map(|a| a.1);
+    let name = alias.iter().find(|a| joaat(a.0) == hash).map(|a| a.1).or(match hash { 0xb7960dec => Some("spinLimit"), 0xe35a5d1a => Some("quadLimbLimit"), _ => None });
     let all = || delirium::msg::MESSAGES.iter().chain(delirium::extras::messages());
     match name {
         Some(n) => all().find(|m| m.name == n),
@@ -415,7 +416,8 @@ pub fn line(m: &SentMessage, port: &Message) -> (String, Vec<String>) {
         if ["snap", "shotinguts", "shotfrombehind", "shotspin", "falltoknees"].iter().any(|n| joaat(n) == p.hash) && m.hash != joaat("shot") {
             continue;
         }
-        let Some(prm) = port.params.iter().find(|x| joaat(x.name) == wanted) else {
+        let by_hash = format!("?{:08x}", p.hash);
+        let Some(prm) = port.params.iter().find(|x| joaat(x.name) == wanted || x.name == by_hash) else {
             left.push(format!("{} (no such parameter)", p.label));
             continue;
         };

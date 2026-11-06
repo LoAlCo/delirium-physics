@@ -835,6 +835,8 @@ fn world(m: &M34, v: Vec3) -> Vec3 {
 }
 
 struct LegIk {
+    /// RDR2's self avoidance: what it asks, the spine's top, the pelvis, the top's axis negated
+    avoid: Option<(crate::extras_core_rdr2::SelfAvoid, Vec3, Vec3, Vec3)>,
     target: Vec3,
     lead: f32,
     yaw: f32,
@@ -874,7 +876,13 @@ pub(crate) fn limb_ik_w(b: &Body, ch: &mut Character, j3: usize, j1: usize, root
     (hip.desired, hip.strength, hip.damping) = (ch.eff[j3].desired, ch.eff[j3].strength, ch.eff[j3].damping);
     (knee.desired, knee.strength, knee.damping) = (ch.eff[j1].desired[0], ch.eff[j1].strength, ch.eff[j1].damping);
     let (reach, lift) = swing.unwrap_or((0.0, 0.0));
-    let mut c = LegIk { target, lead, yaw, side, bend, w, reach, lift, swing: swing.is_some(), free };
+    let avoid = if ch.rdr2 && ch.core.cfg.self_avoid.on && crate::nmrs::SHOULDER().contains(&j3) {
+        let top = b.part(crate::nmrs::SPINE().last().map_or(0, |j| j + 1));
+        Some((ch.core.cfg.self_avoid, top.m.d, b.part(0).m.d, -top.m.b))
+    } else {
+        None
+    };
+    let mut c = LegIk { target, lead, yaw, side, bend, w, reach, lift, swing: swing.is_some(), free, avoid };
     leg_ik(&mut c, &b.limb(j3, j1), &mut knee, &mut hip, &b.part(end), &b.part(root), vel);
     ch.eff[j3].desired = hip.desired;
     ch.eff[j1].desired[0] = knee.desired;
@@ -883,6 +891,18 @@ pub(crate) fn limb_ik_w(b: &Body, ch: &mut Character, j3: usize, j1: usize, root
 fn leg_ik(c: &mut LegIk, limb: &M34, knee: &mut Eff1, hip: &mut Eff3, foot: &Part, pelvis: &Part, vel: Vec3) {
     let mut f25 = 0.0;
     let mut x = if c.lead > 0.0 { lead(c, hip, pelvis, vel) } else { c.target };
+    // RDR2's arms with configureSelfAvoidance (flag 8, 0x2a4b520 in 0x2a3f0c0)
+    if let Some((r, a, b, n)) = c.avoid {
+        let from = if r.drag { c.target } else { x };
+        let (t, twist) = crate::extras_core_rdr2::self_avoid_target(&r, a, b, n, from, foot.m.d, hip.m.d, knee.child.d);
+        if (t - from).length_squared() > 1e-8 {
+            crate::extras_core_rdr2::trace_first("self avoidance moved an arm's target");
+        }
+        x = t;
+        if let Some(y) = twist {
+            c.yaw = y;
+        }
+    }
     if c.swing {
         let d = x - foot.m.d;
         let m = slen(d, b"zxy").min(hip.damping / hip.strength * c.reach) + delirium_data::kv!(72);
@@ -1070,7 +1090,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             Some(r) => pv.yaw[i].clamp(r.leg_twist.0, r.leg_twist.1) * (1.0 - crate::nmdbm_rdr2::TURN_ANKLE[!planted as usize]),
             None => pv.yaw[i],
         };
-        let mut c = LegIk { target: target[i], lead: 0.0, yaw, side: if i == 0 { 1.0 } else { -1.0 }, bend: -1.0,
+        let mut c = LegIk { avoid: None, target: target[i], lead: 0.0, yaw, side: if i == 0 { 1.0 } else { -1.0 }, bend: -1.0,
                             w: 1.0, reach: 0.0, lift: 0.0, swing: !planted, free: false };
         if !planted {
             // RDR2 (rdr2_balancer2.md §7.2) lifts each swing foot by its own velocity; GTA IV reads the left foot's for both
@@ -1926,6 +1946,20 @@ impl Dbm {
     }
 
     pub fn apply(&self, s: &Snap, ch: &mut Character) {
+        // RDR2 (the tail of 0x2aba1cc): the ankles' limit half-ranges this tick. On a slope, moving back or slow, lean1 at least
+        // 1; starting a crouch 1.4 [P: without the depth test]
+        if let Some(r) = self.p.rdr2.as_ref() {
+            let up = self.p.up;
+            let (hv, hc) = (s.vel - up * up.vd(s.vel), s.m.c - up * up.vd(s.m.c));
+            let raise = if r.on_slope && (hv.vd(hc) > 0.0 || s.vel.length() < r.p.legs_apart_restep.max(0.7)) { 1.0 } else { 0.0 };
+            let raise = if r.crouching.is_some() { 1.4f32.max(raise) } else { raise };
+            if raise > 0.0 {
+                for i in 0..2 {
+                    ch.lim_raise((*ANKLE())[i], [raise, 0.0, 0.0]);
+                }
+                crate::extras_core_rdr2::trace_first("balancer: the ankles' limits raised");
+            }
+        }
         for i in 0..2 {
             let leg = &s.legs[i];
             ch.eff[(*HIP())[i]].desired = leg.hip.desired;

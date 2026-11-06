@@ -1825,6 +1825,26 @@ impl Ragdoll {
         self.pins[k] = Some(Transform { translation: to.translation - self.o, ..to });
     }
 
+    /// RDR2 core: a part set outright, as 0x2a1b1a4 sets it: pose if given, velocity and turn.
+    pub fn key_part(&mut self, k: usize, to: Option<Transform>, v: Vec3, w: Vec3) {
+        let o = self.o;
+        let Some(b) = self.bodies.get_mut(k) else { return };
+        if let Some(t) = to {
+            b.x = t.translation - o;
+            b.set_q(t.rotation);
+        }
+        (b.v, b.w) = (v, w);
+        self.wake();
+    }
+
+    /// RDR2 core: a part's velocity and turn changed outright.
+    pub fn key_vel(&mut self, k: usize, dv: Vec3, dw: Vec3) {
+        let Some(b) = self.bodies.get_mut(k) else { return };
+        b.v += dv;
+        b.w += dw;
+        self.wake();
+    }
+
     pub fn constrain(&mut self, k: usize, at: Option<Vec3>, turn: Option<Quat>) {
         self.cons[k] = (at, turn);
         if at.is_some() || turn.is_some() {

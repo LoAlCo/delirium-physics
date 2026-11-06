@@ -623,6 +623,22 @@ pub struct CoreState {
     /// what fall-to-knees sets in catchFall (+0xcb kneel, +0xcc, +0xcd arm poses) and rollDownStairs (+0xf0..+0xf7)
     pub cf_knee: [bool; 3],
     pub rds_knee: Option<RdsKnee>,
+    /// the joints' runtime limits (`JointLim`)
+    pub lim: [JointLim; 32],
+}
+
+/// RDR2 core: one joint's runtime limits. A 3-DOF joint's are half-ranges (lean1, lean2, twist); a hinge's its ends (low,
+/// high, unused). `base` is +0x110.. (hinge +0x104..): the rig's, or what configureConstraints committed. `work` is +0x11c..
+/// (hinge +0x10c..): what this tick asks; the drive puts it back to `base` when it has run (slot +0x100). `live` is what the
+/// Rage joint has: slot +0x108 takes it to `work` each step, at once when that widens it, at a rate when it narrows.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct JointLim {
+    /// the rig's own
+    pub base0: [f32; 3],
+    pub base: [f32; 3],
+    pub work: [f32; 3],
+    pub live: [f32; 3],
+    pub set: bool,
 }
 
 /// Fall-to-knees' overlay on rollDownStairs (its +0xf4, +0xf0, +0xf5, +0xf6, +0xf7).
@@ -645,7 +661,7 @@ impl CoreState {
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
+        CoreState { lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 
@@ -661,9 +677,9 @@ pub mod rdr2 {
     pub const LOOSE_MIN: f32 = 0.1;
 }
 
-fn targets_rdr2(j: &JointDef, e: &Effector) -> [f32; 3] {
+fn targets_rdr2(j: &JointDef, e: &Effector, wide: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|k| {
-        let (mid, half) = ((j.limits[k].0 + j.limits[k].1) * 0.5, (j.limits[k].1 - j.limits[k].0) * 0.5);
+        let (mid, half) = ((j.limits[k].0 + j.limits[k].1) * 0.5, (j.limits[k].1 - j.limits[k].0) * 0.5 + wide[k]);
         let d = if j.flip[k] { -e.aim(k) } else { e.aim(k) };
         d.clamp(mid - rdr2::AXIS_CLAMP * half, mid + rdr2::AXIS_CLAMP * half) - mid
     })
@@ -825,10 +841,199 @@ impl Character {
 
     pub fn limits(&self, j: usize) -> [f32; 6] {
         let jd = &self.joints[j];
-        let l = loose(j, jd.limits);
+        let l = self.lim_rage(j);
         let f = |k: usize| if jd.flip[k] { (-l[k].1, -l[k].0) } else { l[k] };
         let ((a, b), (c, d), (e, g)) = (f(0), f(1), f(2));
         [a, b, c, d, e, g]
+    }
+
+    /// RDR2 core: the joint's limits as the rig has them, plus what the runtime table has them wider by.
+    fn lim_rage(&self, j: usize) -> [(f32, f32); 3] {
+        let l = loose(j, self.joints[j].limits);
+        let t = &self.core.lim[j];
+        if !self.rdr2 || !t.set {
+            return l;
+        }
+        if self.joints[j].three {
+            std::array::from_fn(|k| (l[k].0 - (t.live[k] - t.base0[k]), l[k].1 + (t.live[k] - t.base0[k])))
+        } else {
+            [(l[0].0 + (t.live[0] - t.base0[0]), l[0].1 + (t.live[1] - t.base0[1])), l[1], l[2]]
+        }
+    }
+
+    /// RDR2 core: how much wider than the rig each half-range is now (3-DOF only).
+    fn lim_wider(&self, j: usize) -> [f32; 3] {
+        let t = &self.core.lim[j];
+        if t.set { [t.live[0] - t.base0[0], t.live[1] - t.base0[1], t.live[2] - t.base0[2]] } else { [0.0; 3] }
+    }
+
+    /// RDR2 core: fill the runtime table from the rig (0x2a21770, 0x2a217ec with the rig's own limits).
+    pub fn lim_init(&mut self) {
+        for j in 0..self.joints.len().min(32) {
+            if !self.core.lim[j].set {
+                let (l, three) = (loose(j, self.joints[j].limits), self.joints[j].three);
+                let v = if three { std::array::from_fn(|k| (l[k].1 - l[k].0) * 0.5) } else { [l[0].0, l[0].1, 0.0] };
+                self.core.lim[j] = JointLim { base0: v, base: v, work: v, live: v, set: true };
+            }
+        }
+    }
+
+    /// 0x2a4eaa0, 0x2a4e990, 0x2a4e9a4: this tick's half-ranges at least these (3-DOF).
+    pub fn lim_raise(&mut self, j: usize, f: [f32; 3]) {
+        self.lim_init();
+        let t = &mut self.core.lim[j];
+        for k in 0..3 {
+            t.work[k] = t.work[k].max(f[k]);
+        }
+    }
+
+    /// 0x2a4ea78: this tick's hinge ends at least these wide.
+    pub fn lim_raise_hinge(&mut self, j: usize, lo: f32, hi: f32) {
+        self.lim_init();
+        let t = &mut self.core.lim[j];
+        (t.work[0], t.work[1]) = (t.work[0].min(lo), t.work[1].max(hi));
+    }
+
+    /// A behaviour's floor: on a 3-DOF joint the half-ranges; on a hinge its larger end at least the first (the knee's
+    /// minimum, 0x2a4ea78).
+    pub fn lim_floor(&mut self, j: usize, f: [f32; 3]) {
+        if j >= self.joints.len() {
+            return;
+        }
+        if self.joints[j].three {
+            self.lim_raise(j, f);
+        } else {
+            let l = loose(j, self.joints[j].limits)[0];
+            if l.0.abs() > l.1.abs() { self.lim_raise_hinge(j, -f[0], l.1) } else { self.lim_raise_hinge(j, l.0, f[0]) }
+        }
+    }
+
+    /// Slot +0xf8: wide open (a 3-DOF half-range 3.1316, a hinge's ends +-3.0416).
+    pub fn lim_open(&mut self, j: usize) {
+        if self.joints[j].three {
+            self.lim_raise(j, [3.131593; 3]);
+        } else {
+            self.lim_raise_hinge(j, -3.041593, 3.041593);
+        }
+    }
+
+    /// Slot +0x100: what this tick asked is dropped, back to the base.
+    pub fn lim_to_base(&mut self, j: usize) {
+        self.lim_init();
+        let t = &mut self.core.lim[j];
+        t.work = t.base;
+    }
+
+    /// Slot +0x110, not at once: the limits take in these angles (the joint's desired or actual, effector space) plus a
+    /// margin. A 3-DOF joint's leans go by the ellipse: past its edge by a factor r, at a share t of the way round from
+    /// lean1 to lean2, each half-range grows by r on its own side of the middle and by a share of r - 1 on the other's.
+    pub fn lim_around(&mut self, j: usize, a: [f32; 3], margin: f32) {
+        self.lim_init();
+        if self.joints[j].three {
+            let l = self.limits(j);
+            let x: [f32; 3] = std::array::from_fn(|k| (a[k] - (l[2 * k] + l[2 * k + 1]) * 0.5).abs() + margin);
+            let live = self.core.lim[j].live;
+            let (mut h1, mut h2, h3) = (live[0], live[1], live[2].max(x[2]));
+            let u = x[0] / h1;
+            let r = (x[1] / h2).hypot(u);
+            if r > 1.0 {
+                let t = (u / r).acos() * 0.63662;
+                let over = r - 1.0;
+                h1 = if t <= 0.5 { h1 + 2.0 * over * h1 * t } else { r * h1 };
+                h2 = if t >= 0.5 { h2 + 2.0 * over * h2 * (1.0 - t) } else { r * h2 };
+            }
+            self.lim_raise(j, [h1, h2, h3]);
+        } else {
+            let x = a[0].clamp(-std::f32::consts::PI, std::f32::consts::PI);
+            self.lim_raise_hinge(j, x - margin, x + margin);
+        }
+    }
+
+    /// Slot +0xf0 with 0 (configureConstraints): the base takes in what this tick asks, for good.
+    pub fn lim_commit(&mut self, j: usize) {
+        self.lim_init();
+        let (b0, three) = (self.core.lim[j].base0, self.joints[j].three);
+        let t = &mut self.core.lim[j];
+        if three {
+            for k in 0..3 {
+                t.base[k] = t.work[k].max(b0[k]);
+            }
+        } else {
+            (t.base[0], t.base[1]) = (t.work[0].min(b0[0]), t.work[1].max(b0[1]));
+        }
+    }
+
+    /// Slot +0x108, once a step: the Rage joint's limits go to what this tick asked, at once when that widens them, at
+    /// `rate(j)` per second when it narrows. A hinge changes only if the new ends make sense (low under high, inside a turn).
+    pub fn lim_step(&mut self, dt: f32, rate: impl Fn(usize) -> f32) {
+        self.lim_init();
+        const MOST: f32 = 3.140593;
+        for j in 0..self.joints.len().min(32) {
+            let (three, r) = (self.joints[j].three, rate(j));
+            let t = &mut self.core.lim[j];
+            let to = |now: f32, want: f32, snap: bool| if snap || want == now { want } else if want < now { (now - r * dt).max(want) } else { (now + r * dt).min(want) };
+            if t.live != t.work && t.work != t.base {
+                crate::extras_core_rdr2::trace(|| format!("limit table: joint {j} from {:.3?} to {:.3?}, rig {:.3?}", t.live, t.work, t.base0));
+            }
+            if three {
+                for k in 0..3 {
+                    t.live[k] = to(t.live[k], t.work[k], t.live[k] < t.work[k]).clamp(0.0, MOST);
+                }
+            } else {
+                let (lo, hi) = (to(t.live[0], t.work[0], t.work[0] < t.live[0]), to(t.live[1], t.work[1], t.work[1] > t.live[1]));
+                if lo <= hi && lo.abs() <= std::f32::consts::PI && hi.abs() <= std::f32::consts::PI {
+                    (t.live[0], t.live[1]) = (lo, hi);
+                }
+            }
+        }
+    }
+
+    /// The knee and foot tweak at the head of the core's step (0x2a45344, ctx+0x1068): with a part but the lower legs and
+    /// hands down on a level surface the feet's friction is 1, and a knee bent past 1.5 lets its foot go (ctx+0x1064). Without,
+    /// with the leg down, one knee (his standing choice ctx+0x1069, or the bent one) may fold to ctx+0x105c. Returns the
+    /// joint whose limit narrows at ctx+0x1060.
+    pub fn knee_tweak(&mut self, hit: &[Option<Vec3>], touch: &[bool], actual: [f32; 2]) -> usize {
+        let first = self.agent & 1 == 1;
+        let knees = *KNEE();
+        let slow = knees[if first { 0 } else { 1 }];
+        let f = self.core.cfg.fall;
+        if f.knee_tweak == 0.0 {
+            return slow;
+        }
+        const OUT: u32 = 0xd80f0;
+        let up = self.up;
+        let rp = crate::extras_ysk_rdr2::rp;
+        // RDR2's part numbers, ours under them
+        let down = (0..21).filter(|r| OUT >> r & 1 == 0).any(|r| hit.get(rp(r)).copied().flatten().is_some_and(|n| n.dot(up) > 0.77));
+        let (bent0, bent1) = (actual[0] < -1.5, actual[1] < -1.5);
+        let bent = bent0 || bent1;
+        let mut pick = first;
+        if bent && ((!bent0 && first) || (!bent1 && !first)) {
+            pick = !first;
+        }
+        if down {
+            let cfg = &mut self.core.cfg;
+            (cfg.fric[rp(5)], cfg.fric[rp(7)]) = (1.0, 1.0);
+            if bent {
+                cfg.fric[rp(if pick { 5 } else { 7 })] = f.foot_friction;
+                cfg.fric_used = true;
+                crate::extras_core_rdr2::trace_first("knee tweak: a bent knee's foot lets go");
+            }
+        } else {
+            let mask: u32 = if pick { 0x32 } else { 0xc4 };
+            if (0..21).filter(|r| mask >> r & 1 != 0).any(|r| touch.get(rp(r)).copied().unwrap_or(false)) {
+                self.lim_raise_hinge(knees[if pick { 0 } else { 1 }], -f.knee_limit, 0.0);
+                crate::extras_core_rdr2::trace_first("knee tweak: the knee may fold");
+            }
+        }
+        slow
+    }
+
+    /// The end of the drive (slot +0x100 at the end of 0x2a45c20, 0x2a45fd4): every joint's asked limits back to its base.
+    pub fn lim_settle(&mut self) {
+        for t in self.core.lim.iter_mut().filter(|t| t.set) {
+            t.work = t.base;
+        }
     }
 
     pub fn set_relative(&mut self, j: usize, k: usize, x: f32) {
@@ -877,7 +1082,7 @@ impl Character {
             let blend = (delirium_data::kv!(35) * dt).max(x / (x + 1.0)).clamp(0.0, 1.0);
             let blend = if self.rdr2 { blend.min(rdr2::SOFTNESS_MAX) } else { blend };
             let target = match (j.three, self.rdr2) {
-                (true, true) => targets_rdr2(j, e),
+                (true, true) => targets_rdr2(j, e, self.lim_wider(i)),
                 (true, false) => targets(j, e),
                 _ => [e.aim(0), 0.0, 0.0],
             };
@@ -886,7 +1091,7 @@ impl Character {
                 let mid = if j.three { (j.limits[k].0 + j.limits[k].1) * 0.5 } else { 0.0 };
                 SoftLimit { angle: if f { -l.angle } else { l.angle } - mid, dir: if f { -l.dir } else { l.dir }, ..l }
             });
-            out[i + 1] = Rigid { frame: j.rage_parent, child: j.rage_child, limits: loose(i, j.limits), max: j.max_torque.map(|m| m * k * most), blend, hinge: !j.three, desired: e.aim(0), jc: j.rigid,
+            out[i + 1] = Rigid { frame: j.rage_parent, child: j.rage_child, limits: self.lim_rage(i), max: j.max_torque.map(|m| m * k * most), blend, hinge: !j.three, desired: e.aim(0), jc: j.rigid,
                                 target, gain: [strength, damping], soft,
                                 cap: self.rdr2.then_some(if j.three { rdr2::THREE_CAP } else { rdr2::HINGE_CAP }) };
         }

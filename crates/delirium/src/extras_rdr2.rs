@@ -149,6 +149,19 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "flatStiffness", kind: Kind::Float, used: true, doc: "the turn's strength, N m per rad (12; 0: off)" },
     ] },
     Message { name: "setFallingReaction", params: &[
+        Param { name: "stopManual", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: a floor on the slope factor, over 0 turning the slope block on (0)" },
+        Param { name: "stopOnSlopes", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the time after which slopes count (10000)" },
+        Param { name: "blendkneerate", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the knees' rate (10000)" },
+        Param { name: "antiPropClav", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: falling backward, no clavicle (false)" },
+        Param { name: "antiPropWeak", kind: Kind::Float, used: false, doc: "RDR2 core: +0xc2: no reader in the game's code" },
+        Param { name: "riflePose", kind: Kind::Float, used: false, doc: "RDR2 core: +0xc0: an arm pose while the arm's weapon state is 2; no weapon states here" },
+        Param { name: "?7dad7aaf", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the arm's swing circle (0)" },
+        Param { name: "?dcd030d5", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x1068: the knee and foot tweak (0)" },
+        Param { name: "zmpgroundcollision", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x105c: how far the tweaked knee may fold (3)" },
+        Param { name: "?7579162f", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x1060: its limit comes back at this rate (1)" },
+        Param { name: "?4fe4ab89", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x1064: a bent knee's foot's friction, lying down (0)" },
+        Param { name: "?5be84846", kind: Kind::Float, used: false, doc: "RDR2 core: +0x88: hands and knees' hand friction window; the port's hands and knees is setFallingReaction's own" },
+        Param { name: "?c3e9ccc1", kind: Kind::Float, used: false, doc: "RDR2 core: +0xa8: hands and knees' time window; the same" },
         Param { name: "comVelRDSThresh", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
         Param { name: "inhibitRollingTime", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
         Param { name: "changeFrictionTime", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
@@ -192,6 +205,7 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "his stiffness (10)" },
     ] },
     Message { name: "reachForWound", params: &[
+        Param { name: "enabled", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x164: no reach while false; fall to knees clears it (true)" },
         Param { name: "hitPoint", kind: Kind::Vec3, used: true, doc: "the wound, world (zero: in front of the part)" },
         Param { name: "hitPart", kind: Kind::Int, used: true, doc: "the part it is on, 0..20 (-1: the belly)" },
         Param { name: "bulletVel", kind: Kind::Vec3, used: true, doc: "the bullet's velocity (RDR2 core: from behind, he reaches for where it came out)" },
@@ -223,6 +237,7 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "legStiffness", kind: Kind::Float, used: true, doc: "RDR2 core: his legs' stiffness bending for a leg wound on the ground (10)" },
     ] },
     Message { name: "shotFromBehind", params: &[
+        Param { name: "sfbForceBalancePeriod", kind: Kind::Float, used: true, doc: "RDR2 core: the balancer forced on for this long (0.3)" },
         Param { name: "sfbSpineAmount", kind: Kind::Float, used: true, doc: "how far the spine arches back, rad over the whole spine (0.5)" },
         Param { name: "sfbNeckAmount", kind: Kind::Float, used: true, doc: "how far the neck goes back, rad (0.3)" },
         Param { name: "sfbHipAmount", kind: Kind::Float, used: true, doc: "how far the hips push forward, rad (0.25)" },
@@ -245,6 +260,17 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "trunk stiffness (10)" },
     ] },
     Message { name: "shotInjuredLeg", params: &[
+        Param { name: "timeBeforeCollapseWoundLeg", kind: Kind::Float, used: true, doc: "RDR2 core: s after the hit before the injury acts (0.3)" },
+        Param { name: "legForceStep", kind: Kind::Bool, used: true, doc: "RDR2 core: the hurt foot steps at once (true)" },
+        Param { name: "limpBendRate", kind: Kind::Float, used: true, doc: "RDR2 core: hip pitch rate (0.5)" },
+        Param { name: "limpBendRateSpine", kind: Kind::Float, used: true, doc: "RDR2 core: spine rate (0.5)" },
+        Param { name: "limpStraightenMult", kind: Kind::Float, used: true, doc: "RDR2 core: the share while it swings (0.2)" },
+        Param { name: "limpStraightenRate", kind: Kind::Float, used: true, doc: "RDR2 core: (0.7)" },
+        Param { name: "limpStraightenRateSpine", kind: Kind::Float, used: true, doc: "RDR2 core: (0.7)" },
+        Param { name: "legInjuryLiftHipPitch", kind: Kind::Float, used: true, doc: "RDR2 core: the hip's pitch while lifting, at once (0)" },
+        Param { name: "legInjuryLiftSpineBend", kind: Kind::Float, used: true, doc: "RDR2 core: the spine while lifting (0.2)" },
+        Param { name: "?09ca61cc", kind: Kind::Float, used: true, doc: "RDR2 core: +0x1b4: s before the lift (0.3)" },
+        Param { name: "reunitedoffhand", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x208: the lift's pitch and spine only after the injury's (false)" },
         Param { name: "bodyPart", kind: Kind::Int, used: true, doc: "the part hit: 1..3 left leg, 4..6 right (-1: leftLeg says)" },
         Param { name: "leftLeg", kind: Kind::Bool, used: true, doc: "the left leg, when bodyPart doesn't say (true)" },
         Param { name: "legLiftTime", kind: Kind::Float, used: true, doc: "s the leg jerks up for (0: none)" },
@@ -332,6 +358,8 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "ftkAlwaysChangeFall", kind: Kind::Bool, used: true, doc: "RDR2 core: catchFall's kneel flag though the knees are uneven (false)" },
     ] },
     Message { name: "shotSpin", params: &[
+        Param { name: "shotSpinTorqueTol", kind: Kind::Float, used: true, doc: "RDR2 core: (0.2)" },
+        Param { name: "shotSpinTwistMom", kind: Kind::Float, used: true, doc: "RDR2 core: (100)" },
         Param { name: "spin", kind: Kind::Float, used: true, doc: "the hit's spin, m (none: from hitPoint and bulletDir: the lever arm about his centre across the bullet)" },
         Param { name: "hitPoint", kind: Kind::Vec3, used: true, doc: "where the bullet hit, world (zero)" },
         Param { name: "bulletDir", kind: Kind::Vec3, used: true, doc: "the bullet's direction (zero)" },
@@ -1970,13 +1998,14 @@ impl Extra for InGuts {
 pub struct InjuredLeg {
     side: usize, lift_time: f32, lift: f32, time: f32, injury: f32, hip_pitch: f32, spine_bend: f32, limp: f32,
     lean: f32, sag: f32, blend: f32, stiffness: f32, t: f32, lift_b: Option<Bends>, limp_b: Option<Bends>,
-    rdr2: LegRdr2, spine: f32, forced: f32, left: f32, started: bool,
+    rdr2: LegRdr2, spine: f32, forced: f32, left: f32, lift_left: f32, started: bool,
 }
 
 /// RDR2's injured-leg parameters (its defaults: the hurt foot steps at once; after 0.3 s, for 0.4 s, the leg 0.3
 /// loose, the spine bending to 0.1 at 0.5 rad/s; no limp).
 #[derive(Clone, Copy)]
 struct LegRdr2 {
+    lift_pitch: f32, lift_spine: f32, lift_delay: f32, reunited: bool,
     force_step: bool, collapse: f32, bend_rate: f32, bend_rate_spine: f32, straighten: f32, straighten_rate: f32,
     straighten_rate_spine: f32,
 }
@@ -1993,12 +2022,13 @@ impl InjuredLeg {
             lean: p.f("legLean", 15.0)?, sag: p.f("legSag", 0.04)?.max(0.0), blend: p.f("legBlend", 0.5)?.max(0.05), stiffness: p.f("stiffness", 10.0)?,
             t: 0.0, lift_b: None, limp_b: None,
             rdr2: LegRdr2 {
+                lift_pitch: p.f("legInjuryLiftHipPitch", 0.0)?, lift_spine: p.f("legInjuryLiftSpineBend", 0.2)?, lift_delay: p.f("?09ca61cc", 0.3)?, reunited: p.b("reunitedoffhand", false)?,
                 force_step: p.b("legForceStep", true)?, collapse: p.f("timeBeforeCollapseWoundLeg", 0.3)?,
                 bend_rate: p.f("limpBendRate", 0.5)?, bend_rate_spine: p.f("limpBendRateSpine", 0.5)?,
                 straighten: p.f("limpStraightenMult", 0.2)?, straighten_rate: p.f("limpStraightenRate", 0.7)?,
                 straighten_rate_spine: p.f("limpStraightenRateSpine", 0.7)?,
             },
-            spine: 0.0, forced: 0.0, left: 0.0, started: false,
+            spine: 0.0, forced: 0.0, left: 0.0, lift_left: 0.0, started: false,
         })
     }
 }
@@ -2086,6 +2116,7 @@ impl InjuredLeg {
         if !self.started {
             self.started = true;
             self.left = self.time;
+            self.lift_left = self.lift_time;
             if r.force_step {
                 c.out.dbm_force_step = Some(Some(s));
                 self.forced = 0.2;
@@ -2100,6 +2131,7 @@ impl InjuredLeg {
         }
         let leg = [HIP()[s], KNEE()[s], ANKLE()[s]];
         let injured = self.t > r.collapse && self.left > 0.0 && self.time > 0.0;
+        let lifting = self.t > r.lift_delay && self.lift_left > 0.0 && self.lift_time > 0.0;
         c.out.dbm_limp = Some((s, 0.0));
         if injured {
             let (mut loose, mut pitch, mut prate, mut bend, mut brate) =
@@ -2117,12 +2149,31 @@ impl InjuredLeg {
                 c.ch.eff[j].injury = loose;
             }
             c.out.dbm_crouch.push(Crouch::Hip(7, -pitch.clamp(-2.0, 2.0), prate));
+            // lifting, and not reunitedOffhand: the lift's pitch at once and the spine fast (item 5 d)
+            if lifting && !r.reunited {
+                c.out.dbm_crouch.push(Crouch::Hip(7, -r.lift_pitch.clamp(-2.0, 2.0), 100000.0));
+                (bend, brate) = (r.lift_spine, 1000.0);
+                crate::extras_core_rdr2::trace_first("injured leg: lifting");
+            }
             self.spine += (bend - self.spine).clamp(-brate * dt, brate * dt);
             for &j in SPINE().iter() {
                 c.ch.eff[j].desired[0] = self.spine;
             }
             self.left -= dt;
-        } else {
+        }
+        if lifting {
+            if r.reunited {
+                c.out.dbm_crouch.push(Crouch::Hip(7, -r.lift_pitch.clamp(-2.0, 2.0), 100000.0));
+                for &j in SPINE().iter() {
+                    c.ch.eff[j].desired[0] = r.lift_spine;
+                }
+            }
+            for j in leg {
+                c.ch.eff[j].injury = self.lift;
+            }
+            self.lift_left -= dt;
+        }
+        if !injured && !lifting {
             c.out.dbm_crouch.push(Crouch::ReleaseHip(f32::INFINITY));
             for j in leg {
                 c.ch.eff[j].injury = 0.0;
@@ -2310,6 +2361,7 @@ fn arm_solve(c: &Ctx, l: crate::nmshot::Limb, target: Vec3, start: [f32; 6]) -> 
 /// bendTimeUp and goes over bendTimeDown. The hand is the far one for an arm wound, the same side's for a leg, the
 /// nearer one for the trunk.
 pub struct ReachForWound {
+    enabled: bool,
     point: Vec3, part: i32, bullet: Vec3, wait: f32, hold: f32, one_hand: bool, one_given: bool, thigh: bool, lower_leg: bool, arm_stiffness: f32,
     spine_bend: f32, hip_bend: f32, knee_bend: f32, twist: f32, up: f32, down: f32, stiffness: f32,
     t: f32, wound: Option<OnPart>, hands: [bool; 2], sign: [f32; 2], bends: Option<Bends>, arm: [Option<[f32; 6]>; 2],
@@ -2330,6 +2382,7 @@ impl ReachForWound {
         let arm_stiffness = p.f("armStiffness", 10.0)?;
         Ok(ReachForWound {
             point: p.v("hitPoint", Vec3::ZERO)?, part: p.i("hitPart", -1)?, bullet: p.v("bulletVel", Vec3::ZERO)?,
+            enabled: p.b("enabled", true)?,
             wait: std::env::var("NMX_RFW").ok().and_then(|v| v.split(' ').next().and_then(|x| x.parse().ok())).map_or(p.f("timeBeforeReachForWound", 0.2)?.max(0.0), |w| { let _ = p.f("timeBeforeReachForWound", 0.2); w }), hold: p.f("grabHoldTime", 2.0)?.max(0.0),
             one_given: p.get("reachWithOneHand").is_some(), one_hand: p.b("reachWithOneHand", true)?, thigh: p.b("allowInjuredThighReach", true)?,
             lower_leg: p.b("allowInjuredLowerLegReach", false)?, arm_stiffness,
@@ -2603,6 +2656,9 @@ impl ReachForWound {
     /// legs themselves. On the ground it reaches only as reachFalling / reachOnFloor allow, and then has catchFall and
     /// bodyRollUp leave that arm alone.
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        if !self.enabled {
+            return;
+        }
         let mut s = self.r2.take().unwrap_or_else(|| {
             let len = |a: usize, b: usize| (c.b.joint_pos(a) - c.b.joint_pos(b)).length();
             Box::new(Rfw2 { hits: vec![(self.point, self.part, self.bullet)], toggle: true, len: len(HIP()[0], KNEE()[0]) + len(KNEE()[0], ANKLE()[0]),
@@ -3332,7 +3388,7 @@ impl Extra for FallingReaction {
         if c.ch.rdr2 && !self.read {
             self.read = true;
             // what catchFall reads of it (a start=true is its registered defaults, then these)
-            let mut fall = crate::extras_core_rdr2::FallCfg::default();
+            let mut fall = crate::extras_core_rdr2::FallCfg::message_defaults();
             for (n, v) in self.fall.drain(..) {
                 fall.set(n, v);
             }
@@ -6264,6 +6320,11 @@ impl Extra for BulletImpulse {
             self.recs.push(BulletRec { k, local, imp: imp_kept, left: t.period, wait: t.delay, t, air, one_leg, period: t.period, torque });
             c.ch.core.bullet = Some(imp);
             c.ch.core.bullet_new = Some((k, at.unwrap_or(f[k].translation), imp));
+            // 0x2a40518 at 0x2a4057a: the bullet's spin limiter is armed, if slow enough
+            let spin = &mut c.ch.core.cfg.spin;
+            if spin.time > 0.0 && c.vel.length() < spin.speed {
+                spin.left = spin.time;
+            }
         }
         let feet = (c.b.doll.collided(&[3]), c.b.doll.collided(&[6]));
         let on_feet = if feet.0 && feet.1 { 1.0 } else { 0.0 };
@@ -6301,6 +6362,10 @@ impl Extra for BulletImpulse {
             let at = f[r.k].translation + r.local.map_or(Vec3::ZERO, |l| f[r.k].rotation * l);
             // his feet this tick (0x2a197d8): both off the air factor, one off the one-leg factor; no balancer its own
             let factor = if on_feet > 0.0 { 1.0 } else if !feet.0 && !feet.1 { r.air } else { r.one_leg };
+            if !feet.0 && !feet.1 && r.t.air.is_some() {
+                let x = r.air;
+                crate::extras_core_rdr2::trace_once("bullet in the air", || format!("the air curve's factor {x}"));
+            }
             let factor = if upright || r.t.no_bal == 1.0 { factor } else { factor * r.t.no_bal };
             // the quality, the trunk's lean and his speed each take a share (0x2a472f0)
             let ramp = |x: f32, a: [f32; 3]| if a[1] <= x { a[2] } else if a[0] < x && a[1] - a[0] > 1.2e-7 { (a[1] - x) * (1.0 - a[2]) / (a[1] - a[0]) + a[2] } else { 1.0 };
