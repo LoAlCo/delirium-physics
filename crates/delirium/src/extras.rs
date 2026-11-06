@@ -451,18 +451,28 @@ impl<'b> P<'_, 'b> {
         Some(v)
     }
     pub fn f(&mut self, name: &str, d: f32) -> Result<f32, Error> {
+        #[cfg(feature = "param-audit")]
+        param_audit::note(name, format!("{d}"));
         self.get(name).map_or(Ok(d), Value::f)
     }
     pub fn b(&mut self, name: &str, d: bool) -> Result<bool, Error> {
+        #[cfg(feature = "param-audit")]
+        param_audit::note(name, format!("{d}"));
         self.get(name).map_or(Ok(d), Value::b)
     }
     pub fn s(&mut self, name: &str, d: &'static str) -> Result<String, Error> {
+        #[cfg(feature = "param-audit")]
+        param_audit::note(name, format!("{d:?}"));
         self.get(name).map_or(Ok(d.to_string()), |v| v.s().map(str::to_string))
     }
     pub fn v(&mut self, name: &str, d: bevy_math::Vec3) -> Result<bevy_math::Vec3, Error> {
+        #[cfg(feature = "param-audit")]
+        param_audit::note(name, format!("[{},{},{}]", d.x, d.y, d.z));
         self.get(name).map_or(Ok(d), Value::v)
     }
     pub fn i(&mut self, name: &str, d: i32) -> Result<i32, Error> {
+        #[cfg(feature = "param-audit")]
+        param_audit::note(name, format!("{d}"));
         self.get(name).map_or(Ok(d), Value::i)
     }
     fn done(&self) -> Result<(), Error> {
@@ -548,3 +558,61 @@ impl Extra for Electrocute {
     }
 }
 
+
+/// The parameters each message reads and their defaults, as they run:
+/// `cargo run --release -p delirium --features param-audit --example param_audit <out>` writes one JSON line per read.
+#[cfg(feature = "param-audit")]
+pub mod param_audit {
+    use super::*;
+    use std::cell::RefCell;
+    thread_local! { static READS: RefCell<Vec<(String, String)>> = const { RefCell::new(vec![]) }; }
+
+    pub fn note(name: &str, d: String) {
+        READS.with(|r| r.borrow_mut().push((name.to_string(), d)));
+    }
+
+    fn show(v: &Value) -> String {
+        match v {
+            Value::Float(x) => format!("{x}"),
+            Value::Int(i) => format!("{i}"),
+            Value::Bool(b) => format!("{b}"),
+            Value::Vec3(v) => format!("[{},{},{}]", v.x, v.y, v.z),
+            Value::Str(s) => format!("{s:?}"),
+        }
+    }
+
+    pub fn dump(path: &str) {
+        use std::io::Write;
+        let mut f = std::fs::File::create(path).unwrap();
+        let mut names: Vec<&'static str> = messages().map(|m| m.name).collect();
+        names.extend(["highFall", "fallOverWall"]);
+        for name in names {
+            if matches!(name, "injury" | "hardConstraint") {
+                continue;
+            }
+            READS.with(|r| r.borrow_mut().clear());
+            let mut p = P::empty();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = match name {
+                    "electrocute" => Some(Electrocute::new(&mut p).map(|e| Box::new(e) as Box<dyn Extra>)),
+                    _ => crate::extras_fall::build(name, &mut p).or_else(|| crate::extras_rdr2::build(name, &mut p))
+                        .or_else(|| crate::extras_ysk_rdr2::build(name, &mut p)).or_else(|| crate::extras_held::build(name, &mut p)),
+                };
+            }));
+            for (n, d) in READS.with(|r| r.borrow().clone()) {
+                writeln!(f, "{{\"msg\":\"{name}\",\"name\":\"{n}\",\"default\":{d},\"src\":\"extra\"}}").unwrap();
+            }
+        }
+        let mut st = crate::msg::State::default();
+        st.grab = crate::nmgr::GrabParams::rdr2();
+        st.pedal_legs = crate::nmpd::rdr2_message();
+        st.body_foetal = crate::nmbf::Foetal::rdr2();
+        for m in crate::msg::MESSAGES.iter() {
+            for prm in m.params {
+                if let Some(v) = crate::msg::get(&st, m.name, prm.name) {
+                    writeln!(f, "{{\"msg\":\"{}\",\"name\":\"{}\",\"default\":{},\"src\":\"msg\"}}", m.name, prm.name, show(&v)).unwrap();
+                }
+            }
+        }
+    }
+}

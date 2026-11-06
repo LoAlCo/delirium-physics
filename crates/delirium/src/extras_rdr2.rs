@@ -2254,7 +2254,7 @@ fn arm_solve(c: &Ctx, l: crate::nmshot::Limb, target: Vec3, start: [f32; 6]) -> 
 /// bendTimeUp and goes over bendTimeDown. The hand is the far one for an arm wound, the same side's for a leg, the
 /// nearer one for the trunk.
 pub struct ReachForWound {
-    point: Vec3, part: i32, bullet: Vec3, wait: f32, hold: f32, one_hand: bool, thigh: bool, lower_leg: bool, arm_stiffness: f32,
+    point: Vec3, part: i32, bullet: Vec3, wait: f32, hold: f32, one_hand: bool, one_given: bool, thigh: bool, lower_leg: bool, arm_stiffness: f32,
     spine_bend: f32, hip_bend: f32, knee_bend: f32, twist: f32, up: f32, down: f32, stiffness: f32,
     t: f32, wound: Option<OnPart>, hands: [bool; 2], sign: [f32; 2], bends: Option<Bends>, arm: [Option<[f32; 6]>; 2],
     rdr2: RfwRdr2, r2: Option<Box<Rfw2>>,
@@ -2275,7 +2275,7 @@ impl ReachForWound {
         Ok(ReachForWound {
             point: p.v("hitPoint", Vec3::ZERO)?, part: p.i("hitPart", -1)?, bullet: p.v("bulletVel", Vec3::ZERO)?,
             wait: p.f("timeBeforeReachForWound", 0.2)?.max(0.0), hold: p.f("grabHoldTime", 2.0)?.max(0.0),
-            one_hand: p.b("reachWithOneHand", true)?, thigh: p.b("allowInjuredThighReach", true)?,
+            one_given: p.get("reachWithOneHand").is_some(), one_hand: p.b("reachWithOneHand", true)?, thigh: p.b("allowInjuredThighReach", true)?,
             lower_leg: p.b("allowInjuredLowerLegReach", false)?, arm_stiffness,
             spine_bend: p.f("bend2spine", 0.7)?, hip_bend: p.f("bend2hip", 0.6)?, knee_bend: p.f("bend2leg", 0.6)?,
             twist: p.f("spineTwistMag", 0.2)?, up: p.f("bendTimeUp", 0.4)?.max(0.01), down: p.f("bendTimeDown", 0.5)?.max(0.01),
@@ -2611,7 +2611,8 @@ impl ReachForWound {
         if leg && !if matches!(part, 2 | 3 | 5 | 6) { self.lower_leg } else { self.thigh } {
             ok = [false; 2];
         }
-        if self.one_hand && ok == [true; 2] {
+        // (RDR2 registers 0: both hands, unless the message says)
+        if self.one_hand && (self.one_given || !c.ch.rdr2) && ok == [true; 2] {
             let left = if leg { part_side(part as i32) == Some(0) } else { (point - c.com).dot(side) > 0.0 };
             ok = [left, !left];
         }
@@ -3127,12 +3128,16 @@ impl Extra for WallCollision {
 /// stumble forwards).
 pub struct FallingReaction {
     on: bool, hold: f32, decay: f32, arm_k: f32, leg_k: f32, spine_k: f32, push: f32, head_up: bool,
+    /// the message gave these: on, decay, arm, leg, spine, head (the RDR2 core's defaults fill the rest, first tick)
+    given: [bool; 6], read: bool,
     t: f32, phase: u8, since: f32, ground: Option<f32>, arm: [Option<[f32; 6]>; 2], strength: f32,
 }
 
 impl FallingReaction {
     fn new(p: &mut P) -> Result<FallingReaction, Error> {
+        let given = ["handsAndKnees", "stoppedStrengthDecay", "minArmStiffness", "minLegStiffness", "minSpineStiffness", "hkHeadAvoid"].map(|n| p.get(n).is_some());
         Ok(FallingReaction {
+            given, read: false,
             on: p.b("handsAndKnees", true)?, hold: p.f("hkHoldTime", 1.5)?.max(0.0), decay: p.f("stoppedStrengthDecay", 1.0)?.max(0.01),
             arm_k: p.f("minArmStiffness", 14.0)?, leg_k: p.f("minLegStiffness", 12.0)?, spine_k: p.f("minSpineStiffness", 9.0)?,
             push: p.f("pushForward", 0.0)?, head_up: p.b("hkHeadAvoid", true)?,
@@ -3221,6 +3226,14 @@ impl FallingReaction {
 
 impl Extra for FallingReaction {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        // RDR2 core: setfallingreaction's registered defaults: no hands and knees unless asked
+        if c.ch.rdr2 && !self.read {
+            self.read = true;
+            let g = self.given;
+            (self.on, self.decay) = (g[0] && self.on, if g[1] { self.decay } else { 2.0 });
+            (self.arm_k, self.leg_k, self.spine_k) = (if g[2] { self.arm_k } else { 7.0 }, if g[3] { self.leg_k } else { 3.0 }, if g[4] { self.spine_k } else { 4.5 });
+            self.head_up = g[5] && self.head_up;
+        }
         if !self.on {
             return;
         }

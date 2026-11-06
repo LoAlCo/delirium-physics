@@ -9,6 +9,8 @@ publish.workspace = true
 bevy = ["dep:bevy_ecs"]
 # Portal mode: portals' holes in the world.
 portal = []
+# The parameter audit: what each message reads and its default (the param_audit example).
+param-audit = []
 
 [dependencies]
 delirium-data = { path = "../delirium-data" }
@@ -17,3 +19,7 @@ bevy_transform = { version = "=0.20.0", default-features = false, features = ["s
 bevy_tasks = { version = "=0.20.0", default-features = false, features = ["multi_threaded"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 bevy_ecs = { version = "=0.20.0", optional = true }
+
+[[example]]
+name = "param_audit"
+required-features = ["param-audit"]
