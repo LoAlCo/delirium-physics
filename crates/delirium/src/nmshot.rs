@@ -38,6 +38,11 @@ pub(crate) fn spine_joints() -> [usize; 6] {
     *SE()
 }
 
+/// The spine limb's parts, pelvis up.
+pub(crate) fn spine_parts() -> &'static [usize; 7] {
+    SP()
+}
+
 pub(crate) fn limb(i: usize) -> Limb {
     if i < 2 {
         let c = (*CLAVICLE())[i];
