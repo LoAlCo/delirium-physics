@@ -308,6 +308,12 @@ fn clamp_length(v: Vec3, lo: f32, hi: f32) -> Vec3 {
     v * (y as f32 * k)
 }
 
+/// `Snap::flags`: a foot's contact as of its last tick, left and right (RDR2's +0x550 bits 1 and 3).
+#[allow(non_snake_case)]
+fn LEFT_LAST() -> u8 { let k: u8 = delirium_data::kv!(1 int); k << k }
+#[allow(non_snake_case)]
+fn RIGHT_LAST() -> u8 { let k: u8 = delirium_data::kv!(1 int); k << 2 }
+
 fn support(pc: Vec3, l: &Part, r: &Part, w: f32, len: f32, up: Vec3) -> f32 {
     support_at(pc, &l.m, &r.m, w, len, up).0
 }
@@ -390,6 +396,7 @@ fn hip_room(hip: &Eff3, l1: f32, l2: f32, l3: f32, l4: f32) -> f32 {
 }
 
 fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
+    let mut give = None;
     // with the COM over his feet neither foot counts as farther, unless (RDR2) he is turning on the spot
     let inside = f.flags & delirium_data::kv!(1 int) != 0;
     let free = !inside || r.is_some_and(|r| r.turning);
@@ -407,18 +414,39 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
         }
         // RDR2's running anti-crossing (0x2ab32bc): the foot in the air gives way to the other when the planted one is too
         // far behind him along his way and the swing one ahead; the thresholds by whether he moves forward (bal+0x2f0, +0x2f4)
-        if r.running && f.stepping != 0 {
-            let d = horizontal(s.vel, r.up_now).normalize_or_zero();
-            let forward = s.vel.vd(horizontal(-s.m.c, r.up_now)) > 0.0;
+        // Measured from the pelvis, horizontally; moving back, along from the stepping foot's side to the other's if that
+        // has a part along his way. bal+0x338 turns it off.
+        if r.running && !r.falling && f.stepping != 0 {
+            let up = r.up_now;
+            let forward = s.vel.vd(horizontal(-s.m.c, up)) > 0.0;
+            let mut d = s.vel;
+            if !forward {
+                let e = horizontal(s.legs[0].foot.m.d - s.legs[1].foot.m.d, up) * if f.stepping == 2 { -1.0 } else { 1.0 };
+                if s.vel.dot(e) > 0.0 {
+                    d = e;
+                }
+            }
+            let d = d.normalize_or_zero();
             let (back, ahead) = if forward { (r.p.run_back_fwd, r.p.run_ahead_fwd) } else { (r.p.run_back, r.p.run_ahead) };
-            let (fl, fr) = (d.dot(s.legs[0].foot.m.d - s.com), d.dot(s.legs[1].foot.m.d - s.com));
+            let (fl, fr) = (d.dot(horizontal(s.legs[0].foot.m.d - s.pelvis.m.d, up)), d.dot(horizontal(s.legs[1].foot.m.d - s.pelvis.m.d, up)));
             if (f.stepping == 2 && fl < -back && fr > ahead) || (f.stepping == 1 && fr < -back && fl > ahead) {
                 crate::extras_core_rdr2::trace_once("running anti-crossing", || format!("{fl:.2} {fr:.2} past {back} {ahead}"));
-                f.stepping = 0;
+                give = Some(2 - f.stepping as usize);
             }
         }
+        // bal+0x334: the legs met, and the step gives way to the other foot, unless that foot is itself waiting
+        if r.give_way && f.stepping != 0 {
+            let other = 2 - f.stepping as usize;
+            if r.wait[other] <= 0.0 {
+                crate::extras_core_rdr2::trace_once("legs met", || format!("foot {} gives way", f.stepping));
+                give = Some(other);
+            }
+        }
+        if give.is_some() {
+            f.stepping = 0;
+        }
         // "don't change step": early in the balance (dontStepTime), or fallType 1 once failing (0x2aba1cc)
-        if f.stepping == 0 && (!r.may_step() || r.force_balance || (r.failing.is_some() && r.p.fall_type == 1) || r.time < r.p.dont_step_time) {
+        if give.is_none() && f.stepping == 0 && (!r.may_step() || r.force_balance || (r.failing.is_some() && r.p.fall_type == 1) || r.time < r.p.dont_step_time) {
             return;
         }
     }
@@ -433,6 +461,9 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
     }
     // RDR2's forced foot: it takes the next step
     if let Some((i, _)) = r.and_then(|r| r.forced.filter(|&(_, at)| r.steps < at + 1)) {
+        (left, right) = (i == 0, i == 1);
+    }
+    if let Some(i) = give {
         (left, right) = (i == 0, i == 1);
     }
     if left || right {
@@ -532,7 +563,11 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     if let Some(r) = p.rdr2.filter(|r| r.sideways || r.stagger) {
         f.dist[1 - r.last_foot] += crate::nmdbm_rdr2::Rdr2::alternate();
     }
-    decide(s, f, p.rdr2.as_ref());
+    // RDR2 (0x2ab127c): while the foot that gave way waits, no decision and no landing
+    let waiting = |f: &Feet| p.rdr2.is_some_and(|r| (f.stepping == 1 && r.wait[1] > 0.0) || (f.stepping == 2 && r.wait[0] > 0.0));
+    if !waiting(f) {
+        decide(s, f, p.rdr2.as_ref());
+    }
     if f.stepping == 0 {
         f.flags = (f.flags & delirium_data::kv!(252 int)) | (s.flags & delirium_data::kv!(251 int)) | (s.flags & delirium_data::kv!(7 int)) << 1;
         return;
@@ -609,7 +644,15 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     f.flags = (f.flags & delirium_data::kv!(252 int)) | if two { delirium_data::kv!(251 int) } else { delirium_data::kv!(253 int) };
     let other = if two { s.flags & delirium_data::kv!(251 int) != 0 } else { s.flags & delirium_data::kv!(7 int) != 0 };
     let landed = contact && speed < 0.0 && (left_frac < 0.5 || (f.flags & delirium_data::kv!(23 int) != 0 && f.flags & delirium_data::kv!(54 int) != 0));
-    if landed || (contact && !other) {
+    // RDR2: the other foot off the ground this tick and the last, and not while running
+    let lone = match p.rdr2 {
+        Some(r) => {
+            let last: u8 = if two { LEFT_LAST() } else { RIGHT_LAST() };
+            contact && !other && s.flags & last == 0 && !r.running
+        }
+        None => contact && !other,
+    };
+    if !waiting(f) && (landed || lone) {
         f.flags |= if two { delirium_data::kv!(253 int) } else { delirium_data::kv!(251 int) };
         f.stepping = 0;
         decide(s, f, p.rdr2.as_ref());
@@ -908,6 +951,12 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     let low = (sdot(f.pos[0], up, b"yxz") - drop(f.pos[0])).min(sdot(f.pos[1], up, b"zxy") - drop(f.pos[1]));
     let mut t = f.pos;
     if let Some(rd) = p.rdr2 {
+        // RDR2: the foot that gave way goes down
+        for i in 0..2 {
+            if f.stepping == (1 - i) as u32 + 1 && rd.wait[i] > 0.0 {
+                t[i] -= Vec3::Z * crate::nmdbm_rdr2::GIVE_WAY.1;
+            }
+        }
         let apart = (f.pos[1] - f.pos[0]).length();
         for (i, planted) in [lp, rp].into_iter().enumerate() {
             if planted {
@@ -1039,6 +1088,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         None => (false, false),
     };
     let contact = [s.flags & delirium_data::kv!(251 int) != 0, s.flags & delirium_data::kv!(7 int) != 0];
+    let last = [s.flags & LEFT_LAST() != 0, s.flags & RIGHT_LAST() != 0];
     for (i, planted) in [lp, rp].into_iter().enumerate() {
         let side = if i == 0 { 1.0 } else { -1.0 };
         let leg = &mut s.legs[i];
@@ -1084,6 +1134,28 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             // normal; off it, moving forward, the pitch is negated above 5 m/s or moving sideways (its caller's flag
             // and the stagger legs' states are left out)
             let flat = p.rdr2.is_some_and(|r| r.p.flatter_static_feet && !r.stagger && s.vel.length() < 1.0);
+            // RDR2 (0x2aae0b4), staggering: a foot down by this tick and the last aims at the normal tilted away from his way,
+            // unless he's going forward at 1 m/s or more; its pitch is negated, going forward, above 5 m/s, sideways, on a step
+            // up, or above 1 m/s with a leg pushing off. A foot not so down aims from the actual knee and foot.
+            if let Some(r) = p.rdr2.filter(|r| r.stagger) {
+                let g = s.vel.vd(horizontal(s.m.c, up));
+                let v = horizontal(s.vel, up);
+                let speed = v.length();
+                let mut c = speed;
+                let mut n = normal[i];
+                let down = contact[i] && last[i];
+                if down && (speed < 1.0 || g > 0.0) {
+                    let k;
+                    (c, k) = if r.sideways { (speed.clamp(0.0, 1.0), 3.0) } else if r.push_off { (speed.clamp(0.0, 3.0), 3.0) } else { (speed.clamp(0.7, 1.0), 1.0) };
+                    n = (n - v.normalize_or_zero() * (0.8 * c * k)).normalize_or_zero();
+                }
+                let forward = down && g < 0.0;
+                let (kn, ft) = if forward { (predict_knee(&leg.hip, &leg.knee, side), target[i]) } else { (leg.knee.m.d, leg.foot.m.d) };
+                let a = asin(sdot(leg.knee.m.c, vnorm(kn - ft).vx(n), b"xyz"));
+                let step_up = if !lp { up.vd(p.target[1]) + 0.1 < up.vd(p.target[0]) } else if !rp { up.vd(p.target[0]) + 0.1 < up.vd(p.target[1]) } else { false };
+                leg.ankle.desired[0] = if forward && (speed > 5.0 || r.sideways || step_up || (c > 1.0 && r.push_off)) { -a } else { a };
+                continue;
+            }
             let flip = !flat && !balancing && ahead && p.rdr2.is_some_and(|r| s.vel.length() > 5.0 || r.sideways);
             let (k, foot) = match p.rdr2 {
                 Some(_) if flat || balancing || !ahead => (leg.knee.m.d, leg.foot.m.d),
@@ -1158,6 +1230,20 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         };
     }
     s.legs[1].ankle.desired[1] = twist(1, rp);
+    // RDR2 (0x2aaeed8): while the foot that gave way waits, the stepping leg's hip and, unless staggering forward, its ankle
+    // are held up
+    if let Some(r) = p.rdr2 {
+        let (_, _, hip, ankle) = crate::nmdbm_rdr2::GIVE_WAY;
+        let forward = horizontal(s.vel, up).normalize_or_zero().dot(horizontal(up.cross(-s.pelvis.m.b), up).normalize_or_zero()) > 0.2;
+        for i in 0..2 {
+            if f.stepping == i as u32 + 1 && r.wait[1 - i] > 0.0 {
+                s.legs[i].hip.desired[0] -= r.wait[1 - i] * hip;
+                if !(r.stagger && forward) {
+                    s.legs[i].ankle.desired[0] += r.wait[1 - i] * ankle;
+                }
+            }
+        }
+    }
     let (a, b) = (ol.max(-or), or.max(-ol));
     if a > 0.0 && b <= 0.0 {
         s.legs[1].hip.desired[1] += a;
@@ -1670,7 +1756,8 @@ impl Dbm {
             // RDR2: the crouch request's knee bend instead of the extras' offset; standUp straightens him while moving
             Some(r) => {
                 let up = if r.p.stand_up { (2.0 * slen(s.hvel, b"zyx")).min(1.0) * (1.0 - c.legs.0) } else { 0.0 };
-                c.legs.0 + r.owned.knee.value + up
+                // running ignores the bend unless fall to knees (owner 12) asks it
+                if r.running && r.owned.knee.owner != 12 { c.legs.0 } else { c.legs.0 + r.owned.knee.value + up }
             }
             None => c.legs.0 + self.leg_offset,
         };
@@ -1719,11 +1806,27 @@ impl Dbm {
             r.speed = s.hvel.length();
             let facing = horizontal(-s.pelvis.m.c, up).normalize_or_zero().dot(horizontal(self.pv.vel, up).normalize_or_zero());
             r.turn(self.p.dt, self.pv.fixed_vel && !r.heading_only, facing);
-            r.running = r.speed >= r.p.run_vel;
-            if r.running {
+            // bal+0x339 is staggering or fast; only fast takes the run values (0x2aba1cc)
+            r.run_fast = r.speed >= r.p.run_vel;
+            r.running = r.stagger || r.run_fast;
+            if r.run_fast {
                 (self.p.leg_stiffness, self.p.step_height) = (r.p.leg_stiffness_run, r.p.step_height_run);
             }
-            self.p.taper = if r.running { r.p.taper_knee_strength_run } else { c.taper } && !r.on_slope && r.taper;
+            // bal+0x334 from the legs' meeting (knees ctx+0x34b0, thighs +0x34b1), the timer of the stepping foot loaded with it.
+            // Staggering it also needs staggerFall's bal+0xbe3 (?b49ec3c6: on by default and no set read sends it).
+            r.wait = r.wait.map(|t| t - self.p.dt);
+            let met = |a: usize, c: usize| b.doll.self_met.contains(&(a.min(c), a.max(c)));
+            let knees = met(b.ch.joints[(*KNEE())[0]].child, b.ch.joints[(*KNEE())[1]].child);
+            let thighs = met(b.ch.joints[(*HIP())[0]].child, b.ch.joints[(*HIP())[1]].child);
+            let along = horizontal(s.vel, up).normalize_or_zero().dot(horizontal(up.cross(-s.pelvis.m.b), up).normalize_or_zero()).abs();
+            r.give_way = if !r.stagger || along <= crate::nmdbm_rdr2::GIVE_WAY_ALONG { knees || thighs } else { knees };
+            if (r.running && (!r.stagger || s.vel.length() >= crate::nmdbm_rdr2::GIVE_WAY_SPEED)) || r.step_age <= crate::nmdbm_rdr2::GIVE_WAY.0 {
+                r.give_way = false;
+            }
+            if r.give_way && matches!(self.f.stepping, 1 | 2) {
+                r.wait[self.f.stepping as usize - 1] = crate::nmdbm_rdr2::GIVE_WAY.0;
+            }
+            self.p.taper = if r.run_fast { r.p.taper_knee_strength_run } else { c.taper } && !r.on_slope && r.taper;
         }
         if let (Some(r), i @ 1..=2) = (self.p.rdr2, was) {
             let (i, up) = (i as usize - 1, self.p.up);
@@ -1869,11 +1972,20 @@ impl Dbm {
                 let k = &s.legs[i].knee;
                 ch.eff[(*KNEE())[i]].desired[0] = r.knee_limit(ch.eff[(*KNEE())[i]].desired[0], k.actual, 0.0, self.p.dt);
             }
-            if self.p.rdr2.is_some_and(|r| r.running) {
-                let h = if planted { k } else { k * crate::nmdbm_rdr2::RUN_SWING };
-                ch.eff[(*HIP())[i]].strength = h * h;
-                if !planted {
-                    ch.eff[(*KNEE())[i]].strength = h * h;
+            // RDR2 (0x2abc4ec): running with the planted foot off the ground this tick and the last, the stepping leg's hip and
+            // knee relax (the foot's per-part value ctx+0x35cc has no reader found: not here)
+            if self.p.rdr2.is_some_and(|r| r.running) && self.f.stepping == i as u32 + 1 {
+                let bits: u8 = if self.f.flags & delirium_data::kv!(251 int) != 0 {
+                    s.flags & (delirium_data::kv!(251 int) | LEFT_LAST())
+                } else if self.f.flags & delirium_data::kv!(253 int) != 0 {
+                    s.flags & (delirium_data::kv!(7 int) | RIGHT_LAST())
+                } else {
+                    1
+                };
+                if bits == 0 {
+                    let (sk, d, m) = crate::nmdbm_rdr2::RUN_SWING;
+                    ch.eff[(*HIP())[i]].set_stiffness(sk, d, Some(m));
+                    ch.eff[(*KNEE())[i]].set_stiffness(sk, d, Some(m));
                 }
             }
         }

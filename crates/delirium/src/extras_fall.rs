@@ -978,6 +978,7 @@ impl StgRdr2 {
                 self.leg[o] = 5;
             }
         }
+        c.out.dbm_push_off = self.leg.iter().any(|&l| l == 3 || l == 4);
         // leg stiffness (0x2a9e8a4). (hip, knee, ankle) of a leg with no state: base - 1, base - 3, base - 1; a stance leg, the
         // other foot stepping: base, base, base + 2; once released (it stopped opposing gravity): the hip less the strike
         // reduction, the knee less twice it, the ankle base. Each less the steps past stepsTillStartEnd's reduction.
@@ -1032,6 +1033,7 @@ impl StgRdr2 {
                 _ => {}
             }
         }
+        c.out.dbm_falling = elapsed && self.latch;
     }
 
     /// RDR2's stagger arms (0x2a7af24, upperBodyReaction): while the chest moves fast and not backward, the arms' pose is
