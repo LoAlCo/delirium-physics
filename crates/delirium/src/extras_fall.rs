@@ -955,7 +955,7 @@ impl StgRdr2 {
         let fall_time = self.t > p.time_to_fall && c.out.dbm_force_balance;
         for i in 0..2 {
             let o = 1 - i;
-            if !(fall_time || (bal.stepping as usize == o + 1 && !bal.planted[i])) {
+            if !(fall_time || (bal.stepping as usize == o + 1 && !bal.planted[o])) {
                 continue;
             }
             let touch = Self::touching(c, i);
