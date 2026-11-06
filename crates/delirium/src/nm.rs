@@ -353,7 +353,7 @@ pub struct Agent {
     nm_hit_next: Vec<(Shot, bool)>,
     pub(crate) nm_hit_hold: bool,
     nm_relax: Option<f32>,
-    nm_head: crate::nmhl::HeadLook,
+    pub(crate) nm_head: crate::nmhl::HeadLook,
     nm_cf: Option<crate::nmcf::CatchFall>,
     nm_cf_msg: Option<crate::nmcf::Params>,
     nm_twist: crate::nmst::SpineTwist,
