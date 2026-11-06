@@ -2247,6 +2247,10 @@ impl Agent {
                     self.nm_twist.activate(ch);
                 }
                 self.nm_twist.pos = pos;
+                // RDR2 core: pointGun's twist offset (spineTwist's +0x70)
+                if let Some(o) = out.spine_twist_offset {
+                    self.nm_twist.offset = o;
+                }
             }
             if out.spine_twist_stop {
                 self.nm_twist.deactivate();
@@ -2649,7 +2653,10 @@ impl Agent {
         if let Some(pairs) = crate::nmrs::SELF[build.nm].get().filter(|_| build.parts.len() == delirium_data::nm_asset::PARTS.len()) {
             let legs = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).is_some_and(|d| d.held);
             let hands = self.nm_fl.hands_off;
-            let on = |p: &(usize, usize)| pair_on(*p, legs, hands);
+            // RDR2 core's pointGun: its arms leave these parts alone (nothing without it)
+            let off: Vec<(Vec<usize>, Vec<usize>)> = self.extras.pair_off.iter().map(|&(m, i)| (crate::extras_ysk_rdr2::parts(m), crate::extras_ysk_rdr2::parts(i))).collect();
+            let off = |&(a, b): &(usize, usize)| off.iter().any(|(m, i)| (m.contains(&a) && i.contains(&b)) || (m.contains(&b) && i.contains(&a)));
+            let on = |p: &(usize, usize)| pair_on(*p, legs, hands) && !off(p);
             if self.doll.pairs.len() != pairs.iter().filter(|p| on(p)).count() {
                 self.doll.pairs = game_pairs(pairs.iter().copied().filter(on));
             }

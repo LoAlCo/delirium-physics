@@ -171,6 +171,8 @@ pub struct Out {
     /// RDR2 core, fallingReaction 4: bodyWrithe started with these if it isn't running
     pub writhe: Option<crate::nm::BodyWrithe>,
     pub spine_twist: Option<(Vec3, f32)>,
+    /// RDR2 core: pointGun's offset for that spineTwist, this step
+    pub spine_twist_offset: Option<f32>,
     pub spine_twist_stop: bool,
     pub torque: Vec<Vec3>,
     pub force: Vec<Vec3>,
