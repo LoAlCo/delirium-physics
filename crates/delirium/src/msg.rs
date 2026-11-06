@@ -320,6 +320,8 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "noSlopeTime", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
         Param { name: "slopeMoveFoot", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
         Param { name: "ankleEquilibrium", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "footFriction", kind: Kind::Float, used: true, doc: "RDR2 core only: friction scale on the feet while the balancer runs (1)" },
+        Param { name: "footFrictionStagger", kind: Kind::Float, used: true, doc: "RDR2 core only: the same with staggerFall on (1)" },
         Param { name: "movingFloor", kind: Kind::Bool, used: true, doc: "RDR2 core only: leans into the floor's acceleration ctx+0xfe0 (test hook RDR2_FLOOR_ACC=x,y,z: nothing moves under him in the room)" },
         Param { name: "leanAcc", kind: Kind::Float, used: true, doc: "RDR2 core only: with movingFloor, COM's lean per g (0)" },
         Param { name: "hipLeanAcc", kind: Kind::Float, used: true, doc: "RDR2 core only: with movingFloor, the hips' lean per g (0.5)" },

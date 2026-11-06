@@ -77,6 +77,8 @@
 pub struct Params {
     /// movingFloor (+0x2ac) and what reads the floor's acceleration (ctx+0xfe0): leanAcc, hipLeanAcc, leanAccMax, resistAcc, resistAccMax
     pub moving_floor: bool,
+    /// ctx+0x1048, ctx+0x104c: friction scale on the feet with the balancer running, and with staggerFall too
+    pub foot_friction: [f32; 2],
     pub lean_acc: f32,
     pub hip_lean_acc: f32,
     pub lean_acc_max: f32,
@@ -246,7 +248,7 @@ pub struct Params {
 
 impl Default for Params {
     fn default() -> Params {
-        Params { moving_floor: false, lean_acc: 0.0, hip_lean_acc: 0.5, lean_acc_max: 5.0, resist_acc: 0.0, resist_acc_max: 3.0, max_steps: 100, max_balance_time: 50.0, max_still_time: 50.0, balance_indefinitely: false, giveup_height: 0.5,
+        Params { foot_friction: [1.0, 1.0], moving_floor: false, lean_acc: 0.0, hip_lean_acc: 0.5, lean_acc_max: 5.0, resist_acc: 0.0, resist_acc_max: 3.0, max_steps: 100, max_balance_time: 50.0, max_still_time: 50.0, balance_indefinitely: false, giveup_height: 0.5,
                  fall_type: 0, fall_mult: 1.0, step_height_inc4_step: 0.1, ankle_balance: true, start_flat: 0.1, end_flat: 0.3,
                  slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.7, 1.8], ankle_equilibrium: 0.0, legs_apart_restep: 0.2,
                  legs_apart_max: 2.0, legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
@@ -291,6 +293,8 @@ impl Params {
             "slopeDrop2" => self.slope_drop[0] = v,
             "slopeDrop1" => self.slope_drop[1] = v,
             "ankleEquilibrium" => self.ankle_equilibrium = v,
+            "footFriction" => self.foot_friction[0] = v,
+            "footFrictionStagger" => self.foot_friction[1] = v,
             "movingFloor" => self.moving_floor = v != 0.0,
             "leanAcc" => self.lean_acc = v,
             "hipLeanAcc" => self.hip_lean_acc = v,

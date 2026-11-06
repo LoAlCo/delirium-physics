@@ -2581,6 +2581,15 @@ impl Agent {
                         crate::extras_core_rdr2::trace_once("resist acc", || format!("resistAcc: {a:.3?} on the parts but the legs"));
                     }
                 }
+                // 0x2a38630's two flags, 0x2a7452c's k: a foot's contact with the balancer running takes footFriction, with staggerFall on (behaviour 7) footFrictionStagger
+                if let Some(r) = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).and_then(|d| d.p.rdr2.as_ref()) {
+                    let k = r.p.foot_friction[self.extras.on.iter().any(|(n, _)| *n == "staggerFall") as usize];
+                    if k != 1.0 {
+                        let rp = crate::extras_ysk_rdr2::rp;
+                        part_scales.0.extend([(rp(5), k), (rp(7), k)]);
+                        crate::extras_core_rdr2::trace_once("foot friction", || format!("footFriction: {k} on the feet"));
+                    }
+                }
                 let snap = ch.clone();
                 let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
                 let s = body.snap(snap.up);
