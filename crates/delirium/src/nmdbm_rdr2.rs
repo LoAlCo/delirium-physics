@@ -429,7 +429,7 @@ stay_fields! {
          ("forceInAirShare", force_in_air_share, 0.5), ("forceMin", force_min, -1.0), ("forceMax", force_max, -1.0),
          ("forceSaturationVel", force_saturation_vel, 4.0), ("forceThresholdVel", force_threshold_vel, 0.5),
          ("torqueSaturationVel", torque_saturation_vel, 4.0), ("torqueThresholdVel", torque_threshold_vel, 2.5),
-         ("torqueleanreduction", torque_lean_reduction, 0.0), ("leanmin", lean_min, 0.5), ("leanmax", lean_max, 1.1), ("lean", lean, 0.0),
+         ("torqueleanreduction", torque_lean_reduction, 0.0), ("torqueleanmin", lean_min, 0.5), ("torqueleanmax", lean_max, 1.1), ("torquelean", lean, 0.0),
          ("supportPosition", support_position, 2.0), ("noSupportForceMult", no_support_force_mult, 1.0), ("stepUpHelp", step_up_help, 0.0),
          ("stayUpAcc", stay_up_acc, 0.7), ("stayUpAccMax", stay_up_acc_max, 5.0),
          ("antigrav", antigrav, 0.0), ("antigravtime", antigrav_time, 0.5), ("antigravspeed", antigrav_speed, 1.5)

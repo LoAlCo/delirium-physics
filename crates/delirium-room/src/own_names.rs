@@ -2,6 +2,7 @@
 //! the port's message takes it by. Generated from the port's parameter docs (`study/params/rc2.py`), which name each
 //! field's hash or offset.
 pub const OWN: &[(u32, &str)] = &[
+    (0xddd06604, "side"),
     (0x002d1ca5, "seatBoxSide"),
     (0x03d3aae9, "rollTorqueRate"),
     (0x08b1dc5b, "pistolIkArg"),

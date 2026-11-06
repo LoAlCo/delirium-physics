@@ -121,6 +121,8 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "scrabble", kind: Kind::Bool, used: true, doc: "RDR2 core only: the phase from how fast his trunk moves, the elbows bent in a window of it (false)" },
     ] },
     Message { name: "bodyBalance", params: &[
+        Param { name: "armStiffness", kind: Kind::Float, used: true, doc: "RDR2's name for what stiffens the arms and the neck (9)" },
+        Param { name: "armDamping", kind: Kind::Float, used: true, doc: "RDR2's name for the arms' damping (0.7)" },
         Param { name: "bodyStiffness", kind: Kind::Float, used: true, doc: "" },
         Param { name: "headLookAtVelProb", kind: Kind::Float, used: true, doc: "" },
         Param { name: "armsOutStraightenElbows", kind: Kind::Float, used: true, doc: "" },
@@ -442,6 +444,8 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "move2Radius", kind: Kind::Float, used: false, doc: "RDR2 core only: (0; not read by RDR2)" },
     ] },
     Message { name: "headLook", params: &[
+        Param { name: "keepHeadAwayFromGround", kind: Kind::Bool, used: true, doc: "RDR2 core: lean the neck and head away from the ground instead of looking" },
+        Param { name: "twistSpine", kind: Kind::Bool, used: true, doc: "RDR2 core: the leftover twist spreads to two spine joints (true)" },
         Param { name: "instanceIndex", kind: Kind::Int, used: false, doc: "a game object index (the SDK has no level objects: positions are world coordinates)" },
         Param { name: "pos", kind: Kind::Vec3, used: true, doc: "" },
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "" },
@@ -756,9 +760,9 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "torqueSaturationVel", kind: Kind::Float, used: true, doc: "RDR2 core: velocityBased: m/s (4)" },
         Param { name: "torqueThresholdVel", kind: Kind::Float, used: true, doc: "RDR2 core: velocityBased: off below this, m/s (2.5)" },
         Param { name: "torqueleanreduction", kind: Kind::Float, used: true, doc: "RDR2 core: how much leaning past leanmin takes the torque off (0)" },
-        Param { name: "leanmin", kind: Kind::Float, used: true, doc: "RDR2 core: rad (0.5)" },
-        Param { name: "leanmax", kind: Kind::Float, used: true, doc: "RDR2 core: rad (1.1)" },
-        Param { name: "lean", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0)" },
+        Param { name: "torqueleanmin", kind: Kind::Float, used: true, doc: "RDR2 core: rad (0.5)" },
+        Param { name: "torqueleanmax", kind: Kind::Float, used: true, doc: "RDR2 core: rad (1.1)" },
+        Param { name: "torquelean", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0)" },
         Param { name: "supportPosition", kind: Kind::Float, used: true, doc: "RDR2 core: both feet this far behind the COM, noSupportForceMult applies, m (2)" },
         Param { name: "noSupportForceMult", kind: Kind::Float, used: true, doc: "RDR2 core: (1)" },
         Param { name: "stepUpHelp", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0)" },
@@ -835,6 +839,8 @@ impl Default for Attached {
 
 #[derive(Clone, Debug)]
 pub struct HeadLookMsg {
+    pub keep_head_away: bool,
+    pub twist_spine: bool,
     pub pos: Vec3,
     pub vel: Vec3,
     pub stiffness: f32,
@@ -844,7 +850,7 @@ pub struct HeadLookMsg {
 }
 impl Default for HeadLookMsg {
     fn default() -> HeadLookMsg {
-        HeadLookMsg { pos: Vec3::ZERO, vel: Vec3::ZERO, stiffness: delirium_data::kv!(31), damping: 1.0, always_look: false, always_eyes_horizontal: true }
+        HeadLookMsg { keep_head_away: false, twist_spine: true, pos: Vec3::ZERO, vel: Vec3::ZERO, stiffness: delirium_data::kv!(31), damping: 1.0, always_look: false, always_eyes_horizontal: true }
     }
 }
 
@@ -1104,7 +1110,11 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
             a.fow_rdr2 = Some(params.iter().map(|(n, v)| (n.to_string(), v.clone())).collect());
         },
         "grab" => a.grab(build, on.then(|| st.grab.clone())),
-        "headLook" => { let p = &st.head_look; a.head_look(build, on.then_some((p.pos, p.vel)), p.stiffness, p.damping, p.always_look, p.always_eyes_horizontal); }
+        "headLook" => { let p = &st.head_look;
+            if a.rdr2_core.is_some() {
+                (a.nm_head.keep_head_away, a.nm_head.twist_spine) = (p.keep_head_away, p.twist_spine);
+            }
+            a.head_look(build, on.then_some((p.pos, p.vel)), p.stiffness, p.damping, p.always_look, p.always_eyes_horizontal); }
         "highFall" => if on {
             a.high_fall(st.high_fall.clone());
             a.hf_rdr2 = Some(params.iter().map(|(n, v)| (n.to_string(), v.clone())).collect());
@@ -1204,6 +1214,8 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("bodyBalance", "headLookAtVelProb") => { let p = &mut st.body_balance; p.head_look_at_vel_prob = v.f()?; }
         ("bodyBalance", "armsOutStraightenElbows") => { let p = &mut st.body_balance; p.arms_out_straighten_elbows = v.f()?; }
         ("bodyBalance", "bendElbowsTime") => { let p = &mut st.body_balance; p.bend_elbows_time = v.f()?; }
+        ("bodyBalance", "armStiffness") => { let p = &mut st.body_balance; p.body_stiffness = v.f()?; }
+        ("bodyBalance", "armDamping") => { let p = &mut st.body_balance; p.damping = v.f()?; }
         ("bodyBalance", "elbow") => { let p = &mut st.body_balance; p.elbow = v.f()?; }
         ("bodyBalance", "angVelMultiplier") => { let p = &mut st.body_balance; p.ang_vel_multiplier = v.v()?; }
         ("bodyBalance", "angVelThreshold") => { let p = &mut st.body_balance; p.ang_vel_threshold = v.v()?; }
@@ -1377,6 +1389,8 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("grab", "targetForHeadLook") => { let p = &mut st.grab; p.head_look_target = v.v()?; }
         ("headLook", "pos") => { let p = &mut st.head_look; p.pos = v.v()?; }
         ("headLook", "stiffness") => { let p = &mut st.head_look; p.stiffness = v.f()?; }
+        ("headLook", "keepHeadAwayFromGround") => { let p = &mut st.head_look; p.keep_head_away = v.b()?; }
+        ("headLook", "twistSpine") => { let p = &mut st.head_look; p.twist_spine = v.b()?; }
         ("headLook", "alwaysEyesHorizontal") => { let p = &mut st.head_look; p.always_eyes_horizontal = v.b()?; }
         ("headLook", "alwaysLook") => { let p = &mut st.head_look; p.always_look = v.b()?; }
         ("headLook", "vel") => { let p = &mut st.head_look; p.vel = v.v()?; }
@@ -1656,6 +1670,8 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("bodyBalance", "headLookAtVelProb") => { let p = &st.body_balance; Value::Float(p.head_look_at_vel_prob) }
         ("bodyBalance", "armsOutStraightenElbows") => { let p = &st.body_balance; Value::Float(p.arms_out_straighten_elbows) }
         ("bodyBalance", "bendElbowsTime") => { let p = &st.body_balance; Value::Float(p.bend_elbows_time) }
+        ("bodyBalance", "armStiffness") => { let p = &st.body_balance; Value::Float(p.body_stiffness) }
+        ("bodyBalance", "armDamping") => { let p = &st.body_balance; Value::Float(p.damping) }
         ("bodyBalance", "elbow") => { let p = &st.body_balance; Value::Float(p.elbow) }
         ("bodyBalance", "angVelMultiplier") => { let p = &st.body_balance; Value::Vec3(p.ang_vel_multiplier) }
         ("bodyBalance", "angVelThreshold") => { let p = &st.body_balance; Value::Vec3(p.ang_vel_threshold) }
@@ -1810,6 +1826,8 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("grab", "targetForHeadLook") => { let p = &st.grab; Value::Vec3(p.head_look_target) }
         ("headLook", "pos") => { let p = &st.head_look; Value::Vec3(p.pos) }
         ("headLook", "stiffness") => { let p = &st.head_look; Value::Float(p.stiffness) }
+        ("headLook", "keepHeadAwayFromGround") => { let p = &st.head_look; Value::Bool(p.keep_head_away) }
+        ("headLook", "twistSpine") => { let p = &st.head_look; Value::Bool(p.twist_spine) }
         ("headLook", "alwaysEyesHorizontal") => { let p = &st.head_look; Value::Bool(p.always_eyes_horizontal) }
         ("headLook", "alwaysLook") => { let p = &st.head_look; Value::Bool(p.always_look) }
         ("headLook", "vel") => { let p = &st.head_look; Value::Vec3(p.vel) }

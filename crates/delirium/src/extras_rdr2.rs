@@ -205,6 +205,12 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "his stiffness (10)" },
     ] },
     Message { name: "reachForWound", params: &[
+        Param { name: "allowLeftPistolRFW", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x7d: this hand may reach while holding a pistol; no weapon states here" },
+        Param { name: "allowRightPistolRFW", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x7e: the same" },
+        Param { name: "rfwWithPistol", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x7f: pointGun's hold on that hand; no weapon states here" },
+        Param { name: "bust", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x83: another hand layout; no set for these shots asks" },
+        Param { name: "cupSize", kind: Kind::Float, used: false, doc: "RDR2 core: +0x64: with bust" },
+        Param { name: "bustElbowLift", kind: Kind::Float, used: false, doc: "RDR2 core: +0x60: with bust" },
         Param { name: "enabled", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x164: no reach while false; fall to knees clears it (true)" },
         Param { name: "hitPoint", kind: Kind::Vec3, used: true, doc: "the wound, world (zero: in front of the part)" },
         Param { name: "hitPart", kind: Kind::Int, used: true, doc: "the part it is on, 0..20 (-1: the belly)" },
