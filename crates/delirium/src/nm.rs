@@ -2239,6 +2239,10 @@ impl Agent {
             // RDR2 core: an extra (onFire) stops or starts bodyBalance and sets the balancer's leg stiffness
             bb_req = (out.bb_stop, out.bb_start.take(), out.dbm_leg_stiffness);
             part_scales = (std::mem::take(&mut out.part_friction), std::mem::take(&mut out.lim_floor));
+            // RDR2 core: pointGun's look at its priority
+            if let Some((prio, pos)) = out.head_look_prio {
+                self.nm_head.look(prio, pos, Vec3::ZERO, true);
+            }
             // RDR2 core: an extra (teeter) runs spineTwist toward a point, from the next tick
             if let Some((pos, k)) = out.spine_twist {
                 if !self.nm_twist.active {

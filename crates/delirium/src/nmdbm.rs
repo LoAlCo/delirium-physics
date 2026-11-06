@@ -1182,7 +1182,7 @@ impl Body<'_> {
                mid: (jd.limits[0].0 + jd.limits[0].1) * 0.5, desired: e.desired[0], actual: self.ch.actual(j, self.frames)[0] }
     }
 
-    fn limb(&self, hip: usize, knee: usize) -> M34 {
+    pub(crate) fn limb(&self, hip: usize, knee: usize) -> M34 {
         let i = (*crate::nmrs::LIMBS()).iter().position(|&l| l == (hip, knee));
         if let Some(m) = i.and_then(|i| self.ch.limb[i]) {
             return m;
