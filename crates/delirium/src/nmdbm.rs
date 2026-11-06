@@ -714,16 +714,27 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
         }
         _ => w,
     };
-    let toward = !pv.fixed_vel;
+    // RDR2 (0x2ab3bb4): moving sideways the leg's twist doesn't turn him toward his way
+    let toward = !pv.fixed_vel && !p.rdr2.is_some_and(|r| r.sideways);
     let m = &s.pelvis.m;
     let blend = |y: f32, cur: f32| ((y.clamp(-delirium_data::kv!(119), delirium_data::kv!(119)) - cur) * (slen(w, b"yxz") * 2.0).min(1.0)).fma(delirium_data::kv!(60), cur);
-    if pl && !pr {
+    // RDR2, running (staggering too): the twist goes by the feet's contact, not the planted flags. One foot down follows as
+    // walking; both down relax; neither follows at half rate, each leg to minus its own heading error
+    let running = p.rdr2.is_some_and(|r| r.running);
+    let (pl, pr) = if running { (s.flags & delirium_data::kv!(251 int) != 0, s.flags & delirium_data::kv!(7 int) != 0) } else { (pl, pr) };
+    if running && !pl && !pr {
+        let limit = delirium_data::kv!(119);
+        let k = (slen(w, b"yxz") * 2.0).min(1.0);
+        for (i, side) in [(0, 1.0), (1, -1.0)] {
+            pv.yaw[i] += k * (-yaw(side, m, w, toward, false, s.angvel).clamp(-limit, limit) - pv.yaw[i]) * 0.5;
+        }
+    } else if pl && !pr {
         pv.yaw[0] = blend(yaw(1.0, m, w, toward, false, s.angvel), pv.yaw[0]);
         pv.yaw[1] = pv.yaw[0] * 0.5;
     } else if pr && !pl {
         pv.yaw[1] = blend(yaw(-1.0, m, w, toward, false, s.angvel), pv.yaw[1]);
         pv.yaw[0] = pv.yaw[1] * 0.5;
-    } else if pv.fixed_vel {
+    } else if pv.fixed_vel && !running {
         let most = if p.rdr2.is_some_and(|r| r.turning) { crate::nmdbm_rdr2::TURN_TWIST } else { delirium_data::kv!(119) };
         pv.yaw[0] = (yaw(1.0, m, w, toward, true, s.angvel) + (pv.yaw[0] - pv.yaw[1]) * 0.5).clamp(-most, most);
         pv.yaw[1] = -pv.yaw[0];
