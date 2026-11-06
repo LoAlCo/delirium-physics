@@ -2545,6 +2545,12 @@ const RFW_GRAB: f32 = 1.0;
 /// RDR2's on-the-ground leg bend gains (knee, hip), per unit of bend2leg / bend2hip.
 const RFW_GROUND_LEG: (f32, f32) = (6.425121, 5.437921);
 
+/// RDR2's reachForWound zones, their code defaults: down, in, up from a shoulder for its own hand (+0xf0, +0x100), from the
+/// other shoulder (chestzone +0x110), from the pelvis (pelviszone, fatzone).
+const RFW_ZONE_NEAR: [[f32; 3]; 2] = [[0.08, 0.18, 0.02], [0.05, 0.08, 0.28]];
+const RFW_ZONE_FAR: [f32; 3] = [0.06, 0.12, 0.15];
+const RFW_ZONE_LOW: [[f32; 3]; 2] = [[0.05, 0.08, 0.08], [0.25, 0.02, 0.08]];
+
 impl ReachForWound {
     /// RDR2's reach for wound: each arm runs its own reach. A bullet fills each chosen hand's pending record (taken
     /// at once by a hand not reaching; newHitReset stops a running reach so it restarts on the new wound). A hand
@@ -2598,7 +2604,7 @@ impl ReachForWound {
 
     /// A bullet in `part` at `point`: the hands it calls for, as pending wounds. An arm's own wound isn't reached by
     /// that arm; a leg wound only with allowInjuredThighReach / allowInjuredLowerLegReach. Which hand for a trunk wound
-    /// is Delirium's (the nearer, with reachWithOneHand): RDR2 decides by zones whose test isn't decompiled. Two hands
+    /// by RDR2's zones; with reachWithOneHand given, the nearer (Delirium's). Two hands
     /// on the trunk are spread 0.05 leg lengths either side.
     fn intake(&mut self, c: &mut Ctx, s: &mut Rfw2, point: Vec3, part: i32) {
         let part = if (0..21).contains(&part) { part as usize } else { 8 };
@@ -2625,6 +2631,36 @@ impl ReachForWound {
         }
         if leg && !if matches!(part, 2 | 3 | 5 | 6) { self.lower_leg } else { self.thigh } {
             ok = [false; 2];
+        }
+        // RDR2's zones (0x2a8d7b0): a hand is out when the wound is in one of its own, which keep it from places it can't get
+        // at. [P] on the frame: the code compares two components and sets none up; x along his right and z down is the only
+        // reading of the two that keeps the right hand alone on both recorded trunk shots (rdr2_shot_gaps.md 3).
+        if c.ch.rdr2 {
+            let frame = |v: Vec3| (v.dot(-side), v.dot(-up));
+            let inside = |zone: [f32; 3], at: Vec3, s: f32, f: f32| {
+                let ((px, pz), (cx, cz)) = (frame(point), frame(at));
+                pz < cz + zone[0] && cz - zone[2] < pz && s * f * cx - f * zone[1] < s * f * px
+            };
+            let sh = [0, 1].map(|i| c.b.joint_pos(SHOULDER()[i]));
+            if matches!(part, 0 | 7..=13 | 17) {
+                for (i, s) in [(1, 1.0), (0, -1.0)] {
+                    if RFW_ZONE_NEAR.iter().any(|&z| inside(z, sh[i], s, 1.0)) || inside(RFW_ZONE_FAR, sh[1 - i], s, -1.0) {
+                        ok[i] = false;
+                    }
+                }
+            }
+            if matches!(part, 0 | 1 | 4 | 7..=10) {
+                let root = c.b.part(0).m.d;
+                for (i, s) in [(1, 1.0), (0, -1.0)] {
+                    if RFW_ZONE_LOW.iter().any(|&z| inside(z, root, s, -1.0)) {
+                        ok[i] = false;
+                    }
+                }
+            }
+        }
+        if c.ch.rdr2 {
+            let d = point - c.b.part(0).m.d;
+            crate::extras_core_rdr2::trace(|| format!("reach for wound: part {part}, {:.3} his right, {:.3} up from the pelvis: hands {ok:?}", d.dot(-side), d.dot(up)));
         }
         // (RDR2 registers 0: both hands, unless the message says)
         if self.one_hand && (self.one_given || !c.ch.rdr2) && ok == [true; 2] {
