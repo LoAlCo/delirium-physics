@@ -259,25 +259,34 @@ pub struct FallCfg {
     pub limit_rate: f32,
     /// ?4fe4ab89 (ctx+0x1064): a bent knee's foot's friction, lying down
     pub foot_friction: f32,
+    /// +0xb8 handsAndKnees; +0xb9 hkHeadAvoid; ?c3e9ccc1 +0xa8 the mode's window; ?5be84846 +0x88 the hands' friction 1.1 till then
+    pub hk: bool,
+    pub hk_head: bool,
+    pub hk_window: f32,
+    pub hand_window: f32,
+    /// smartFall's forceHeadAvoid for a catchFall it starts (+0x2b8)
+    pub force_head: bool,
 }
 
 impl Default for FallCfg {
     fn default() -> FallCfg {
-        FallCfg { stop_manual: 0.0, stop_on_slopes: f32::MAX, knee_rate: 10000.0, anti_prop_clav: 0.0, swing_circle: 1.0, knee_tweak: 1.0, knee_limit: 3.0, limit_rate: 1.0, foot_friction: 0.0, com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
+        FallCfg { stop_manual: 0.0, stop_on_slopes: f32::MAX, knee_rate: 10000.0, anti_prop_clav: 0.0, swing_circle: 1.0, knee_tweak: 1.0, knee_limit: 3.0, limit_rate: 1.0, foot_friction: 0.0, hk: false, hk_head: true, hk_window: 0.0, hand_window: 100000.0, force_head: false, com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
     }
 }
 
 impl FallCfg {
     /// What the message's handler (0x2a74c3c) writes before its values: where the registered default isn't the ctor's.
     pub fn message_defaults() -> FallCfg {
-        FallCfg { stop_on_slopes: 10000.0, swing_circle: 0.0, knee_tweak: 0.0, ..FallCfg::default() }
+        FallCfg { stop_on_slopes: 10000.0, swing_circle: 0.0, knee_tweak: 0.0, hk_window: 100.0, hand_window: 0.1, ..FallCfg::default() }
     }
 
     /// One value by the port's name; the names of the parameters the message takes for these.
-    pub const NAMES: [&'static str; 25] = ["stopManual", "stopOnSlopes", "blendkneerate", "antiPropClav", "?7dad7aaf", "?dcd030d5", "zmpgroundcollision", "?7579162f", "?4fe4ab89", "comVelRDSThresh", "inhibitRollingTime", "changeFrictionTime", "groundFriction", "armFriction", "frictionMin", "frictionMax", "stoppedStrengthDecay", "kTime", "spineLeanGain", "successStrength", "minLegStiffness", "minSpineStiffness", "minArmStiffness", "callRDS", "resistRolling"];
+    pub const NAMES: [&'static str; 27] = ["?5be84846", "?c3e9ccc1", "stopManual", "stopOnSlopes", "blendkneerate", "antiPropClav", "?7dad7aaf", "?dcd030d5", "zmpgroundcollision", "?7579162f", "?4fe4ab89", "comVelRDSThresh", "inhibitRollingTime", "changeFrictionTime", "groundFriction", "armFriction", "frictionMin", "frictionMax", "stoppedStrengthDecay", "kTime", "spineLeanGain", "successStrength", "minLegStiffness", "minSpineStiffness", "minArmStiffness", "callRDS", "resistRolling"];
 
     pub fn set(&mut self, name: &str, v: f32) {
         match name {
+            "?5be84846" => self.hand_window = v,
+            "?c3e9ccc1" => self.hk_window = v,
             "comVelRDSThresh" => self.com_vel_rds = v,
             "inhibitRollingTime" => self.inhibit_rolling = v,
             "changeFrictionTime" => self.change_friction_time = v,
@@ -414,6 +423,8 @@ pub struct CoreCfg {
     pub coll: CollRec,
     /// the shot's +0x3a0..+0x3ac (shotspin): the spine's limit raises, lean1, lean2, twist, and until how long after a bullet
     pub shot_spine: [f32; 4],
+    /// ctx+0x1030, the character's health: the game's task writes it; nothing here does
+    pub health: f32,
 }
 
 /// What configureSelfAvoidance leaves on the arm limbs (+0x3f0..+0x404), ctor's defaults.
@@ -470,7 +481,7 @@ pub struct CollRec {
 
 impl Default for CoreCfg {
     fn default() -> CoreCfg {
-        CoreCfg { shot_spine: [-0.5, -0.3, -0.3, -0.3], self_avoid: Default::default(), spin: Default::default(), spin_hit: SpinRec { lim: [34.0, 27.0], gain: [0.0; 2], time: 0.0, speed: 0.0, left: -0.1 }, coll: Default::default(), water: Default::default(), soft: Default::default(), soft_was: [false; 4], fric: [1.0; 32], fric_used: false, fric_min: 0.0, fric_max: 9999.0, fric_clamp: false, muscle: None, strength: 1.0,
+        CoreCfg { health: 1.0, shot_spine: [-0.5, -0.3, -0.3, -0.3], self_avoid: Default::default(), spin: Default::default(), spin_hit: SpinRec { lim: [34.0, 27.0], gain: [0.0; 2], time: 0.0, speed: 0.0, left: -0.1 }, coll: Default::default(), water: Default::default(), soft: Default::default(), soft_was: [false; 4], fric: [1.0; 32], fric_used: false, fric_min: 0.0, fric_max: 9999.0, fric_clamp: false, muscle: None, strength: 1.0,
                   bullets: Default::default(), reduction: 0.15, min_leak: 0.2, recovery: None, leak_scaled: false, torques: 0, torque_sign: 0, fall: Default::default() }
     }
 }

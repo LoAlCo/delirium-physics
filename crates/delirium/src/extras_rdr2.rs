@@ -160,8 +160,8 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "zmpgroundcollision", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x105c: how far the tweaked knee may fold (3)" },
         Param { name: "?7579162f", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x1060: its limit comes back at this rate (1)" },
         Param { name: "?4fe4ab89", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x1064: a bent knee's foot's friction, lying down (0)" },
-        Param { name: "?5be84846", kind: Kind::Float, used: false, doc: "RDR2 core: +0x88: hands and knees' hand friction window; the port's hands and knees is setFallingReaction's own" },
-        Param { name: "?c3e9ccc1", kind: Kind::Float, used: false, doc: "RDR2 core: +0xa8: hands and knees' time window; the same" },
+        Param { name: "?5be84846", kind: Kind::Float, used: true, doc: "RDR2 core: +0x88: hands and knees: hand friction 1.1 while the time down is under this (0.1)" },
+        Param { name: "?c3e9ccc1", kind: Kind::Float, used: true, doc: "RDR2 core: +0xa8: hands and knees: the mode only while the time down is under this (100)" },
         Param { name: "comVelRDSThresh", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
         Param { name: "inhibitRollingTime", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
         Param { name: "changeFrictionTime", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
@@ -2748,7 +2748,7 @@ impl ReachForWound {
             let free = !c.ch.busy[i];
             let a = s.act[i];
             if s.reaching[i] && (a.fresh || a.clock > window || a.floor > floor_window || !free) {
-                if a.floor > floor_window && !a.fresh {
+                if a.floor > floor_window && a.floor < 1e4 && !a.fresh {
                     crate::extras_core_rdr2::trace_once("reach for wound: the floor clock ends a reach", || format!("{} s on the ground, of {floor_window}", a.floor));
                 }
                 self.stop_arm(c, &mut s, i);
@@ -3572,14 +3572,24 @@ impl Extra for FallingReaction {
             if self.given[1] {
                 fall.k_rate = self.decay;
             }
+            // with the core the mode is catchFall's (the message only writes its fields, 0x2a74c3c): this extra has nothing of its own
+            (fall.hk, fall.hk_head) = (self.given[0] && self.on, self.given[5] && self.head_up);
             c.ch.core.cfg.fall = fall;
             crate::extras_core_rdr2::trace(|| format!("falling reaction: {fall:?}"));
             let g = self.given;
             (self.on, self.decay) = (g[0] && self.on, if g[1] { self.decay } else { 2.0 });
             (self.arm_k, self.leg_k, self.spine_k) = (if g[2] { self.arm_k } else { 7.0 }, if g[3] { self.leg_k } else { 3.0 }, if g[4] { self.spine_k } else { 4.5 });
             self.head_up = g[5] && self.head_up;
+            self.on = false;
         }
         if !self.on {
+            // (pushForward is ours, a test: it tips him all the same)
+            if c.ch.rdr2 && self.push != 0.0 && self.t < 0.3 {
+                self.t += dt;
+                let up = c.ch.up.normalize_or(Vec3::Z);
+                let side = (c.b.part(13).m.d - c.b.part(17).m.d).normalize_or(Vec3::X);
+                c.out.force(10, side.cross(up).normalize_or(Vec3::Y) * self.push);
+            }
             return;
         }
         self.t += dt;

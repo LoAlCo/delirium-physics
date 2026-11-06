@@ -111,6 +111,8 @@ pub struct Params {
     /// share of shotInjuredLeg's legInjury the limp takes as its amount. Ours (0.25): RDR2's own source of the amount
     /// isn't known, and the whole legInjury (0.3) took a quarter-metre off the leg and dropped him
     pub limp_scale: f32,
+    /// ctx+0x103c, written straight into the character by this message: self contacts shallower than this aren't recorded (0x2a39ee0)
+    pub ignore_depth: f32,
     /// behaviours' joint writes resolved as RDR2's prioritised limb requests (limbreq.rs); off: the last write wins
     pub limb_requests: bool,
     /// limb requests resolved highest slot first: RDR2's queue order (read: a stable insertion sort, highest priority, then
@@ -242,7 +244,7 @@ impl Default for Params {
                  slope_min_dot: 0.05, no_slope_time: 0.0, slope_move_foot: 0.07, slope_drop: [0.7, 1.8], ankle_equilibrium: 0.0, legs_apart_restep: 0.2,
                  legs_apart_max: 2.0, legs_together_restep: 1.0, step_decision_threshold: 0.0, step_wait: -1.0, change_step_time: -1.0,
                  always_step_with_farthest: false, run_vel: 100.0, leg_stiffness_run: 13.0, step_height_run: 0.6,
-                 taper_knee_strength_run: false, limp_scale: 1.0, limb_requests: true, limb_order_reversed: true,
+                 taper_knee_strength_run: false, limp_scale: 1.0, ignore_depth: -100.0, limb_requests: true, limb_order_reversed: true,
                  max_foot_speed: 5.0, ramp_hip_pitch_on_fail: true, prediction_time: 0.2, prediction_time_variance: 0.0,
                  step_clamp_scale_variance: 0.0, lift_feet: 0.07, lift_feet_variance: 0.0, lean_against_velocity: 0.0,
                  stand_up: false, extra_feet_apart: 0.0, feet_apart_min: 1.0, feet_apart_max: 1.0, feet_apart_vel: 100.0,
@@ -311,6 +313,7 @@ impl Params {
             "feetApartVel" => self.feet_apart_vel = v,
             "stopWaddling" => self.stop_waddling = v as i32,
             "sidewaysCheatForce" => self.sideways_cheat_force = v,
+            "ignoredepth" => self.ignore_depth = v,
             "sidewaysThresh" => self.sideways_thresh = v,
             "stepIfInSupport" => self.step_if_in_support = v != 0.0,
             "ankleOffset" => self.ankle_offset = v,

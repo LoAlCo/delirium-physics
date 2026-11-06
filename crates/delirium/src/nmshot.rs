@@ -588,6 +588,18 @@ impl Shot {
         // RDR2's reset points the fall-to-knees module at the character's record and inits it (0x2a966b8)
         if c.ch.rdr2 {
             crate::nmftk_rdr2::init(c);
+            // angVelScale: every part in the mask has its angular velocity scaled, once (0x2a4b1ac)
+            let k = p.rdr2.ang_vel_scale;
+            if (k - 1.0).abs() >= 1.2e-7 {
+                let mask = std::str::from_utf8(&p.rdr2.ang_vel_mask).unwrap_or("fb").to_string();
+                let joints = Character::mask(&mask);
+                let parts: Vec<usize> = joints.iter().map(|&j| c.ch.joints[j].child).chain((mask == "fb").then_some(0)).collect();
+                for &q in &parts {
+                    let w = c.b.part(q).w;
+                    c.out.key_vel.push((q, Vec3::ZERO, w * (k - 1.0)));
+                }
+                crate::extras_core_rdr2::trace_once("shot: angVelScale", || format!("{k} on {} parts", parts.len()));
+            }
         }
         if !s.no_balance && !(c.ch.rdr2 && c.sit_state.is_some()) {
             c.out.dbm = Some(true);
@@ -1715,6 +1727,8 @@ pub struct ShotRdr2 {
     /// RDR2's looseness and strength block beyond GTA IV's (rdr2_shot_core.md 3.1, 4.3, 4.4)
     pub looseness4_stagger: f32,
     pub use_cstr: bool,
+    /// angVelScale and its mask's two letters: applied once, at the shot's activation
+    pub ang_vel_mask: [u8; 2],
     pub cstr_upper_min: f32,
     pub cstr_upper_max: f32,
     pub cstr_lower_min: f32,
@@ -1741,7 +1755,7 @@ impl Default for ShotRdr2 {
                    braced_side_spin_mult: 1.0, shock_spin_max_twist_vel: -1.0, shock_spin_air_mult: 1.0, shock_spin_one_foot_mult: 1.0, shock_spin_scale_by_lever_arm: true,
                    fling2: false, fling2_side: [true; 2], fling2_override_stagger: false, fling2_before: 0.1, fling2_time: 0.5, fling2_mstiff: [0.95, -1.0],
                    fling2_stiff: [12.0; 2], fling2_damp: [0.7; 2], fling2_relax: [0.5; 2], fling2_angle: [[-1.5, 1.0]; 2], fling2_length: [[0.35, 0.6]; 2],
-                   looseness4_stagger: 0.0, use_cstr: false, cstr_upper_min: 0.1, cstr_upper_max: 1.0, cstr_lower_min: 0.1, cstr_lower_max: 1.0, bullet_proof_vest: false, always_reset_looseness: true, always_reset_neck: true, spine_blend_exag_cpain: false, floor_weakness_time: 0.1, floor_strength: 0.1, floor_joint_time: 0.1, floor_joint_strength: 0.01, ang_vel_scale: 1.0,
+                   looseness4_stagger: 0.0, use_cstr: false, ang_vel_mask: *b"fb", cstr_upper_min: 0.1, cstr_upper_max: 1.0, cstr_lower_min: 0.1, cstr_lower_max: 1.0, bullet_proof_vest: false, always_reset_looseness: true, always_reset_neck: true, spine_blend_exag_cpain: false, floor_weakness_time: 0.1, floor_strength: 0.1, floor_joint_time: 0.1, floor_joint_strength: 0.01, ang_vel_scale: 1.0,
                    always_reach_time: 0.3, aw_speed_mult: 1.0, aw_radius_mult: 1.0, aw_stiffness_add: 4.0, release_wound: 1 }
     }
 }

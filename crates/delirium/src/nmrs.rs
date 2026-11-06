@@ -553,6 +553,8 @@ pub struct Character {
     pub busy: [bool; 2],
     /// RDR2 core: sit on bodyBalance: noisy elbows (+0x150, cleared by its tick), the joints out of its mask, its target
     pub bb_noisy: bool,
+    /// RDR2: a reaction ramps its strength (shot+0x48 under 0.99): bodyBalance's "hit"
+    pub bb_hit: bool,
     pub bb_off: Vec<usize>,
     pub bb_target: Option<Vec3>,
     pub stabilise: Option<(f32, f32)>,
@@ -703,7 +705,7 @@ fn targets(j: &JointDef, e: &Effector) -> [f32; 3] {
 
 impl Character {
     pub fn new(joints: Vec<JointDef>, frames: &[Transform]) -> Character {
-        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], bb_noisy: false, bb_off: vec![], bb_target: None, stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, bcr_probe: None, cf_exclude: [false; 2], fow_state: None, core: CoreState::default() };
+        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], bb_noisy: false, bb_hit: false, bb_off: vec![], bb_target: None, stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, bcr_probe: None, cf_exclude: [false; 2], fow_state: None, core: CoreState::default() };
         c.seed(0);
         c.eff = (0..c.joints.len()).map(|i| Effector::new(&c.joints[i], c.angle(i, frames))).collect();
         static ONCE: std::sync::Once = std::sync::Once::new();
