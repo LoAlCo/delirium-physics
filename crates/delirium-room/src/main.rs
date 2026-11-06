@@ -3354,9 +3354,11 @@ impl Sim {
             return self.send_ours(o);
         }
         let (hit, now) = (self.hit(), self.now());
-        let mut rdr2 = if self.rdr2 { self.rdr2_shot(part, at, d) } else { vec![] };
+        // with the game's sets on, what runs is what they send: not the room's reactions (rdr2_tasks.md 5)
+        let game_sets = self.game_sets();
+        let mut rdr2 = if self.rdr2 && !game_sets { self.rdr2_shot(part, at, d) } else { vec![] };
         // the bullet's template and strength come before the bullet, as the game's list does; the rest with the reactions
-        let (early, later): (Vec<_>, Vec<_>) = self.game_shot_lines(part, d).into_iter().partition(|l| l.starts_with("configureBullets") || l.starts_with("setCharacterStrength"));
+        let (early, later): (Vec<_>, Vec<_>) = self.game_shot_lines(part, at, d).into_iter().partition(|l| l.starts_with("configureBullets") || l.starts_with("setCharacterStrength"));
         o.splice(0..0, early);
         rdr2.extend(later);
         match self.shot_task.as_mut() {
@@ -3403,8 +3405,13 @@ impl Sim {
         o.iter().map(rdr2_line).collect()
     }
 
+    /// RDR2_GAME_SETS under the RDR2 core: the file's sets drive a shot.
+    fn game_sets(&self) -> bool {
+        self.rdr2_core && std::env::var_os("RDR2_GAME_SETS").is_some()
+    }
+
     fn hit(&self) -> Hit {
-        Hit { health: self.health, ..Hit::ragdoll(&self.agent) }
+        Hit { health: self.health, game_sets: self.game_sets(), ..Hit::ragdoll(&self.agent) }
     }
 
     fn now(&self) -> u32 {
@@ -3978,7 +3985,7 @@ impl Sim {
 
     /// RDR2_GAME_SETS=<the weapon set's id>: under the RDR2 core a bullet also layers what the game's shot task queues
     /// for it (rdr2_tasks.md 2), from the player's file; the shot itself keeps its hit by taking them as values.
-    fn game_shot_lines(&mut self, part: usize, dir: Vec3) -> Vec<String> {
+    fn game_shot_lines(&mut self, part: usize, at: Vec3, dir: Vec3) -> Vec<String> {
         let Some(weapon) = std::env::var("RDR2_GAME_SETS").ok().filter(|_| self.rdr2_core) else { return vec![] };
         let sets = match Self::task_file() {
             Ok(s) => s,
@@ -3997,13 +4004,22 @@ impl Sim {
         };
         let ids = gametask::shot_sets(&weapon, hit);
         let named: Vec<_> = ids.iter().filter_map(|id| gametask::shot_set(&sets, id)).collect();
-        let merged = gametask::merge(named.iter().copied());
+        let merged = gametask::gate_modules(gametask::merge(named.iter().copied()), hit, part);
         let found = named.len();
         let (lines, _) = self.task_lines(&format!("shot's sets {} ({found} of {} in the file)", ids.join("+"), ids.len()), &merged);
         // the shot takes the sets' values with its start; ShotTask starts it with the hit
         let (shot, rest): (Vec<_>, Vec<_>) = lines.into_iter().partition(|l| l.starts_with("shot "));
         self.game_shot = shot.iter().map(|l| l[4..].replace(" start=true", "").replace(" start=false", "")).collect();
-        rest
+        // the bullet goes to reachForWound and an injured limb by NM's new-bullet router, not by the sets
+        rest.into_iter().map(|l| {
+            if l.starts_with("reachForWound start=true") {
+                format!("{l} hitPoint={} hitPart={part} bulletVel={}", v3(at), v3(dir))
+            } else if l.starts_with("shotInjuredLeg") || l.starts_with("shotInjuredArm") {
+                format!("{l} bodyPart={part}")
+            } else {
+                l
+            }
+        }).collect()
     }
 
     fn button(&mut self, b: &str) {
@@ -5212,6 +5228,11 @@ impl Sim {
             // the hit from ShotTask's line; its other values are the room's, and the game's start is on the defaults
             let hit: Vec<&str> = line.split(' ').filter(|w| ["bodyPart=", "hitPoint=", "bulletVel=", "normal="].iter().any(|k| w.starts_with(k))).collect();
             let l = format!("shot start=true {}{}", hit.join(" "), std::mem::take(&mut self.game_shot));
+            return self.send(&l);
+        }
+        // a later bullet: the same values on the running shot
+        if line.starts_with("shot bodyPart") && !self.game_shot.is_empty() {
+            let l = format!("{line}{}", std::mem::take(&mut self.game_shot));
             return self.send(&l);
         }
         self.send_to(0, line);

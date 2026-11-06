@@ -283,6 +283,36 @@ pub enum ShotHit {
     Leg,
 }
 
+/// The shot's sub-modules run by their own switch, whatever start their message says: its start only opens a block of
+/// parameters (rdr2_shot_core.md table 2, rdr2_tasks.md 5). So of the merged list, those that won't run are dropped.
+pub fn gate_modules(merged: Vec<SentMessage>, hit: ShotHit, part: usize) -> Vec<SentMessage> {
+    let flag = |m: &SentMessage, n: &str| m.params.iter().any(|p| p.hash == joaat(n) && matches!(p.val, Val::Bool(true)));
+    let shot = merged.iter().find(|m| m.hash == joaat("shot"));
+    let (allow_leg, allow_arm) = (shot.is_some_and(|s| flag(s, "allowInjuredLeg")), shot.is_some_and(|s| flag(s, "allowInjuredArm")));
+    let (leg, arm) = (matches!(part, 1..=6), matches!(part, 13..=20));
+    merged.into_iter().filter(|m| {
+        let h = m.hash;
+        let is = |n: &str| h == joaat(n);
+        if is("shotsnap") {
+            flag(m, "snap")
+        } else if is("shotingusts") {
+            flag(m, "shotInGuts")
+        } else if is("shotfrombehind") {
+            flag(m, "shotFromBehind") && hit == ShotHit::Back
+        } else if is("shotspin") {
+            flag(m, "shotspin")
+        } else if is("shotfalltoknees") {
+            flag(m, "FallToKnees")
+        } else if is("configureshotinjuredleg") {
+            allow_leg && leg
+        } else if is("configureshotinjuredarm") {
+            allow_arm && arm
+        } else {
+            true
+        }
+    }).collect()
+}
+
 /// A set of the shot's by its id: a name or the hash in hex, of any case.
 pub fn shot_set<'a>(all: &'a [Set], id: &str) -> Option<&'a Set> {
     let want = u32::from_str_radix(id, 16).ok().filter(|_| id.len() == 8).unwrap_or_else(|| joaat(id));
@@ -343,6 +373,10 @@ pub fn line(m: &SentMessage, port: &Message) -> (String, Vec<String>) {
         // uncracked in the code's table, named by the port (setFrictionScale's global clamp switch)
         let own = [(0xa7180f98u32, "clamp")];
         let wanted = own.iter().find(|o| o.0 == p.hash).map_or(p.hash, |o| joaat(o.1));
+        // a module's switch, used by gate_modules
+        if ["snap", "shotingusts", "shotfrombehind", "shotspin", "falltoknees"].iter().any(|n| joaat(n) == p.hash) && m.hash != joaat("shot") {
+            continue;
+        }
         let Some(prm) = port.params.iter().find(|x| joaat(x.name) == wanted) else {
             left.push(format!("{} (no such parameter)", p.label));
             continue;

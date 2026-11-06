@@ -605,6 +605,28 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "damping", kind: Kind::Float, used: true, doc: "" },
     ] },
     Message { name: "shot", params: &[
+        Param { name: "looseness4Stagger", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "useCStrModulation", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "cStrUpperMin", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "cStrUpperMax", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "cStrLowerMin", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "cStrLowerMax", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "bulletProofVest", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "alwaysResetLooseness", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "alwaysResetNeckLooseness", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "spineBlendExagCPain", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "floorWeaknessTime", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "floorStrength", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "floorJointWeaknessTime", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "floorJointStrength", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "angVelScale", kind: Kind::Float, used: false, doc: "RDR2 core: taken, not used: Delirium has no scale on a part's angular velocity here; every set on the three shots sends 1" },
+        Param { name: "angVelScaleMask", kind: Kind::Str, used: false, doc: "with angVelScale" },
+        Param { name: "looseness4Fall", kind: Kind::Float, used: false, doc: "RDR2's: no reader in its core functions" },
+        Param { name: "flingTime", kind: Kind::Float, used: false, doc: "RDR2's fling: its start needs a field only its own enter fills, so it doesn't start" },
+        Param { name: "deathTime", kind: Kind::Float, used: false, doc: "RDR2's: gated on two dying flags Delirium doesn't have" },
+        Param { name: "spineBlendPose", kind: Kind::Int, used: false, doc: "RDR2's 9de396e2: a pose index for the spine blend, not here" },
+        Param { name: "allowInjuredLeg", kind: Kind::Bool, used: false, doc: "RDR2: read by the room when it layers the game's sets" },
+        Param { name: "allowInjuredArm", kind: Kind::Bool, used: false, doc: "RDR2: read by the room when it layers the game's sets" },
         Param { name: "exagDuration", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "exagMag", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "exagTwistMag", kind: Kind::Float, used: true, doc: "RDR2 core only" },
@@ -1497,6 +1519,20 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("shot", "spineBlendZero") => { let p = &mut st.shot; p.rdr2.spine_blend_zero = v.f()?; }
         ("shot", "minArmsLooseness") => { let p = &mut st.shot; p.rdr2.min_arms_looseness = v.f()?; }
         ("shot", "minLegsLooseness") => { let p = &mut st.shot; p.rdr2.min_legs_looseness = v.f()?; }
+        ("shot", "looseness4Stagger") => { let p = &mut st.shot; p.rdr2.looseness4_stagger = v.f()?; }
+        ("shot", "useCStrModulation") => { let p = &mut st.shot; p.rdr2.use_cstr = v.b()?; }
+        ("shot", "cStrUpperMin") => { let p = &mut st.shot; p.rdr2.cstr_upper_min = v.f()?; }
+        ("shot", "cStrUpperMax") => { let p = &mut st.shot; p.rdr2.cstr_upper_max = v.f()?; }
+        ("shot", "cStrLowerMin") => { let p = &mut st.shot; p.rdr2.cstr_lower_min = v.f()?; }
+        ("shot", "cStrLowerMax") => { let p = &mut st.shot; p.rdr2.cstr_lower_max = v.f()?; }
+        ("shot", "bulletProofVest") => { let p = &mut st.shot; p.rdr2.bullet_proof_vest = v.b()?; }
+        ("shot", "alwaysResetLooseness") => { let p = &mut st.shot; p.rdr2.always_reset_looseness = v.b()?; }
+        ("shot", "alwaysResetNeckLooseness") => { let p = &mut st.shot; p.rdr2.always_reset_neck = v.b()?; }
+        ("shot", "spineBlendExagCPain") => { let p = &mut st.shot; p.rdr2.spine_blend_exag_cpain = v.b()?; }
+        ("shot", "floorWeaknessTime") => { let p = &mut st.shot; p.rdr2.floor_weakness_time = v.f()?; }
+        ("shot", "floorStrength") => { let p = &mut st.shot; p.rdr2.floor_strength = v.f()?; }
+        ("shot", "floorJointWeaknessTime") => { let p = &mut st.shot; p.rdr2.floor_joint_time = v.f()?; }
+        ("shot", "floorJointStrength") => { let p = &mut st.shot; p.rdr2.floor_joint_strength = v.f()?; }
         ("shot", "fallingReaction") => { let p = &mut st.shot; p.rdr2.falling_reaction = Some(v.i()?); }
         ("shot", "bracedSideSpinMult") => { let p = &mut st.shot; p.rdr2.braced_side_spin_mult = v.f()?; }
         ("shot", "shockSpinMaxTwistVel") => { let p = &mut st.shot; p.rdr2.shock_spin_max_twist_vel = v.f()?; }

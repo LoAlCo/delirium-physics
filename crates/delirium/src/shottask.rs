@@ -74,7 +74,7 @@ impl ShotTask {
         crate::bump::pain_line(hit.health, if hit.dying { 1 } else { 0 }, -1, true, rand);
         (self.lean_until, self.blind_until, self.blind_next, self.balance, self.look) = (0, 0, 0, false, false);
         let v = hit.vel;
-        if hit.moving && v.z.fma(v.z, v.x.fma(v.x, v.y * v.y)).sqrt() > 1.0 {
+        if hit.moving && !hit.game_sets && v.z.fma(v.z, v.x.fma(v.x, v.y * v.y)).sqrt() > 1.0 {
             self.balance = true;
             let m = |n: &str, or: f32| tp.get("NMShot_IsMoving", "*", n, or);
             return vec![
@@ -101,6 +101,10 @@ impl ShotTask {
         p.push(("grabHoldTime", F(st("shotGrabTime", delirium_data::kv!(5)))));
         if melee {
             p.extend([("useHeadLook", B(true)), ("melee", B(true))]);
+        }
+        // the game's sets are what runs: this task only hands on the hit (rdr2_tasks.md 5)
+        if hit.game_sets {
+            return vec![("shot", p)];
         }
         // RDR2 core: the shot values RDR2's task was recorded sending (rdr2-decomp/study/rdr2_nmx_compare.md)
         let rd = hit.rdr2;

@@ -1545,7 +1545,6 @@ impl Dbm {
             }
             return false;
         }
-        let hi = up.vd(s.com) - up.vd(l).max(up.vd(r));
         if let (Some(r), Some((al, ar))) = (self.p.rdr2, ankles) {
             // RDR2: the feet give out at giveupHeight whatever the knees do, and the ankles' own support test
             let ha = up.vd(s.com) - up.vd(al).min(up.vd(ar));
@@ -1557,6 +1556,8 @@ impl Dbm {
             }
             // RDR2's stagger mode: the COM too low over the higher foot (staggerFailHeight x leg length, the leg length
             // taken as his standing pelvis height)
+            // staggerFailHeight: the larger of the COM's heights over the two contacts (0x2abda8c)
+            let hi = up.vd(s.com) - up.vd(self.p.target[0]).min(up.vd(self.p.target[1]));
             if r.stagger && hi < r.p.stagger_fail_height * self.p.pelvis_height {
                 crate::extras_core_rdr2::trace(|| format!("balancer: fail test: stagger height {hi:.2} at {:.2} s", r.time));
                 return false;
