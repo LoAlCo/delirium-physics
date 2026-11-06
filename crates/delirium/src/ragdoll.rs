@@ -3336,6 +3336,20 @@ impl Ragdoll {
         let joints: Vec<Option<Joint>> = if std::mem::take(&mut self.wake_step) { joints.into_iter().map(|j| j.map(|j| Joint { stiff: delirium_data::kv!(35) * h, ..j })).collect() } else { joints };
         let was: Vec<Option<Joint>> = joints.iter().zip(&self.stiff).map(|(j, &stiff)| j.map(|j| Joint { stiff, ..j })).collect();
         let artic = self.artic(if was.len() == joints.len() { &was } else { &joints });
+        // RDR2 core: what NM applies is in the body's velocities when its step ends (0x2a13a80 hands the parts' impulses to
+        // the articulated body, 0x286646c, which propagates them at once, 0x2871a2c), so the drive and the contact solve see it
+        let mut vo0 = vo0;
+        let before: Vec<(Vec3, Vec3)> = self.bodies.iter().map(|b| (b.v, b.w)).collect();
+        if self.nm_first && !self.pending.is_empty() {
+            let vw = self.velocities(&artic, &vec![(Vec3::ZERO, Vec3::ZERO); self.bodies.len()], 0.0, false);
+            self.pending.clear();
+            for (k, (b, (v, w))) in self.bodies.iter_mut().zip(vw).enumerate() {
+                if let Some(o) = vo0.as_mut().and_then(|o| o.get_mut(k)) {
+                    *o += (v - b.v) - (w - b.w).vx(b.x);
+                }
+                (b.v, b.w) = (v, w);
+            }
+        }
         self.stiff = joints.iter().map(|j| j.map_or(0.0, |j| j.stiff)).collect();
         let mut lt: Vec<Acc> = vec![(Vec3::ZERO, Vec3::ZERO); self.bodies.len()];
         for k in 0..self.bodies.len() {
@@ -3385,8 +3399,7 @@ impl Ragdoll {
             vo[self.order[0]] = *v0;
         }
         if !moved_early {
-            for b in &mut self.bodies {
-                let (v, w) = (b.v, b.w);
+            for (b, &(v, w)) in self.bodies.iter_mut().zip(&before) {
                 b.moved(v, w, h);
             }
             self.rejoin(&joints, &pose);

@@ -616,7 +616,8 @@ impl Shot {
                 c.out.dbm_knee_scale = Some(0.5);
             }
         }
-        if p.use_catch_fall_on_fall {
+        // (GTA IV's: RDR2 has fallingReaction for it, and recorded the legs keep the balancer's damping on this tick, 24)
+        if p.use_catch_fall_on_fall && !c.ch.rdr2 {
             if s.flags & 1 == 0 {
                 c.out.hold_stiffness = true;
             }

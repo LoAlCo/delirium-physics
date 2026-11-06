@@ -261,6 +261,10 @@ impl Extras {
             for j in 0..ch.eff.len() {
                 let a = ch.actual(j, frames);
                 ch.eff[j].desired = a;
+                // type 5 resets the gains to the rig's first (rdr2_core.md 2.2): recorded, the muscle stiffness nobody asks for
+                // on this tick is the rig's (spine 1.5, wrist 10), which is what the impulse of this step meets
+                let jd = ch.joints[j].clone();
+                ch.eff[j].reset(&jd);
                 ch.eff[j].set_stiffness(5.0, 0.5, None);
             }
         }

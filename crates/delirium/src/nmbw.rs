@@ -119,7 +119,9 @@ impl Writhe {
             for j in Character::mask(self.mask) {
                 ch.eff[j].reset(&ch.joints[j]);
             }
-            self.stiffness_rdr2(ch, Some(0.75));
+            // (the back's muscle 0.75 in the pooled request, priority -10, doesn't reach the joint: recorded on all three shots,
+            // the spine's muscle on that tick is the rig's 1.5, under the writhe's strengths. Why isn't read, [P])
+            self.stiffness_rdr2(ch, None);
         }
     }
 

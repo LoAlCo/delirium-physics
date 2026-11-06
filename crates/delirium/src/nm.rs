@@ -1012,7 +1012,7 @@ impl Agent {
                         s.p = st.shot;
                     } else {
                         s.hit(st.shot);
-                        if let Some(ch) = self.ch.as_mut().filter(|_| !s.failed()) {
+                        if let Some(ch) = self.ch.as_mut().filter(|c| !s.failed() && !c.rdr2) {
                             hold_stiffness(ch);
                         }
                     }
@@ -1345,7 +1345,8 @@ impl Agent {
                 Some(s) => s.hit(p),
                 None => self.nm_shot = Some(crate::nmshot::Shot::activate(p, &mut c, dt)),
             }
-            if std::mem::take(&mut self.nm_hit_hold) && self.nm_shot.as_ref().is_some_and(|s| !s.failed()) {
+            // (GTA IV's: recorded, RDR2's legs keep the balancer's damping on the first tick, 24, and the upper body the shot's)
+            if std::mem::take(&mut self.nm_hit_hold) && !c.ch.rdr2 && self.nm_shot.as_ref().is_some_and(|s| !s.failed()) {
                 c.out.hold_stiffness = true;
             }
             for (p, body_part) in std::mem::take(&mut self.nm_hit_next) {
@@ -1354,7 +1355,7 @@ impl Agent {
                     s.p = p;
                 } else {
                     s.hit(p);
-                    if !s.failed() {
+                    if !s.failed() && !c.ch.rdr2 {
                         c.out.hold_stiffness = true;
                     }
                 }
@@ -1384,6 +1385,10 @@ impl Agent {
                 self.extras.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.hold(h));
             }
         }
+        // RDR2 core: what the start wrote is the shot's request, and what the balancer's start writes next is the balancer's
+        if let (Some(r), Some(ch)) = (self.limb_reqs.as_mut(), self.ch.as_ref()) {
+            r.mark(&ch.eff, crate::limbreq::SHOT);
+        }
         match out.dbm {
             Some(true) => {
                 (self.lean_bias, self.config.leg_stiffness) = (0.0, delirium_data::kv!(21));
@@ -1400,6 +1405,9 @@ impl Agent {
                     dbm.rdr2(crate::nmdbm_rdr2::Rdr2::new(p, self.random.next()));
                 }
                 dbm.activate(ch);
+                if let Some(r) = self.limb_reqs.as_mut() {
+                    r.mark(&ch.eff, 0x18);
+                }
                 let stand_height = dbm.p.pelvis_height.max(delirium_data::kv!(74));
                 match self.balance.as_mut() {
                     Some(b) => (b.dbm, b.idle) = (Some(dbm), false),
@@ -2440,6 +2448,12 @@ impl Agent {
             }
         }
         let dt = phys_dt;
+        // RDR2 core: the requests resolve first. The drive's damping floor (`muscles`) isn't a request: read after a low
+        // request wrote under the floor, it counted as the core's, over the behaviours above it
+        if let (Some(mut r), Some(ch)) = (self.limb_reqs.take(), self.ch.as_mut()) {
+            r.mark(&ch.eff, crate::limbreq::CORE);
+            r.resolve(&mut ch.eff, self.rdr2_core.is_some_and(|p| p.limb_order_reversed));
+        }
         let mut m: Vec<Muscle> = match self.ch.as_mut() {
             Some(ch) => ch.muscles(Muscle { target: self.zero[self.roles.pelvis], stiffness: 0.0, damping: 0.0 }),
             None => (0..n).map(|i| Muscle { target: self.zero[i], stiffness: body_k, damping: body_d }).collect(),
@@ -2462,10 +2476,6 @@ impl Agent {
                 _ => self.zero[i],
             }
         };
-        if let (Some(mut r), Some(ch)) = (self.limb_reqs.take(), self.ch.as_mut()) {
-            r.mark(&ch.eff, crate::limbreq::CORE);
-            r.resolve(&mut ch.eff, self.rdr2_core.is_some_and(|p| p.limb_order_reversed));
-        }
         if let (Some(ch), Some(d), false) = (self.ch.as_mut(), self.balance.as_ref().and_then(|b| b.dbm.as_ref()), self.fallen) {
             d.drain(ch);
         }
