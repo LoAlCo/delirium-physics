@@ -386,7 +386,7 @@ pub fn line(m: &SentMessage, port: &Message) -> (String, Vec<String>) {
         let own = [(0xa7180f98u32, "clamp"), (0x2bc0e7e9, "flatterSwingFeetRun"), (0xc5ebfd7b, "avoidFootWidthB"), (0x428c2b6f, "turnLiftFeet"), (0xcfe51361, "turnLiftFeetVariance"),
                    (0x96c82edf, "minLegTwistVariance"), (0x5831d084, "maxLegTwistVariance"), (0x747a3a5c, "slopePelvisBlend"), (0xa81569cc, "slopeDrop2"), (0xbcda0e93, "slopeDrop1"),
                    (0x47e73885, "maxStillTime"), (0x9de396e2, "spineBlendPose"), (0xae9bb2a3, "kTime"), (0x9be8054b, "spineLeanGain"), (0xcb0eb739, "armFriction")];
-        let wanted = own.iter().find(|o| o.0 == p.hash).map_or(p.hash, |o| joaat(o.1));
+        let wanted = own.iter().find(|o| o.0 == p.hash).map(|o| o.1).or_else(|| crate::own_names::OWN.iter().find(|o| o.0 == p.hash && port.params.iter().any(|x| x.name == o.1)).map(|o| o.1)).map_or(p.hash, joaat);
         // a module's switch, used by gate_modules
         if ["snap", "shotingusts", "shotfrombehind", "shotspin", "falltoknees"].iter().any(|n| joaat(n) == p.hash) && m.hash != joaat("shot") {
             continue;

@@ -28,6 +28,7 @@ mod fluid;
 mod fluid_gpu;
 mod foam;
 mod gametask;
+mod own_names;
 mod getup;
 mod learn;
 mod locomotion;
