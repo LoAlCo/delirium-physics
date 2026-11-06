@@ -5,7 +5,8 @@
 //! part; the three made of two capsules (the top of the neck, its middle and the head) get their second capsule as a
 //! part of its own, held to the first. While it's sound it's held in its pose, as RDR2 holds its horses on their
 //! animation; lamed or killed it falls as RDR2's ragdoll, and down and alive it does what RDR2's `quadrupedbase` does
-//! on the ground (see `Quadruped`).
+//! on the ground (see `Quadruped`). With the RDR2 core on, RDR2's own `quadruped` behaviour runs it instead, sound or
+//! not, from RDR2's code (horse_rdr2.rs).
 //!
 //! Where it isn't RDR2's: Delirium's parts hold their mass at their capsule's centre, so the 0.2 m RDR2 moves the
 //! pelvis's and the three spine links' centre of mass off theirs isn't there. The second capsules are held to their
@@ -16,6 +17,9 @@
 //! inside them (see `in_limits`). And the muscles' Euphoria stiffness (0.5, for the blend of a joint's drive) isn't
 //! used: Delirium's muscle takes RDR2's strength and damping.
 use crate::rdr2frag;
+#[path = "horse_rdr2.rs"]
+mod rdr2;
+pub use rdr2::TABLE;
 use bevy::prelude::*;
 use delirium::collision::Collision;
 use delirium::ragdoll::{Build, Capsule, Drive, Limit, Muscle, Obstacle, PartDef, Ragdoll, GRAVITY};
@@ -43,7 +47,7 @@ const PELVIS: usize = 0;
 /// RDR2's links for the root and the pelvis.
 const ROOT_LINK: usize = 0;
 const PELVIS_LINK: usize = 1;
-const MID: usize = 11;
+pub const MID: usize = 11;
 const SHOULDERS: usize = 12;
 /// A link's second capsule's joint to its first: its play, rad, and the muscle holding it, rad/s.
 const WELD_PLAY: f32 = 0.05;
@@ -185,6 +189,21 @@ pub struct Horse {
     pose: Vec<Transform>,
     held: bool,
     pushes: Vec<(usize, Vec3, Vec3)>,
+    /// RDR2 core: on (set every step), RDR2's `quadruped` settings and its state once started (horse_rdr2.rs), the
+    /// hits for it, the attached rider (defineAttachedObject: his place, velocity and mass), each part's joint's limit
+    /// centres in horse.xml's numbers and Spine2's "second axis" in its own frame
+    pub rdr2: bool,
+    pub r: rdr2::Params,
+    core: Option<Box<rdr2::Core>>,
+    rdr2_hits: Vec<(usize, Vec3, Vec3)>,
+    pub rider: Option<(Vec3, Vec3, f32)>,
+    centres: Vec<Vec3>,
+    /// each part's joint's muscle stiffness and force caps, from horse.xml
+    rig_ms: Vec<f32>,
+    rig_caps: Vec<[f32; 2]>,
+    spine_axis: Vec3,
+    /// Spine2's link's centre of mass in its capsule's frame: RDR2's part origin (Delirium's part sits at the capsule's centre)
+    spine_cg: Vec3,
 }
 
 /// RAGE's margin inside a joint's limits, rad, as the fragment stores them.
@@ -256,6 +275,8 @@ struct XmlJoint {
     parent: usize,
     limits: [(f32, f32); 3],
     muscle: [f32; 3],
+    /// its lean and twist force caps
+    caps: [f32; 2],
 }
 
 fn read_xml(text: &str) -> Result<Vec<XmlJoint>, String> {
@@ -270,6 +291,7 @@ fn read_xml(text: &str) -> Result<Vec<XmlJoint>, String> {
             limits: [(n("minfirstleanangle")?, n("maxfirstleanangle")?), (n("minsecondleanangle")?, n("maxsecondleanangle")?),
                      (n("mintwistangle")?, n("maxtwistangle")?)],
             muscle: [n("defaultMuscleStiffness")?, n("defaultMuscleStrength")?, n("defaultMuscleDamping")?],
+            caps: [n("defaultLeanForceCap")?, n("defaultTwistForceCap")?],
         })
     }).collect()
 }
@@ -312,6 +334,8 @@ impl Horse {
             Transform::from_translation(place(cap.at)).with_rotation(turn * room_turn(cap.turn))
         }).collect();
         let mut muscles = vec![(0.0, 1.0); part_of.len()];
+        let mut centres = vec![Vec3::ZERO; part_of.len()];
+        let (mut rig_ms, mut rig_caps) = (vec![1.0; part_of.len()], vec![[3000.0; 2]; part_of.len()]);
         let mut parts = vec![];
         for (k, &(l, c)) in part_of.iter().enumerate() {
             let cap = &fr.links[l].capsules[c];
@@ -332,6 +356,9 @@ impl Horse {
                 let s = strength.max(0.0).sqrt();
                 muscles[k] = (s, if s > 0.0 { damping / (2.0 * s) } else { 1.0 });
                 let half = |(lo, hi): (f32, f32)| (hi - lo) * 0.5;
+                let mid = |(lo, hi): (f32, f32)| (hi + lo) * 0.5;
+                centres[k] = Vec3::new(mid(x.limits[0]), mid(x.limits[1]), mid(x.limits[2]));
+                (rig_ms[k], rig_caps[k]) = (x.muscle[0], x.caps);
                 // the fragment keeps the same ranges, less RAGE's margin: a check the two files belong together
                 let theirs = Vec3::new(half(x.limits[0]), half(x.limits[1]), half(x.limits[2])) - Vec3::splat(RAGE_MARGIN);
                 if (theirs.max(Vec3::ZERO) - j.half).abs().max_element() > 0.01 {
@@ -383,11 +410,15 @@ impl Horse {
         let mid = frames[MID].rotation;
         let stand = mid.inverse() * Vec3::Z;
         let fwd = mid.inverse() * (frames[SHOULDERS].translation - frames[PELVIS].translation).normalize_or(turn * Vec3::X);
+        // Spine2's second axis (0x2ac70a4), the way that's up as it stands
+        let spine_axis = if (mid * Vec3::Y).z < 0.0 { Vec3::NEG_Y } else { Vec3::Y };
+        let spine_cg = fr.links[part_of[MID].0].capsules[part_of[MID].1].cg;
         let ups = frames.iter().map(|f| f.rotation.inverse() * Vec3::Z).collect();
         let lefts = frames.iter().map(|f| f.rotation.inverse() * (turn * Vec3::Y)).collect();
         Ok(Horse { build, doll, targets, muscles, health: HEALTH, legs: [0.0; 4], dead: false, sunk: 0.0, kept: Default::default(),
                    stand, fwd, ups, lefts, q: Quadruped::default(), fell: false, since_hit: f32::MAX, down: 0.0,
-                   pose: frames.clone(), held: true, pushes: vec![] })
+                   pose: frames.clone(), held: true, pushes: vec![], rdr2: false, r: Default::default(), core: None, rdr2_hits: vec![], rider: None,
+                   centres, rig_ms, rig_caps, spine_axis, spine_cg })
     }
 
     /// One physics step. While it's sound it's held in its pose, as RDR2 holds its horses on their animation (which
@@ -395,6 +426,12 @@ impl Horse {
     /// after the hit that lames or kills it it goes down: let go, it falls as RDR2's ragdoll with the hits' pushes, on
     /// RDR2's own muscles (horse.xml's). Dead, it lies limp; alive, it does `Quadruped`'s ground behaviours.
     pub fn step(&mut self, world: &Collision, dt: f32, obstacles: &[Obstacle], others: &[Capsule]) {
+        if self.rdr2 {
+            return self.step_rdr2(world, dt, obstacles, others);
+        }
+        if self.core.is_some() {
+            self.stop_rdr2();
+        }
         let (legs, dead) = (self.legs, self.dead);
         let level = self.stand;
         let fr: Vec<Transform> = self.doll.frames().collect();
@@ -545,7 +582,57 @@ impl Horse {
 
     /// Still on its feet.
     pub fn standing(&self) -> bool {
+        if self.rdr2 {
+            return self.standing_rdr2();
+        }
         self.sunk <= GIVE
+    }
+
+    /// Sets a setting by RDR2's name: `quadrupedbase`'s (`q`) and, for the RDR2 core, `quadruped`'s (`r`).
+    pub fn set(&mut self, name: &str, value: &str) -> bool {
+        let a = self.q.set(name, value);
+        let b = self.r.set(name, value);
+        a || b
+    }
+
+    /// A set from the player's physicstasks, for RDR2's core: `quadrupedbase` (a start reloads the defaults first; the
+    /// handler 0x2a6bcd8), ?e35a5d1a and stayUpright. Says what it took and what's left; setOpposeGravity does nothing on
+    /// a quadruped (0x2a45344).
+    pub fn task(&mut self, messages: &[crate::gametask::SentMessage]) -> Vec<String> {
+        use crate::gametask::{joaat, Val};
+        let num = |m: &crate::gametask::SentMessage, h: u32| m.params.iter().find(|p| p.hash == h).and_then(|p| match p.val { Val::Float(f) => Some(f), Val::Int(i) => Some(i as f32), _ => None });
+        let vect = |m: &crate::gametask::SentMessage, h: u32| m.params.iter().find(|p| p.hash == h).and_then(|p| match p.val { Val::Vec3(v) => Some(Vec3::from_array(v)), _ => None });
+        let flag = |m: &crate::gametask::SentMessage, h: u32| m.params.iter().find(|p| p.hash == h).and_then(|p| match p.val { Val::Bool(b) => Some(b), _ => None });
+        let mut said = vec![];
+        for m in messages {
+            if m.hash == joaat("quadrupedbase") {
+                if flag(m, joaat("start")) == Some(true) {
+                    let (limits, stay) = (self.r.limits, self.r.stay);
+                    self.r = Default::default();
+                    (self.r.limits, self.r.stay) = (limits, stay);
+                }
+                let list: Vec<(u32, Val)> = m.params.iter().map(|p| (p.hash, p.val.clone())).collect();
+                let left = self.r.message(&list);
+                said.push(format!("quadrupedbase: {} values{}", m.params.len(), if left.is_empty() { String::new() } else { format!(", not the behaviour's: {left:x?}") }));
+            } else if m.hash == 0xe35a5d1a {
+                let Some(limb) = num(m, 0x4e70182d) else { continue };
+                let l = rdr2::LimbLimit { kind: num(m, 0x3165b05d).unwrap_or(0.0) as i32, dir: num(m, 0x34df9828).unwrap_or(-1.0),
+                                          min: num(m, 0xfe30e6f3).unwrap_or(-std::f32::consts::PI), max: num(m, 0x606068c4).unwrap_or(std::f32::consts::PI),
+                                          a38: num(m, 0x7fb46a89).unwrap_or(0.0), a3c: num(m, 0xd2e95bdb).unwrap_or(0.0) };
+                self.limb_message(limb as usize, l);
+                said.push(format!("quadLimbLimit: limb {limb} type {} [{}, {}]", l.kind, l.min, l.max));
+            } else if m.hash == joaat("stayUpright") {
+                if flag(m, joaat("useTorques")) == Some(true) {
+                    self.r.stay = Some(rdr2::Stay { strength: vect(m, joaat("torqueStrength")).unwrap_or(Vec3::ZERO), damping: vect(m, joaat("torqueDamping")).unwrap_or(Vec3::ZERO),
+                                                    parts: flag(m, joaat("torqueparts")).unwrap_or(false), reduction: num(m, joaat("torqueleanreduction")).unwrap_or(0.0),
+                                                    lean_min: num(m, joaat("torqueleanmin")).unwrap_or(0.0), lean_max: num(m, joaat("torqueleanmax")).unwrap_or(0.0) });
+                    said.push("stayUpright: torques".into());
+                }
+            } else {
+                said.push(format!("{}: not the horse's", m.label));
+            }
+        }
+        said
     }
 
     /// Its saddle: where a rider's pelvis sits (over the barrel's middle), the barrel's up and which way it faces, and
@@ -562,6 +649,9 @@ impl Horse {
 
     /// What it's doing, for the panel.
     pub fn state(&self) -> String {
+        if self.rdr2 && !self.dead {
+            return self.state_rdr2();
+        }
         if self.dead {
             "dead".into()
         } else if self.sunk > GIVE {
@@ -599,7 +689,10 @@ impl Horse {
         if self.dead {
             return format!("{}: hit, dead already", self.build.parts[part].name);
         }
-        if damage > 0.0 {
+        if damage > 0.0 && self.rdr2 {
+            // RDR2 core: the quadruped's newHit (its own snap, off by default)
+            self.rdr2_hits.push((part, at, impulse));
+        } else if damage > 0.0 {
             self.since_hit = 0.0;
             if self.q.snap && impulse != Vec3::ZERO {
                 self.doll.impulse(0, at, impulse.normalize() * self.q.snap_mag * 60.0);

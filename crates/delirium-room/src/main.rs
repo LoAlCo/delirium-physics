@@ -3983,6 +3983,25 @@ impl Sim {
         gametask::sets(&file).ok_or_else(|| "room  rdr2 task: couldn't read the file".to_string())
     }
 
+    /// RDR2 core: the horse takes a set from the player's physicstasks: `stand`, `walk`, a hash of CTaskNMQuadruped's, or a
+    /// full selector (`CTaskNMOnFire/Start`, read by the sets' path).
+    fn horse_task(&mut self, sel: &str) {
+        let sets = match Self::task_file() {
+            Ok(s) => s,
+            Err(e) => return self.say(e),
+        };
+        let want = if sel.contains('/') { sel.to_string() } else { format!("CTaskNMQuadruped/{sel}") };
+        let hits: Vec<_> = sets.iter().filter(|s| gametask::selects(&want, &s.path)).collect();
+        let Some(set) = hits.first() else { return self.say(format!("room  horse task: no set {want}")) };
+        let merged = gametask::merge(hits.iter().take(1).copied());
+        let said = self.horse.as_mut().map_or(vec![], |h| h.task(&merged));
+        let path = set.path.join("/");
+        if std::env::var_os("RDR2_TRACE").is_some() {
+            said.iter().for_each(|l| eprintln!("horse task {path}: {l}"));
+        }
+        self.say(format!("room  horse task {path}: {} messages", merged.len()));
+    }
+
     /// The message lines of a merged list, and what the port doesn't take of it (RDR2_TRACE=1 prints each).
     fn task_lines(&mut self, head: &str, merged: &[gametask::SentMessage]) -> (Vec<String>, Vec<String>) {
         let (mut sent, mut left, mut lines) = (0, vec![], vec![]);
@@ -9700,11 +9719,12 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
                 }
                 Some("ride") => sim.ride(),
                 Some(d) if d.starts_with("frag ") => sim.horse_frag = d[5..].trim().into(),
+                Some(d) if d.starts_with("task ") => sim.horse_task(d[5..].trim()),
                 Some("off ride") | Some("getoff") => sim.send("rdr2Sit throw=true"),
                 Some(d) if d.starts_with("set ") => {
                     let mut w = d[4..].split_whitespace();
                     let (name, v) = (w.next().unwrap_or(""), w.next().unwrap_or(""));
-                    let ok = sim.horse.as_mut().is_some_and(|h| h.q.set(name, v));
+                    let ok = sim.horse.as_mut().is_some_and(|h| h.set(name, v));
                     sim.say(format!("room  horse: {name} {}", if ok { v } else { "? (no horse, no such setting, or not a value)" }));
                 }
                 d => {
@@ -10031,6 +10051,10 @@ impl Sim {
         if let Some(h) = self.horse.as_mut() {
             // ridden, Homer's body doesn't push on it (held in the seat, he'd act as if he weighed everything)
             let riding = self.riding && self.agent.extras.on.iter().any(|(n, _)| *n == "rdr2Sit");
+            // RDR2 core: RDR2's quadruped runs the horse; RDR2's sit attaches the rider to it (defineAttachedObject: his
+            // mass in the horse's COM only: no gravity opposition on a quadruped)
+            h.rdr2 = self.rdr2_core;
+            h.rider = (self.rdr2_core && riding).then(|| (h.saddle().0, self.agent.doll.vel(0).0, self.agent.doll.mass()));
             let homer = if riding { vec![] } else { caps_of(&self.build, &self.agent.doll) };
             h.step(&self.world, 1.0 / 60.0, &car, &homer);
         }
@@ -10160,10 +10184,21 @@ fn headless(mut sim: Sim, n: usize) {
         sim.horse_frag = std::env::var("HORSE_FRAG").unwrap_or_default();
         sim.spawn_horse();
         for kv in std::env::var("HORSE_SET").unwrap_or_default().split(',').filter_map(|kv| kv.split_once('=')) {
-            if let Some(h) = sim.horse.as_mut() && !h.q.set(kv.0, kv.1) {
+            if let Some(h) = sim.horse.as_mut() && !h.set(kv.0, kv.1) {
                 eprintln!("horse: no setting {kv:?}");
             }
         }
+        // HORSE_TASK=<set>: the set from the player's physicstasks (RDR2_TUNE_DIR), for the RDR2 core; set after HORSE_SET
+        if let Ok(t) = std::env::var("HORSE_TASK") {
+            sim.horse_task(&t);
+            for kv in std::env::var("HORSE_SET").unwrap_or_default().split(',').filter_map(|kv| kv.split_once('=')) {
+                if let Some(h) = sim.horse.as_mut() {
+                    h.set(kv.0, kv.1);
+                }
+            }
+        }
+        let mut not_finite = 0usize;
+        let (mut top_v, mut top_w) = (0.0f32, 0.0f32);
         for i in 0..n {
             // HORSE_RIDE: Homer gets on at 0.5 s; =throw throws him off at 4 s, =push shoves his chest sideways then,
             // =drag gets on with drag=true and throws him off at 4 s; with the core, =dead sends health=0 at 4 s,
@@ -10194,6 +10229,20 @@ fn headless(mut sim: Sim, n: usize) {
                 }
             }
             sim.tick();
+            // the horse's numbers to stdout as hex (the bit patterns show a NaN), and what the check asks
+            if let Some(h) = sim.horse.as_ref() {
+                let mut line = String::new();
+                for (k, f) in h.doll.frames().enumerate() {
+                    let (v, w) = h.doll.vel(k);
+                    (top_v, top_w) = (top_v.max(v.length()), top_w.max(w.length()));
+                    for x in f.translation.to_array().into_iter().chain(f.rotation.to_array()) {
+                        not_finite += !x.is_finite() as usize;
+                        line += &format!("{:08x}", x.to_bits());
+                    }
+                    not_finite += !(v.is_finite() && w.is_finite()) as usize;
+                }
+                println!("{line}");
+            }
             if let (Some(h), 0, true) = (sim.horse.as_ref(), i % 30, std::env::var("HORSE_RIDE").is_ok()) {
                 let p = sim.agent.doll.frames().next().map_or(Vec3::ZERO, |f| f.translation);
                 let head = sim.agent.doll.frames().nth(12).map_or(Vec3::ZERO, |f| f.translation);
@@ -10222,11 +10271,14 @@ fn headless(mut sim: Sim, n: usize) {
             }
             if let Ok(t) = std::env::var("HORSE_SHOOT") && i == 120 {
                 for n in t.split(',').filter_map(|x| x.parse::<usize>().ok()) {
-                    let s = sim.horse.as_mut().map(|h| { let at = h.doll.frames().nth(n).map_or(Vec3::ZERO, |f| f.translation); h.hit(n, at, Vec3::Y * 40.0, 40.0) });
+                    // HORSE_IMP: the push's size, N s (40)
+                    let imp = std::env::var("HORSE_IMP").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(40.0);
+                    let s = sim.horse.as_mut().map(|h| { let at = h.doll.frames().nth(n).map_or(Vec3::ZERO, |f| f.translation); h.hit(n, at, Vec3::Y * imp, 40.0) });
                     eprintln!("horse shot part {n}: {}", s.unwrap_or_default());
                 }
             }
         }
+        eprintln!("horse end: {not_finite} numbers not finite, top part speed {top_v:.2} m/s, top part spin {top_w:.2} rad/s");
         let core = std::env::var("HORSE_CORE").is_ok();
         for (t, l, _) in &sim.log {
             if l.contains("horse") || l.contains("rdr2Sit") || l.contains("ride") || (core && l.contains("MSG")) { eprintln!("{t:.2} {}", l.chars().take(160).collect::<String>()); }
@@ -11441,6 +11493,15 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                         }
                         if ui.button("RDR2's defaults").clicked() {
                             h.q = horse::Quadruped::default();
+                        }
+                    });
+                    ui.collapsing("RDR2 core: RDR2's quadruped (its balancer)", |ui| {
+                        info(ui, "With the RDR2 core on, RDR2's own quadruped behaviour runs the horse: it stands on its legs, steps when its centre of mass leaves its hooves, and goes down, scrabbles and writhes by RDR2's code. Its settings by RDR2's names (hashes where RDR2's strings don't name them), with RDR2's defaults; yes/no ones are 1/0. !horse task stand takes the game's own values from your physicstasks (--tune-dir).");
+                        for (i, (n, _, lo, hi)) in horse::TABLE.iter().enumerate() {
+                            ui.add(egui::Slider::new(&mut h.r.v[i], *lo..=hi.min(100.0)).text(*n));
+                        }
+                        if ui.button("RDR2's defaults").clicked() {
+                            h.r = Default::default();
                         }
                     });
                 }
