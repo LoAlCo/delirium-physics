@@ -510,6 +510,10 @@ impl TeeterRdr2 {
 /// RDR2's highFall parameters, RDR2's defaults where none is given (GTA IV's message names and RDR2's).
 #[derive(Clone, Copy, Debug)]
 struct HfParams {
+    /// rdsUseStartingFriction, rdsStartingFriction, changeExtremityFriction, rdsStartingFrictionMin, blendHeadWhenStopped, spreadLegs
+    start_friction: (bool, f32, bool, f32),
+    blend_head: f32,
+    spread_legs: f32,
     body_stiffness: f32,
     body_damping: f32,
     catch_fall_time: f32,
@@ -560,6 +564,8 @@ impl HfParams {
         let roll = b(p, "fowardRoll", false)?;
         let offset = f(p, "fowardOffsetOfLegIK", 0.0)?;
         Ok(HfParams {
+            start_friction: (p.b("rdsUseStartingFriction", false)?, f(p, "rdsStartingFriction", 0.0)?, p.b("changeExtremityFriction", false)?, f(p, "rdsStartingFrictionMin", 0.0)?),
+            blend_head: f(p, "blendHeadWhenStopped", 0.0)?, spread_legs: f(p, "spreadLegs", 0.1)?,
             body_stiffness: f(p, "bodyStiffness", 11.0)?, body_damping: f(p, "bodydamping", 1.0)?, catch_fall_time: f(p, "catchfalltime", 0.3)?,
             crash_or_land_cut_off: f(p, "crashOrLandCutOff", 0.868)?, pd_strength: f(p, "pdStrength", 0.0)?, pd_damping: f(p, "pdDamping", 1.0)?,
             catch_fall_cut_off: f(p, "catchFallCutOff", 0.878)?, arms_up: f(p, "armsUp", -3.1)?, leg_radius: f(p, "legRadius", 0.4)?,
@@ -732,7 +738,7 @@ impl HighFall {
         }
     }
 
-    fn enter(&mut self, _c: &mut Ctx, s: u8) {
+    fn enter(&mut self, c: &mut Ctx, s: u8) {
         match s {
             0 => (self.pd, self.touch_t) = (true, 0.0),
             1 => self.contact = false,
@@ -746,6 +752,27 @@ impl HighFall {
                 self.s6 = 1.0;
                 self.halt("bodyFoetal");
                 self.halt("pedalLegs");
+                // the friction on the way into the roll (5.6's enter): the body, and with changeExtremityFriction the head
+                // and neck, a third on the hands and feet; a floor if it's given
+                let (on, fr, ext, min) = self.p.start_friction;
+                if on {
+                    let cfg = &mut c.ch.core.cfg;
+                    const BODY: u32 = 0xffe6df5f;
+                    for r in 0..21 {
+                        let k = crate::extras_ysk_rdr2::rp(r);
+                        if BODY >> r & 1 != 0 { cfg.fric[k] = fr; }
+                        if ext && 0x102000u32 >> r & 1 != 0 { cfg.fric[k] = fr; }
+                        if ext && 0x900a0u32 >> r & 1 != 0 { cfg.fric[k] = fr / 3.0; }
+                    }
+                    cfg.fric_used = true;
+                    crate::extras_core_rdr2::trace(|| format!("smartFall: starting friction {fr}, extremities {ext}, floor {min}"));
+                }
+                let cfg = &mut c.ch.core.cfg;
+                if min > 0.0 {
+                    (cfg.fric_min, cfg.fric_clamp) = (min, true);
+                } else {
+                    cfg.fric_clamp = false;
+                }
                 self.on.retain(|&n| n != "catchFall");
                 let l = self.catch_fall_line();
                 self.ensure("catchFall", l);
@@ -970,6 +997,16 @@ impl HighFall {
         self.ensure("catchFall", l);
         if !self.p.balance {
             c.ch.set_stiffness(6.0, 1.0, "fb", Some(0.5));
+        }
+        // blendHeadWhenStopped: slower than it, the neck and head blend to straight by what's left of it
+        if self.p.blend_head > 0.0 {
+            let x = self.p.blend_head;
+            let w = 1.0 - c.vel.length().min(x) / x;
+            for &j in NECK().iter() {
+                let e = &mut c.ch.eff[j];
+                e.desired = e.desired.map(|a| a * (1.0 - w));
+            }
+            crate::extras_core_rdr2::trace_first("smartFall: head blend when stopped");
         }
         if c.vel.length() < 0.075 {
             self.feedback(c, true);

@@ -662,7 +662,8 @@ fn limits(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     let (margin, l1, l2, tw) = (p.f("margin", 0.19635)?, p.f("lean1", 1.570796)?, p.f("lean2", 1.570796)?, p.f("twist", 1.570796)?);
     Ok(once(move |c| {
         let on = joint_mask(&mask);
-        let joints: Vec<usize> = if idx >= 0 { vec![idx as usize] } else { (0..c.ch.eff.len()).filter(|&j| on.get(j).copied().unwrap_or(false)).collect() };
+        // (the index by RDR2's numbers: a joint is its child part less one)
+        let joints: Vec<usize> = if idx >= 0 { vec![crate::extras_ysk_rdr2::rp(idx as usize + 1).saturating_sub(1)] } else { (0..c.ch.eff.len()).filter(|&j| on.get(j).copied().unwrap_or(false)).collect() };
         let n = c.ch.eff.len();
         for &j in joints.iter().filter(|&&j| j < n) {
             if !enable {
@@ -812,7 +813,7 @@ fn collisions(p: &mut P) -> Result<Box<dyn Extra>, Error> {
 /// shotNewBullet (0x2a546c8): a new bullet record for the behaviours asked (shot's 0x2ad4a10, duck's 0x2ad2bc8), without a
 /// new impulse: the point from the message, in the part's space if it says so, else the part's centre.
 fn new_bullet(p: &mut P) -> Result<Box<dyn Extra>, Error> {
-    let part = p.i("bodyPart", 0)?.max(0) as usize;
+    let part = crate::extras_ysk_rdr2::rp(p.i("bodyPart", 0)?.max(0) as usize);
     let local = p.b("localHitPointInfo", false)?;
     let at = p.get("hitPoint").is_some().then(|| p.v("hitPoint", Vec3::ZERO)).transpose()?;
     let n = p.v("normal", Vec3::Z)?;

@@ -972,6 +972,9 @@ impl Character {
             let (three, r) = (self.joints[j].three, rate(j));
             let t = &mut self.core.lim[j];
             let to = |now: f32, want: f32, snap: bool| if snap || want == now { want } else if want < now { (now - r * dt).max(want) } else { (now + r * dt).min(want) };
+            if t.live != t.work && t.work != t.base {
+                crate::extras_core_rdr2::trace(|| format!("limit table: joint {j} from {:.3?} to {:.3?}, rig {:.3?}", t.live, t.work, t.base0));
+            }
             if three {
                 for k in 0..3 {
                     t.live[k] = to(t.live[k], t.work[k], t.live[k] < t.work[k]).clamp(0.0, MOST);
@@ -999,7 +1002,9 @@ impl Character {
         }
         const OUT: u32 = 0xd80f0;
         let up = self.up;
-        let down = hit.iter().enumerate().any(|(k, n)| OUT >> k & 1 == 0 && n.is_some_and(|n| n.dot(up) > 0.77));
+        let rp = crate::extras_ysk_rdr2::rp;
+        // RDR2's part numbers, ours under them
+        let down = (0..21).filter(|r| OUT >> r & 1 == 0).any(|r| hit.get(rp(r)).copied().flatten().is_some_and(|n| n.dot(up) > 0.77));
         let (bent0, bent1) = (actual[0] < -1.5, actual[1] < -1.5);
         let bent = bent0 || bent1;
         let mut pick = first;
@@ -1008,15 +1013,15 @@ impl Character {
         }
         if down {
             let cfg = &mut self.core.cfg;
-            (cfg.fric[5], cfg.fric[7]) = (1.0, 1.0);
+            (cfg.fric[rp(5)], cfg.fric[rp(7)]) = (1.0, 1.0);
             if bent {
-                cfg.fric[if pick { 5 } else { 7 }] = f.foot_friction;
+                cfg.fric[rp(if pick { 5 } else { 7 })] = f.foot_friction;
                 cfg.fric_used = true;
                 crate::extras_core_rdr2::trace_first("knee tweak: a bent knee's foot lets go");
             }
         } else {
             let mask: u32 = if pick { 0x32 } else { 0xc4 };
-            if touch.iter().enumerate().any(|(k, &t)| t && mask >> k & 1 != 0) {
+            if (0..21).filter(|r| mask >> r & 1 != 0).any(|r| touch.get(rp(r)).copied().unwrap_or(false)) {
                 self.lim_raise_hinge(knees[if pick { 0 } else { 1 }], -f.knee_limit, 0.0);
                 crate::extras_core_rdr2::trace_first("knee tweak: the knee may fold");
             }

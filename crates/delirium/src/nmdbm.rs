@@ -1945,6 +1945,20 @@ impl Dbm {
     }
 
     pub fn apply(&self, s: &Snap, ch: &mut Character) {
+        // RDR2 (the tail of 0x2aba1cc): the ankles' limit half-ranges this tick. On a slope, moving back or slow, lean1 at least
+        // 1; starting a crouch 1.4 [P: without the depth test]
+        if let Some(r) = self.p.rdr2.as_ref() {
+            let up = self.p.up;
+            let (hv, hc) = (s.vel - up * up.vd(s.vel), s.m.c - up * up.vd(s.m.c));
+            let raise = if r.on_slope && (hv.vd(hc) > 0.0 || s.vel.length() < r.p.legs_apart_restep.max(0.7)) { 1.0 } else { 0.0 };
+            let raise = if r.crouching.is_some() { 1.4f32.max(raise) } else { raise };
+            if raise > 0.0 {
+                for i in 0..2 {
+                    ch.lim_raise((*ANKLE())[i], [raise, 0.0, 0.0]);
+                }
+                crate::extras_core_rdr2::trace_first("balancer: the ankles' limits raised");
+            }
+        }
         for i in 0..2 {
             let leg = &s.legs[i];
             ch.eff[(*HIP())[i]].desired = leg.hip.desired;

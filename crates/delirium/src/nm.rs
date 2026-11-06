@@ -2424,8 +2424,9 @@ impl Agent {
                 }
                 if out_hit && cfg.coll.on && s.vel.length() < cfg.coll.max_speed {
                     let r = cfg.coll;
+                    let rp = crate::extras_ysk_rdr2::rp;
                     for k in 0..frames.len().min(32) {
-                        let scale = if matches!(k, 5 | 7) { r.scale[1] } else { r.scale[0] };
+                        let scale = if k == rp(5) || k == rp(7) { r.scale[1] } else { r.scale[0] };
                         part_scales.0.push((k, if r.cap < 0.0 { scale } else { scale.min(r.cap) }));
                     }
                     if r.foot_slip {
