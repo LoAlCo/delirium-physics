@@ -606,6 +606,8 @@ pub struct CoreState {
     pub bullet: Option<bevy_math::Vec3>,
     /// the fall-to-knees record (ctx+0x2e20)
     pub ftk: crate::nmftk_rdr2::Ftk,
+    /// what RDR2's core messages hold (extras_core_rdr2.rs)
+    pub cfg: crate::extras_core_rdr2::CoreCfg,
     /// the foot yaw hold runs (ctx+0x47fd), and its latches are let go this step (ctx+0x4800, +0x4801)
     pub foot_hold: bool,
     pub foot_unlatch: bool,
@@ -625,7 +627,7 @@ pub struct RdsKnee {
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
+        CoreState { foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 

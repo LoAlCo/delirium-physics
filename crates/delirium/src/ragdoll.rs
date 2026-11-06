@@ -20,6 +20,13 @@ fn LOCK_SLACK() -> f32 { delirium_data::kv!(119) }
 #[allow(non_snake_case)]
 #[inline]
 fn WORLD_MARGIN() -> f32 { delirium_data::kv!(566) }
+fn clamp_fric(c: Option<(f32, f32)>, x: f32) -> f32 {
+    match c {
+        Some((lo, hi)) => x.clamp(lo, hi.max(lo)),
+        None => x,
+    }
+}
+
 fn part_friction(p: &PartDef) -> f32 {
     if p.name.ends_with("Foot") { 1.0 } else if p.name.ends_with("Hand") { delirium_data::kv!(141) } else { delirium_data::kv!(18) }
 }
@@ -1628,6 +1635,8 @@ pub struct Ragdoll {
     pub hit_out: Vec<Option<(Vec3, Vec3, f32)>>,
     /// RDR2 core: per-part friction scales (ctx+0x3570), empty: all 1
     pub fric: Vec<f32>,
+    /// RDR2 core: setFrictionScale's clamp on a contact's friction
+    pub fric_clamp: Option<(f32, f32)>,
     /// RDR2 core: per-part joint limit half-range floors (lean1, lean2, twist), empty: none
     pub lim_floor: Vec<[f32; 3]>,
     /// RDR2 core: per-part collision radius scales (empty: none; sit's pelvis and thighs)
@@ -1766,7 +1775,7 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+        Ragdoll { fric_clamp: None, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
                   sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
@@ -2531,7 +2540,7 @@ impl Ragdoll {
                 self.touch[i] |= touch;
                 add(at + o, r.n, -r.gap, -1);
                 hit_ob.push((hits.len(), world_id(r.inst), at + o, r.n));
-                hits.push((i, at, r.n, r.gap, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0), Vec3::ZERO, (PART_ELASTICITY() * row[1]).min(1.0), Some((i, k)), at));
+                hits.push((i, at, r.n, r.gap, clamp_fric(self.fric_clamp, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0)), Vec3::ZERO, (PART_ELASTICITY() * row[1]).min(1.0), Some((i, k)), at));
             }
             let a_last = (last, self.seen.get(i).map_or(tm, |s| s.1));
             for ob in obstacles.iter().filter(|ob| !self.joins.iter().any(|j| j.2 == ob.id)) {
@@ -2600,7 +2609,7 @@ impl Ragdoll {
                             _ => ob.vel_at(on + o),
                         };
                         let row = ob.surface(cp);
-                        hits.push((i, at, r.n, r.gap, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0), v, (PART_ELASTICITY() * row[1]).min(1.0), Some((car_base + s, k)), on));
+                        hits.push((i, at, r.n, r.gap, clamp_fric(self.fric_clamp, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0)), v, (PART_ELASTICITY() * row[1]).min(1.0), Some((car_base + s, k)), on));
                     }
                 }
             }

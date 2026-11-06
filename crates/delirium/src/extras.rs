@@ -5,7 +5,7 @@ use bevy_transform::components::Transform;
 pub fn messages() -> impl Iterator<Item = &'static Message> {
     MESSAGES.iter().chain(&crate::extras_fall::MESSAGES).chain(&crate::extras_held::MESSAGES).chain(&crate::extras_rdr2::MESSAGES)
         .chain(&crate::extras_pg_rdr2::MESSAGES).chain(&crate::extras_cf_rdr2::MESSAGES)
-        .chain(&crate::extras_ysk_rdr2::MESSAGES)
+        .chain(&crate::extras_ysk_rdr2::MESSAGES).chain(&crate::extras_core_rdr2::MESSAGES)
 }
 
 pub static MESSAGES: [Message; 3] = [
@@ -236,7 +236,7 @@ impl Extras {
                 Some(e) => e,
                 None => match crate::extras_rdr2::build(name, &mut p) {
                     Some(e) => e,
-                    None => match crate::extras_ysk_rdr2::build(name, &mut p) {
+                    None => match crate::extras_ysk_rdr2::build(name, &mut p).or_else(|| crate::extras_core_rdr2::build(name, &mut p)) {
                         Some(e) => e,
                         None => crate::extras_held::build(name, &mut p).expect("every extra's message builds"),
                     },
@@ -596,7 +596,7 @@ pub mod param_audit {
                 let _ = match name {
                     "electrocute" => Some(Electrocute::new(&mut p).map(|e| Box::new(e) as Box<dyn Extra>)),
                     _ => crate::extras_fall::build(name, &mut p).or_else(|| crate::extras_rdr2::build(name, &mut p))
-                        .or_else(|| crate::extras_ysk_rdr2::build(name, &mut p)).or_else(|| crate::extras_held::build(name, &mut p)),
+                        .or_else(|| crate::extras_ysk_rdr2::build(name, &mut p)).or_else(|| crate::extras_core_rdr2::build(name, &mut p)).or_else(|| crate::extras_held::build(name, &mut p)),
                 };
             }));
             for (n, d) in READS.with(|r| r.borrow().clone()) {

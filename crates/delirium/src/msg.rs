@@ -593,6 +593,33 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "minArmsLooseness", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "minLegsLooseness", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "fallingReaction", kind: Kind::Int, used: true, doc: "RDR2 core only: 0 roll up, 1 catch fall, 4 catch fall then writhe (2, 3 roll up here)" },
+        Param { name: "bracedSideSpinMult", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "shockSpinMaxTwistVel", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "shockSpinAirMult", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "shockSpin1FootMult", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "shockSpinScaleByLeverArm", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2Left", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2Right", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2OverrideStagger", kind: Kind::Bool, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2TimeBefore", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2Time", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2MStiffL", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2MStiffR", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2StiffL", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2StiffR", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2DampL", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2DampR", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2RelaxTimeL", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2RelaxTimeR", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2AngleMinL", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2AngleMaxL", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2AngleMinR", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2AngleMaxR", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2LengthMinL", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2LengthMaxL", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2LengthMinR", kind: Kind::Float, used: true, doc: "RDR2 core only" },
+        Param { name: "fling2LengthMaxR", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "enableDefaultArms", kind: Kind::Bool, used: true, doc: "RDR2 core only (RDR2's shotConfigureArms): the default arms (true)" },
         Param { name: "brace", kind: Kind::Bool, used: true, doc: "RDR2 core only: free arms reach towards the ground the way he moves, else the guard pose (true)" },
         Param { name: "useArmsWindmill", kind: Kind::Bool, used: true, doc: "RDR2 core only: arms windmill when thrown back fast (true)" },
@@ -1428,6 +1455,33 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("shot", "minArmsLooseness") => { let p = &mut st.shot; p.rdr2.min_arms_looseness = v.f()?; }
         ("shot", "minLegsLooseness") => { let p = &mut st.shot; p.rdr2.min_legs_looseness = v.f()?; }
         ("shot", "fallingReaction") => { let p = &mut st.shot; p.rdr2.falling_reaction = Some(v.i()?); }
+        ("shot", "bracedSideSpinMult") => { let p = &mut st.shot; p.rdr2.braced_side_spin_mult = v.f()?; }
+        ("shot", "shockSpinMaxTwistVel") => { let p = &mut st.shot; p.rdr2.shock_spin_max_twist_vel = v.f()?; }
+        ("shot", "shockSpinAirMult") => { let p = &mut st.shot; p.rdr2.shock_spin_air_mult = v.f()?; }
+        ("shot", "shockSpin1FootMult") => { let p = &mut st.shot; p.rdr2.shock_spin_one_foot_mult = v.f()?; }
+        ("shot", "shockSpinScaleByLeverArm") => { let p = &mut st.shot; p.rdr2.shock_spin_scale_by_lever_arm = v.b()?; }
+        ("shot", "fling2") => { let p = &mut st.shot; p.rdr2.fling2 = v.b()?; }
+        ("shot", "fling2Left") => { let p = &mut st.shot; p.rdr2.fling2_side[0] = v.b()?; }
+        ("shot", "fling2Right") => { let p = &mut st.shot; p.rdr2.fling2_side[1] = v.b()?; }
+        ("shot", "fling2OverrideStagger") => { let p = &mut st.shot; p.rdr2.fling2_override_stagger = v.b()?; }
+        ("shot", "fling2TimeBefore") => { let p = &mut st.shot; p.rdr2.fling2_before = v.f()?; }
+        ("shot", "fling2Time") => { let p = &mut st.shot; p.rdr2.fling2_time = v.f()?; }
+        ("shot", "fling2MStiffL") => { let p = &mut st.shot; p.rdr2.fling2_mstiff[0] = v.f()?; }
+        ("shot", "fling2MStiffR") => { let p = &mut st.shot; p.rdr2.fling2_mstiff[1] = v.f()?; }
+        ("shot", "fling2StiffL") => { let p = &mut st.shot; p.rdr2.fling2_stiff[0] = v.f()?; }
+        ("shot", "fling2StiffR") => { let p = &mut st.shot; p.rdr2.fling2_stiff[1] = v.f()?; }
+        ("shot", "fling2DampL") => { let p = &mut st.shot; p.rdr2.fling2_damp[0] = v.f()?; }
+        ("shot", "fling2DampR") => { let p = &mut st.shot; p.rdr2.fling2_damp[1] = v.f()?; }
+        ("shot", "fling2RelaxTimeL") => { let p = &mut st.shot; p.rdr2.fling2_relax[0] = v.f()?; }
+        ("shot", "fling2RelaxTimeR") => { let p = &mut st.shot; p.rdr2.fling2_relax[1] = v.f()?; }
+        ("shot", "fling2AngleMinL") => { let p = &mut st.shot; p.rdr2.fling2_angle[0][0] = v.f()?; }
+        ("shot", "fling2AngleMaxL") => { let p = &mut st.shot; p.rdr2.fling2_angle[0][1] = v.f()?; }
+        ("shot", "fling2AngleMinR") => { let p = &mut st.shot; p.rdr2.fling2_angle[1][0] = v.f()?; }
+        ("shot", "fling2AngleMaxR") => { let p = &mut st.shot; p.rdr2.fling2_angle[1][1] = v.f()?; }
+        ("shot", "fling2LengthMinL") => { let p = &mut st.shot; p.rdr2.fling2_length[0][0] = v.f()?; }
+        ("shot", "fling2LengthMaxL") => { let p = &mut st.shot; p.rdr2.fling2_length[0][1] = v.f()?; }
+        ("shot", "fling2LengthMinR") => { let p = &mut st.shot; p.rdr2.fling2_length[1][0] = v.f()?; }
+        ("shot", "fling2LengthMaxR") => { let p = &mut st.shot; p.rdr2.fling2_length[1][1] = v.f()?; }
         ("shot", "enableDefaultArms") => { let p = &mut st.shot; p.rdr2.default_arms = v.b()?; }
         ("shot", "brace") => { let p = &mut st.shot; p.rdr2.brace = v.b()?; }
         ("shot", "useArmsWindmill") => { let p = &mut st.shot; p.rdr2.use_arms_windmill = v.b()?; }

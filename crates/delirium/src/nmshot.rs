@@ -182,6 +182,8 @@ pub struct Out {
     pub impulse: Vec<(usize, Vec3, Vec3)>,
     /// RDR2 core: per-part friction scales this step, part and scale (ctx+0x3570; 1 for parts not named)
     pub part_friction: Vec<(usize, f32)>,
+    /// RDR2 core: setFrictionScale's clamp on a contact's friction (ctx+0x1050, +0x1054 with +0x1058)
+    pub fric_clamp: Option<(f32, f32)>,
     /// RDR2 core: per-joint limit half-range floors this step, child part and (lean1, lean2, twist) in rad
     /// (the 3-DOF joint's +0x11c..+0x124, 0x2a4eaa0)
     pub lim_floor: Vec<(usize, [f32; 3])>,
@@ -257,9 +259,21 @@ pub(crate) fn hit_record(c: &Ctx, point: Vec3, part: i32, bullet: Vec3) -> (Vec3
     c.b.doll.probe(c.b.build, far, point).map_or((point, part), |(k, x, _)| (x, k as i32))
 }
 
+/// fling2's running state: the timer, the relax starts, the drawn angles and lengths, where the hands were.
+#[derive(Clone, Copy, Debug)]
+struct Fling2 {
+    t: f32,
+    relax: [f32; 2],
+    angle: [f32; 2],
+    length: [f32; 2],
+    hand: [Vec3; 2],
+}
+
 #[derive(Clone, Debug)]
 pub struct Shot {
     pub p: Params,
+    /// RDR2 core: fling2's arms
+    fling2: Option<Fling2>,
     new_hit: bool,
     no_balance: bool,
     since_hit: f32,
@@ -522,7 +536,7 @@ impl Shot {
     pub fn activate(p: Params, c: &mut Ctx, dt: f32) -> Shot {
         let bs = p.body_stiffness;
         let mut s = Shot {
-            p, new_hit: false, no_balance: false, since_hit: 0.0, reach_t: [0.0; 2], time: 0.0,
+            fling2: None, p, new_hit: false, no_balance: false, since_hit: 0.0, reach_t: [0.0; 2], time: 0.0,
             s150: delirium_data::kv!(117), s154: bs, s158: 1.0, s15c: bs * delirium_data::kv!(540), s160: 1.0, s164: bs / delirium_data::kv!(117) * delirium_data::kv!(25), s168: delirium_data::kv!(27) * dt,
             s16c: bs * delirium_data::kv!(541), s170: delirium_data::kv!(27) * dt, t174: if p.fling { delirium_data::kv!(201) } else { delirium_data::kv!(542) }, head_t: p.head_look_at_wound_max_timer,
             fall: [1.0; 2], spin: INIT_SPIN[0], spin_blend: INIT_SPIN[1], t190: 0.0, t194: 0.0, behind: 0.0, side: 0.0, reach_part: [None; 2],
@@ -761,7 +775,133 @@ impl Shot {
         self.flags &= delirium_data::kv!(467 int);
     }
 
+    /// RDR2's shockSpin (rdr2_shot_hits.md 4): the size per bullet with the braced side; the torque each tick by what
+    /// his feet touch, stopped past the twist speed limit.
+    fn shock_spin_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let (p, r) = (self.p, self.p.rdr2);
+        let there = [0, 7, 8, 9, 10, 11, 12].contains(&p.body_part) || p.always_add_shock_spin;
+        if !(p.add_shock_spin && there) {
+            return;
+        }
+        if self.new_hit && self.spin_blend < 0.0 {
+            let up = c.up;
+            let n = crate::nmdbm::vnorm(p.bullet_vel);
+            let flat = |v: Vec3| v - up * v.dot(up);
+            let lever = flat(p.hit_point - c.com);
+            let mut per = p.shock_spin_scale_per_component;
+            let u = c.rand(p.shock_spin_min, p.shock_spin_max);
+            let mut mag;
+            if p.randomize_shock_spin_direction {
+                mag = if c.ch.random_bits() & 1 != 0 { u } else { -u };
+            } else {
+                let d = if !r.shock_spin_scale_by_lever_arm || (p.melee && p.body_part == HEAD()) { crate::nmdbm::vnorm(lever) } else { lever };
+                mag = -u * d.cross(n).dot(up);
+                if r.braced_side_spin_mult != 1.0 && c.upright {
+                    let (fl, fr) = (c.b.at(limb(2).p[3]), c.b.at(limb(3).p[3]));
+                    let (dl, dr) = ((fl - c.com).dot(n), (fr - c.com).dot(n));
+                    let feet = crate::nmdbm::vnorm(flat(fl - fr));
+                    let side = crate::nmdbm::vnorm(lever).dot(feet);
+                    // the hit on the side of the nearer foot along the bullet
+                    if (dl < dr) == (side > 0.0) {
+                        mag *= r.braced_side_spin_mult;
+                        per = (per + side.abs()).min(1.0);
+                    }
+                }
+            }
+            self.p.shock_spin_scale_per_component = per;
+            self.spin = mag.clamp(-0.5 * p.shock_spin_max, 0.5 * p.shock_spin_max);
+            self.spin_blend = 1.0;
+        }
+        if self.spin_blend < 0.0 {
+            return;
+        }
+        let parts = [7, 8, 9, 10];
+        let axis = crate::nmdbm::vnorm(c.b.at(parts[3]) - c.b.at(parts[0]));
+        if r.shock_spin_max_twist_vel > 0.0 && axis.dot(c.angvel).abs() > r.shock_spin_max_twist_vel {
+            self.spin_blend = -1.0;
+            return;
+        }
+        let (on_l, on_r) = (c.b.doll.collided(&[3]), c.b.doll.collided(&[6]));
+        let factor = match (on_l, on_r) {
+            (false, false) => r.shock_spin_air_mult,
+            (true, true) => 1.0,
+            _ => r.shock_spin_one_foot_mult,
+        };
+        let tau = axis * (self.spin * self.spin_blend * factor);
+        let k = self.p.shock_spin_scale_per_component;
+        if p.shock_spin_lift_force_mult > 0.0 {
+            let f = tau.abs() * p.shock_spin_lift_force_mult;
+            c.out.force(parts[2], f);
+            c.out.force(parts[3], f * k);
+            c.out.force(parts[0], f * k * k);
+        }
+        c.out.torque(parts[2], tau);
+        c.out.torque(parts[1], tau * k);
+        c.out.torque(parts[3], tau * k);
+        c.out.torque(parts[0], tau * k * k);
+        self.spin_blend -= p.shock_spin_decay_mult * dt * (self.spin_blend + 1.0);
+    }
+
+    /// RDR2's fling2 (rdr2_shot_hits.md 9.2, 0x2a89680, 0x2a89c3c): each arm's hand thrown to a drawn angle and length
+    /// off the shoulder, stiff until its relax time or the hand has stopped.
+    fn fling2_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let r = self.p.rdr2;
+        if self.new_hit && r.fling2 && (r.fling2_side[0] || r.fling2_side[1]) {
+            let g = |i: usize| {
+                let l = limb(i);
+                1.5924 * ((c.b.joint_pos(l.e[1]) - c.b.joint_pos(l.e[2])).length() + (c.b.joint_pos(l.e[2]) - c.b.at(l.p[3])).length())
+            };
+            let (g0, g1) = (g(0), g(1));
+            let angle = [c.rand(r.fling2_angle[0][0], r.fling2_angle[0][1]), c.rand(r.fling2_angle[1][0], r.fling2_angle[1][1])];
+            let length = [c.rand(r.fling2_length[0][0] * g0, r.fling2_length[0][1] * g0), c.rand(r.fling2_length[1][0] * g1, r.fling2_length[1][1] * g1)];
+            let hand = [c.b.at(limb(0).p[3]), c.b.at(limb(1).p[3])];
+            self.fling2 = Some(Fling2 { t: 0.0, relax: [r.fling2_before + r.fling2_relax[0], r.fling2_before + r.fling2_relax[1]], angle, length, hand });
+            for i in 0..2 {
+                let l = limb(i);
+                for j in [l.e[0], l.e[1], l.e[2]] {
+                    c.ch.eff[j].oppose_gravity = 1.0;
+                }
+            }
+        }
+        let Some(mut f) = self.fling2 else { return };
+        f.t += dt;
+        if f.t > r.fling2_before {
+            let spine = crate::nmdbm::vnorm(c.b.at(chest_part()) - c.b.at(0));
+            let hips = crate::nmdbm::vnorm(c.b.joint_pos(limb(3).e[1]) - c.b.joint_pos(limb(2).e[1]));
+            for i in 0..2 {
+                if !r.fling2_side[i] || (c.ch.core.hands[i] && !r.fling2_override_stagger) {
+                    continue;
+                }
+                let l = limb(i);
+                let relaxed = f.relax[i] < f.t;
+                let (stiff, damp, muscle, og) = if relaxed { (7.0, 0.7, None, 0.0) } else { (r.fling2_stiff[i], r.fling2_damp[i], (r.fling2_mstiff[i] > 0.0).then_some(r.fling2_mstiff[i]), 0.5) };
+                c.ch.set_stiffness(stiff, damp, if i == 0 { "ul" } else { "ur" }, muscle);
+                c.ch.eff[l.e[2]].set_stiffness(stiff * 0.75, damp * 0.75, None);
+                for j in [l.e[0], l.e[1], l.e[2]] {
+                    c.ch.eff[j].oppose_gravity = og;
+                }
+                let hand = c.b.at(l.p[3]);
+                if (hand - f.hand[i]).length() / dt.max(1e-4) < 1.0 && f.t > r.fling2_before + 0.1 && !relaxed {
+                    f.relax[i] = f.t;
+                }
+                f.hand[i] = hand;
+                let side = hips * (1.0 - 2.0 * i as f32);
+                let shoulder = c.b.joint_pos(l.e[1]);
+                let to = shoulder + (spine * f.angle[i].cos() - side * f.angle[i].sin()) * f.length[i];
+                let upper = crate::nmdbm::vnorm(c.b.joint_pos(l.e[2]) - shoulder);
+                let twist = (2.5 * (upper.dot(spine) - upper.dot(side).max(0.0)) + 0.5).clamp(-1.7, 0.2);
+                crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], to, twist, 0.0, 1.0 - 2.0 * i as f32, 1.0, Vec3::ZERO, None);
+                c.ch.eff[l.e[3]].desired = [0.0, 0.0, 0.24];
+            }
+        }
+        self.fling2 = (f.t < r.fling2_before + r.fling2_time).then_some(f);
+    }
+
     fn shock_spin(&mut self, c: &mut Ctx, dt: f32) {
+        if c.ch.rdr2 {
+            self.fling2_rdr2(c, dt);
+            return self.shock_spin_rdr2(c, dt);
+        }
         let p = self.p;
         let there = (*SP()).contains(&p.body_part) || [(*CLAVICLE())[0] + 1, (*SHOULDER())[0] + 1, (*CLAVICLE())[1] + 1, (*SHOULDER())[1] + 1].contains(&p.body_part);
         if !(p.add_shock_spin && (p.always_add_shock_spin || there)) {
@@ -1514,6 +1654,24 @@ pub struct ShotRdr2 {
     pub aw_radius_mult: f32,
     pub aw_stiffness_add: f32,
     pub release_wound: i32,
+    /// RDR2's shotShockSpin beyond GTA IV's
+    pub braced_side_spin_mult: f32,
+    pub shock_spin_max_twist_vel: f32,
+    pub shock_spin_air_mult: f32,
+    pub shock_spin_one_foot_mult: f32,
+    pub shock_spin_scale_by_lever_arm: bool,
+    /// RDR2's shotConfigureArms fling2 (rdr2_shot_hits.md 9.2)
+    pub fling2: bool,
+    pub fling2_side: [bool; 2],
+    pub fling2_override_stagger: bool,
+    pub fling2_before: f32,
+    pub fling2_time: f32,
+    pub fling2_mstiff: [f32; 2],
+    pub fling2_stiff: [f32; 2],
+    pub fling2_damp: [f32; 2],
+    pub fling2_relax: [f32; 2],
+    pub fling2_angle: [[f32; 2]; 2],
+    pub fling2_length: [[f32; 2]; 2],
 }
 
 impl Default for ShotRdr2 {
@@ -1524,6 +1682,9 @@ impl Default for ShotRdr2 {
                    k_mult_on_loose: 0.0, k_mult_4_legs: 0.3, initial_weakness_ramp: 0.4, initial_weakness_zero: 0.0,
                    initial_neck_ramp: 0.4, initial_neck_duration: 0.0, spine_blend_zero: 0.6, min_arms_looseness: 0.1,
                    min_legs_looseness: 0.1, falling_reaction: None, default_arms: true, brace: true, use_arms_windmill: true,
+                   braced_side_spin_mult: 1.0, shock_spin_max_twist_vel: -1.0, shock_spin_air_mult: 1.0, shock_spin_one_foot_mult: 1.0, shock_spin_scale_by_lever_arm: true,
+                   fling2: false, fling2_side: [true; 2], fling2_override_stagger: false, fling2_before: 0.1, fling2_time: 0.5, fling2_mstiff: [0.95, -1.0],
+                   fling2_stiff: [12.0; 2], fling2_damp: [0.7; 2], fling2_relax: [0.5; 2], fling2_angle: [[-1.5, 1.0]; 2], fling2_length: [[0.35, 0.6]; 2],
                    always_reach_time: 0.3, aw_speed_mult: 1.0, aw_radius_mult: 1.0, aw_stiffness_add: 4.0, release_wound: 1 }
     }
 }

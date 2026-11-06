@@ -3351,7 +3351,8 @@ impl Sim {
             return self.send_ours(o);
         }
         let (hit, now) = (self.hit(), self.now());
-        let rdr2 = if self.rdr2 { self.rdr2_shot(part, at, d) } else { vec![] };
+        let mut rdr2 = if self.rdr2 { self.rdr2_shot(part, at, d) } else { vec![] };
+        rdr2.extend(self.game_shot_lines(part, d));
         match self.shot_task.as_mut() {
             Some((t, _)) => {
                 o.extend(t.next_hit(&mut self.rand, &self.tp, &hit, now, set, part, at, vel, n).iter().map(shottask::text));
@@ -3919,18 +3920,35 @@ impl Sim {
     /// `rdr2 task <set>`: a set of the player's physicstasks file, its messages sent as the game would. The set is named
     /// by the '/' pieces of its path in the file, in order, each a name or its hash: the first set that has them all runs.
     fn fire_task(&mut self, sel: &str) {
-        let trace = std::env::var_os("RDR2_TRACE").is_some();
-        let dir = std::env::args().skip_while(|a| a != "--tune-dir").nth(1).or_else(|| std::env::var("RDR2_TUNE_DIR").ok()).unwrap_or_default();
-        let file = match gametask::read_file(&dir) {
-            Ok(f) => f,
-            Err(e) => return self.say(format!("room  rdr2 task: {e} (--tune-dir <folder with your physicstasks xml>)")),
+        let sets = match Self::task_file() {
+            Ok(s) => s,
+            Err(e) => return self.say(e),
         };
-        let Some(sets) = gametask::sets(&file) else { return self.say("room  rdr2 task: couldn't read the file".into()) };
-        let mut hits = sets.iter().filter(|s| gametask::selects(sel, &s.path));
-        let Some(set) = hits.next() else { return self.say(format!("room  rdr2 task: no set {sel} of {}", sets.len())) };
-        let (mut sent, mut left) = (0, vec![]);
-        let mut lines = vec![];
-        for m in &set.messages {
+        // pieces joined by + are sets to layer, as the game's poster does: sorted by priority and merged
+        let mut named = vec![];
+        for one in sel.split('+') {
+            let mut hits = sets.iter().filter(|s| gametask::selects(one, &s.path));
+            let Some(set) = hits.next() else { return self.say(format!("room  rdr2 task: no set {one} of {}", sets.len())) };
+            named.push(set);
+        }
+        let merged = gametask::merge(named.iter().copied());
+        let names = named.iter().map(|s| s.path.last().map_or("?", |p| p.as_str())).collect::<Vec<_>>().join("+");
+        let (lines, _) = self.task_lines(&format!("rdr2 task {names}"), &merged);
+        for l in lines {
+            self.send(&l);
+        }
+    }
+
+    fn task_file() -> Result<Vec<gametask::Set>, String> {
+        let dir = std::env::args().skip_while(|a| a != "--tune-dir").nth(1).or_else(|| std::env::var("RDR2_TUNE_DIR").ok()).unwrap_or_default();
+        let file = gametask::read_file(&dir).map_err(|e| format!("room  rdr2 task: {e} (--tune-dir <folder with your physicstasks xml>)"))?;
+        gametask::sets(&file).ok_or_else(|| "room  rdr2 task: couldn't read the file".to_string())
+    }
+
+    /// The message lines of a merged list, and what the port doesn't take of it (RDR2_TRACE=1 prints each).
+    fn task_lines(&mut self, head: &str, merged: &[gametask::SentMessage]) -> (Vec<String>, Vec<String>) {
+        let (mut sent, mut left, mut lines) = (0, vec![], vec![]);
+        for m in merged {
             match gametask::port_message(m.hash) {
                 _ if m.task_side => left.push(format!("{} (the task's own, not NM)", m.label)),
                 None => left.push(format!("{} (no such message, {} parameters)", m.label, m.params.len())),
@@ -3942,17 +3960,42 @@ impl Sim {
                 }
             }
         }
-        let head = format!("room  rdr2 task {} (enabled {}; {} more match): {sent} of {} messages, {} left out",
-                           set.path.join("/"), set.enabled, hits.count(), set.messages.len(), left.len());
-        if trace {
+        let head = format!("room  {head}: {sent} of {} messages, {} left out", merged.len(), left.len());
+        if std::env::var_os("RDR2_TRACE").is_some() {
             eprintln!("{head}");
             lines.iter().for_each(|l| eprintln!("task send: {l}"));
             left.iter().for_each(|l| eprintln!("task left: {l}"));
         }
         self.say(head);
-        for l in lines {
-            self.send(&l);
-        }
+        (lines, left)
+    }
+
+    /// RDR2_GAME_SETS=<the weapon set's id>: under the RDR2 core a bullet also layers what the game's shot task queues
+    /// for it (rdr2_tasks.md 2), from the player's file; the shot itself keeps its hit by taking them as values.
+    fn game_shot_lines(&mut self, part: usize, dir: Vec3) -> Vec<String> {
+        let Some(weapon) = std::env::var("RDR2_GAME_SETS").ok().filter(|_| self.rdr2_core) else { return vec![] };
+        let sets = match Self::task_file() {
+            Ok(s) => s,
+            Err(e) => {
+                self.say(e);
+                return vec![];
+            }
+        };
+        let fwd = self.ours().fwd.with_z(0.0).normalize_or_zero();
+        let hit = if matches!(part, 1..=6) {
+            gametask::ShotHit::Leg
+        } else if fwd.dot(dir.with_z(0.0).normalize_or_zero()) > 0.0 {
+            gametask::ShotHit::Back
+        } else {
+            gametask::ShotHit::Front
+        };
+        let ids = gametask::shot_sets(&weapon, hit);
+        let named: Vec<_> = ids.iter().filter_map(|id| gametask::shot_set(&sets, id)).collect();
+        let merged = gametask::merge(named.iter().copied());
+        let found = named.len();
+        let (lines, _) = self.task_lines(&format!("shot's sets {} ({found} of {} in the file)", ids.join("+"), ids.len()), &merged);
+        // the shot takes the sets' values; ShotTask started it with the hit
+        lines.into_iter().map(|l| if l.starts_with("shot ") { l.replace(" start=true", "").replace(" start=false", "") } else { l }).collect()
     }
 
     fn button(&mut self, b: &str) {
