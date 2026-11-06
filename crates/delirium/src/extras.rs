@@ -113,6 +113,16 @@ pub trait Extra: Send + Sync {
     }
     /// The RDR2 core's pointGun: duck's write.
     fn pg_duck_set(&mut self, _on: bool) {}
+    /// The RDR2 core's yanked (lasso): whether pointGun's arm goes straight along the aim (its +0x184 = 1).
+    fn pg_yanked(&self) -> Option<bool> {
+        None
+    }
+    /// The RDR2 core's pointGun: yanked's coupling.
+    fn pg_yanked_set(&mut self, _on: bool) {}
+    /// The RDR2 core's pointGun: part masks (RDR2's bits) that leave each other alone this step.
+    fn pair_off(&self) -> Vec<(u32, u32)> {
+        vec![]
+    }
     /// RDR2 core's limb requests: joints this one's tick wrote at another rank than its slot's.
     fn marks(&self) -> Vec<(u32, Vec<usize>)> {
         vec![]
@@ -143,6 +153,8 @@ pub struct Extras {
     /// the running extras' ropes and contact-off bits this step (RDR2 core's sit)
     pub ropes: Vec<(usize, bevy_math::Vec3, bevy_math::Vec3, f32, f32)>,
     pub contact_off: u32,
+    /// RDR2 core's pointGun: self-collision pairs off this step, as RDR2 part masks
+    pub pair_off: Vec<(u32, u32)>,
 }
 
 impl Extras {
@@ -241,6 +253,7 @@ impl Extras {
         self.want.clear();
         self.ropes.clear();
         self.contact_off = 0;
+        self.pair_off.clear();
         if c.ch.rdr2 {
             c.rfw = self.on.iter().find(|(n, _)| *n == "reachForWound").and_then(|(_, e)| e.rfw_view());
         }
@@ -259,6 +272,7 @@ impl Extras {
             self.outbox.extend(e.lines());
             self.want.extend(e.constraints());
             self.ropes.extend(e.ropes());
+            self.pair_off.extend(e.pair_off());
             self.contact_off |= e.contact_off();
         }
         // RDR2 core: injuredOnGround's arms that a running reachForWound must let go
@@ -278,6 +292,10 @@ impl Extras {
         // RDR2 core: duck writes into a running pointGun
         for s in self.on.iter().filter_map(|(_, e)| e.pg_duck()).collect::<Vec<_>>() {
             self.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.pg_duck_set(s));
+        }
+        // RDR2 core: yanked's coupling into a running pointGun
+        for s in self.on.iter().filter_map(|(_, e)| e.pg_yanked()).collect::<Vec<_>>() {
+            self.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.pg_yanked_set(s));
         }
         self.take_off(|_, e| e.done());
     }

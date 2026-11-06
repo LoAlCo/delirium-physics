@@ -3824,6 +3824,11 @@ impl Lasso {
 }
 
 impl Extra for Lasso {
+    /// RDR2's pointGun reads yanked's lassoedtype (+0x184 = 1: the arm straight along the aim).
+    fn pg_yanked(&self) -> Option<bool> {
+        Some(self.kind == 1)
+    }
+
     fn lines(&mut self) -> Vec<String> {
         self.r2.lines()
     }
