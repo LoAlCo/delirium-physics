@@ -349,7 +349,8 @@ pub fn gate_modules(merged: Vec<SentMessage>, hit: ShotHit, part: usize) -> Vec<
         }
     }).map(|mut m| {
         if m.hash == joaat("shotspin") && !flag(&m, "shotspin") {
-            m.params.retain(|p| spine_limit(p.hash) || p.hash == joaat("start"));
+            m.params.retain(|p| spine_limit(p.hash));
+            m.params.push(SentParam { hash: joaat("start"), label: "start".into(), val: Val::Bool(true) });
             m.params.push(SentParam { hash: joaat("shotSpin"), label: "shotSpin".into(), val: Val::Bool(false) });
         }
         m

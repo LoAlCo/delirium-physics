@@ -425,6 +425,7 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "duckExag", kind: Kind::Bool, used: true, doc: "RDR2 core only: (RDR2 reads it nowhere) (false)" },
     ] },
     Message { name: "shotSnap", params: &[
+        Param { name: "snapChangeDir", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x348: successive snaps alternate (false)" },
         Param { name: "snapMag", kind: Kind::Float, used: true, doc: "the kick's size; negative kicks the other way (0.4)" },
         Param { name: "snapDelay", kind: Kind::Float, used: true, doc: "s before the kick (0)" },
         Param { name: "snapDuration", kind: Kind::Float, used: true, doc: "s the kick is spread over; 0: all at once (0)" },
@@ -1039,6 +1040,8 @@ pub struct Snap {
     mag: f32, delay: f32, duration: f32, interval: f32, ratio: f32, random: f32, mult: [f32; 3], moving: f32,
     use_dir: bool, dir: Vec3, part: i32, hip: i32, limbs: [bool; 6], phased: bool,
     t: f32, axis: Option<Vec3>, kicked: f32, countered: f32,
+    /// RDR2 core: snapChangeDir (+0x348): the sign +0x764 turns after each bullet; taken on its first tick
+    change_dir: Option<bool>,
     /// the hit part RDR2 kicks round (snapHitPart is off by default there)
     rdr2_part: i32,
 }
@@ -1046,6 +1049,7 @@ pub struct Snap {
 impl Snap {
     fn new(p: &mut P) -> Result<Snap, Error> {
         let mag = p.f("snapMag", 0.4)?;
+        let change_dir = p.b("snapChangeDir", false)?;
         let (delay, duration) = (p.f("snapDelay", 0.0)?.max(0.0), p.f("snapDuration", 0.0)?.max(0.0));
         let (interval, ratio) = (p.f("unSnapInterval", 0.01)?.max(0.0), p.f("unSnapRatio", 0.7)?);
         let random = p.f("snapDirectionRandomness", 0.3)?.clamp(0.0, 1.0);
@@ -1060,7 +1064,7 @@ impl Snap {
         let limbs = [p.b("snapLeftLeg", false)?, p.b("snapRightLeg", false)?, p.b("snapLeftArm", false)?,
                      p.b("snapRightArm", false)?, p.b("snapSpine", true)?, p.b("snapNeck", true)?];
         Ok(Snap { mag, delay, duration, interval, ratio, random, mult, moving, use_dir, dir, part: if hit { part } else { -1 },
-                  hip, limbs, phased: p.b("snapPhasedLegs", true)?, t: 0.0, axis: None, kicked: 0.0, countered: 0.0, rdr2_part })
+                  hip, limbs, phased: p.b("snapPhasedLegs", true)?, t: 0.0, axis: None, kicked: 0.0, countered: 0.0, rdr2_part, change_dir: Some(change_dir) })
     }
 
     /// The share of a kick (spread over the duration) that falls in this step; all of it when the duration is 0.
@@ -1139,6 +1143,13 @@ impl Snap {
 
 impl Extra for Snap {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
+        if let Some(change) = self.change_dir.take().filter(|_| c.ch.rdr2) {
+            self.mag *= c.ch.core.cfg.snap_sign;
+            if change {
+                c.ch.core.cfg.snap_sign = -c.ch.core.cfg.snap_sign;
+                crate::extras_core_rdr2::trace(|| format!("snapChangeDir: this snap {}", self.mag));
+            }
+        }
         let since = self.t - self.delay;
         self.t += dt;
         if since + dt <= 0.0 {
@@ -1442,7 +1453,7 @@ impl Snap {
     fn at(mag: f32, part: i32, dir: Vec3) -> Snap {
         Snap { mag, delay: 0.0, duration: 0.0, interval: 0.05, ratio: 0.5, random: 0.25, mult: [1.0; 3], moving: 1.0,
                use_dir: true, dir, part, hip: 0, limbs: [false, false, false, false, true, true], phased: true,
-               t: 0.0, axis: None, kicked: 0.0, countered: 0.0, rdr2_part: part }
+               t: 0.0, axis: None, kicked: 0.0, countered: 0.0, rdr2_part: part, change_dir: None }
     }
 }
 
@@ -1626,7 +1637,7 @@ impl Melee {
         if r.hit_new && r.snap {
             let mut snap = Snap { mag: 0.0, delay: 0.0, duration: 0.0, interval: 0.0, ratio: 0.0, random: 0.0, mult: [1.0; 3], moving: 1.0,
                                   use_dir: true, dir: -n, part: r.part as i32, hip: 0, limbs: [false; 6], phased: false, t: 0.0, axis: None,
-                                  kicked: 0.0, countered: 0.0, rdr2_part: r.part as i32 };
+                                  kicked: 0.0, countered: 0.0, rdr2_part: r.part as i32, change_dir: None };
             snap.apply_rdr2(c, if h > 0.4 { -r.snap_mag } else { r.snap_mag });
             self.say(7, || format!("snap part {} h {h:.2}", r.part));
         }

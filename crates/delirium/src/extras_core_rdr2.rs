@@ -425,6 +425,8 @@ pub struct CoreCfg {
     pub coll: CollRec,
     /// the shot's +0x3a0..+0x3ac (shotspin): the spine's limit raises, lean1, lean2, twist, and until how long after a bullet
     pub shot_spine: [f32; 4],
+    /// the shot's +0x764, 1 at its activation: the sign of its snaps
+    pub snap_sign: f32,
     /// ctx+0x1030, the character's health: the game's task writes it; nothing here does
     pub health: f32,
 }
@@ -483,7 +485,7 @@ pub struct CollRec {
 
 impl Default for CoreCfg {
     fn default() -> CoreCfg {
-        CoreCfg { health: 1.0, shot_spine: [-0.5, -0.3, -0.3, -0.3], self_avoid: Default::default(), spin: Default::default(), spin_hit: SpinRec { lim: [34.0, 27.0], gain: [0.0; 2], time: 0.0, speed: 0.0, left: -0.1 }, coll: Default::default(), water: Default::default(), soft: Default::default(), soft_was: [false; 4], fric: [1.0; 32], fric_used: false, fric_min: 0.0, fric_max: 9999.0, fric_clamp: false, muscle: None, strength: 1.0,
+        CoreCfg { snap_sign: 1.0, health: 1.0, shot_spine: [-0.5, -0.3, -0.3, -0.3], self_avoid: Default::default(), spin: Default::default(), spin_hit: SpinRec { lim: [34.0, 27.0], gain: [0.0; 2], time: 0.0, speed: 0.0, left: -0.1 }, coll: Default::default(), water: Default::default(), soft: Default::default(), soft_was: [false; 4], fric: [1.0; 32], fric_used: false, fric_min: 0.0, fric_max: 9999.0, fric_clamp: false, muscle: None, strength: 1.0,
                   bullets: Default::default(), reduction: 0.15, min_leak: 0.2, recovery: None, leak_scaled: false, torques: 0, torque_sign: 0, fall: Default::default() }
     }
 }

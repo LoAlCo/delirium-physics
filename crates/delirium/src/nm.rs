@@ -1380,6 +1380,9 @@ impl Agent {
         }
         if out.rfw_release != [false; 2] {
             self.extras.on.iter_mut().filter(|(n, _)| *n == "reachForWound").for_each(|(_, e)| e.rfw_release(out.rfw_release));
+            if let Some(h) = out.pg_hold {
+                self.extras.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.hold(h));
+            }
         }
         match out.dbm {
             Some(true) => {

@@ -91,6 +91,8 @@ pub trait Extra: Send + Sync {
     }
     /// The RDR2 core's reachForWound: the shot's releaseWound lets these hands go this step.
     fn rfw_release(&mut self, _hands: [bool; 2]) {}
+    /// RDR2 core: the shot's hand-over holds pointGun off, or lets it go on
+    fn hold(&mut self, _on: bool) {}
     /// The RDR2 core's injuredOnGround: the hands it tells a running reachForWound to let go (R+0xdb), after it ticked.
     fn rfw_block(&self) -> Option<[bool; 2]> {
         None

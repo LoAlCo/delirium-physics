@@ -228,6 +228,8 @@ pub struct Out {
     pub dbm_force_fail: bool,
     /// RDR2 core: configureShotInjuredLeg's limp fields for the balancer, and one leg's lift multiplier (bal+0x23c, +0x240)
     pub dbm_limp_cfg: Option<crate::nmdbm_rdr2::LimpCfg>,
+    /// RDR2 core: the shot's hand-over module holds pointGun off (true) or lets it take up again (false)
+    pub pg_hold: Option<bool>,
     pub dbm_lift: Option<(usize, f32)>,
 }
 
@@ -588,6 +590,7 @@ impl Shot {
         // RDR2's reset points the fall-to-knees module at the character's record and inits it (0x2a966b8)
         if c.ch.rdr2 {
             crate::nmftk_rdr2::init(c);
+            c.ch.core.cfg.snap_sign = 1.0;
             // angVelScale: every part in the mask has its angular velocity scaled, once (0x2a4b1ac)
             let k = p.rdr2.ang_vel_scale;
             if (k - 1.0).abs() >= 1.2e-7 {
@@ -1729,6 +1732,8 @@ pub struct ShotRdr2 {
     pub use_cstr: bool,
     /// angVelScale and its mask's two letters: applied once, at the shot's activation
     pub ang_vel_mask: [u8; 2],
+    /// configureArms' PointGun (+0x289): the hand-over module
+    pub point_gun: bool,
     pub cstr_upper_min: f32,
     pub cstr_upper_max: f32,
     pub cstr_lower_min: f32,
@@ -1755,7 +1760,7 @@ impl Default for ShotRdr2 {
                    braced_side_spin_mult: 1.0, shock_spin_max_twist_vel: -1.0, shock_spin_air_mult: 1.0, shock_spin_one_foot_mult: 1.0, shock_spin_scale_by_lever_arm: true,
                    fling2: false, fling2_side: [true; 2], fling2_override_stagger: false, fling2_before: 0.1, fling2_time: 0.5, fling2_mstiff: [0.95, -1.0],
                    fling2_stiff: [12.0; 2], fling2_damp: [0.7; 2], fling2_relax: [0.5; 2], fling2_angle: [[-1.5, 1.0]; 2], fling2_length: [[0.35, 0.6]; 2],
-                   looseness4_stagger: 0.0, use_cstr: false, ang_vel_mask: *b"fb", cstr_upper_min: 0.1, cstr_upper_max: 1.0, cstr_lower_min: 0.1, cstr_lower_max: 1.0, bullet_proof_vest: false, always_reset_looseness: true, always_reset_neck: true, spine_blend_exag_cpain: false, floor_weakness_time: 0.1, floor_strength: 0.1, floor_joint_time: 0.1, floor_joint_strength: 0.01, ang_vel_scale: 1.0,
+                   looseness4_stagger: 0.0, use_cstr: false, ang_vel_mask: *b"fb", point_gun: false, cstr_upper_min: 0.1, cstr_upper_max: 1.0, cstr_lower_min: 0.1, cstr_lower_max: 1.0, bullet_proof_vest: false, always_reset_looseness: true, always_reset_neck: true, spine_blend_exag_cpain: false, floor_weakness_time: 0.1, floor_strength: 0.1, floor_joint_time: 0.1, floor_joint_strength: 0.01, ang_vel_scale: 1.0,
                    always_reach_time: 0.3, aw_speed_mult: 1.0, aw_radius_mult: 1.0, aw_stiffness_add: 4.0, release_wound: 1 }
     }
 }
@@ -2119,6 +2124,14 @@ impl Shot {
         self.run(c, MELEE(), Some(|s, _| s.p.melee && s.new_hit), Some(Shot::melee_enter), Some(Shot::melee_tick),
                  Some(|s, _| s.failed() || s.new_hit), Some(|_, c| c.out.spine_twist_stop = true), dt);
         c.module(MELEE() as u32);
+        // module 16, the pointGun hand-over (0x2aa2770): sit gone or past its riding states, and the pelvis's velocity along
+        // its second and third rows against up at most 0.7, pointGun stops, remembered (+0x7b8); else it starts again. Ours: it's
+        // held, not stopped; the test's other half, bal+0x64 under 0.7, wasn't found written, so it stands as true [G]
+        if p.rdr2.point_gun {
+            let m = c.b.part(0).m;
+            let along = m.b.dot(c.vel) * c.up.y + m.c.dot(c.vel) * c.up.z;
+            c.out.pg_hold = Some(c.sit_state.is_none_or(|s| s > 2) && along <= 0.7);
+        }
         c.module(102);
         // spineBlendZero: a slow body's spine relaxes to zero, a fast one's keeps its pose; after a spine ramp's write it
         // fades in over 0.5 s (0x9de396e2 >= 0, a pose index in place of zero, isn't here)
