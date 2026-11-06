@@ -1544,6 +1544,27 @@ fn box_meets_tri(c: Vec3, m: Mat3, e: Vec3, t: [Vec3; 3]) -> bool {
 #[inline]
 fn LIGHTEST() -> f32 { delirium_data::kv!(68) }
 
+/// RDR2 rig: each part's first capsule (ends in its link's frame, radius): `Ragdoll::slip_legs`.
+pub static LINK_CAPSULES: std::sync::RwLock<Vec<(Vec3, Vec3, f32)>> = std::sync::RwLock::new(vec![]);
+
+/// The nearest distance between segments p0-p1 and q0-q1.
+fn segments_apart(p0: Vec3, p1: Vec3, q0: Vec3, q1: Vec3) -> f32 {
+    let (d1, d2, r) = (p1 - p0, q1 - q0, p0 - q0);
+    let (a, e, f) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
+    let (c, b) = (d1.dot(r), d1.dot(d2));
+    let den = a * e - b * b;
+    let mut s = if den > 1e-9 { ((b * f - c * e) / den).clamp(0.0, 1.0) } else { 0.0 };
+    let mut t = if e > 1e-9 { (b * s + f) / e } else { 0.0 };
+    if t < 0.0 {
+        t = 0.0;
+        s = if a > 1e-9 { (-c / a).clamp(0.0, 1.0) } else { 0.0 };
+    } else if t > 1.0 {
+        t = 1.0;
+        s = if a > 1e-9 { ((b - c) / a).clamp(0.0, 1.0) } else { 0.0 };
+    }
+    ((p0 + d1 * s) - (q0 + d2 * t)).length()
+}
+
 fn part_shape(p: &PartDef) -> gjk::Shape {
     match p.boxed {
         Some(e) => gjk::Shape::Box(e - Vec3::splat(BOX_MARGIN()), BOX_MARGIN()),
@@ -1629,6 +1650,14 @@ pub struct Ragdoll {
     pub fresh: bool,
     pub wake_step: bool,
     pub touch: Vec<u8>,
+    /// The pairs of its own parts that met this step (RDR2's knees and thighs test), lower part first.
+    pub self_met: Vec<(usize, usize)>,
+    /// RDR2 core, while the balancer runs (ctx+0x2ec8, +0x2ecc; 0x2a2b884): the left and the right leg's thigh and calf, for
+    /// RDR2's ctx+0x34b1, +0x34b0: they report meeting as their first capsules (`LINK_CAPSULES`) go into each other. RDR2
+    /// deletes a contact that's already in; so no contact between the legs is solved here while this is set.
+    pub slip_legs: Option<[[usize; 2]; 2]>,
+    /// The gaps last step, thighs and calves.
+    leg_gap: [f32; 2],
     pub contact_off: u32,
     pub hit: Vec<Option<(Vec3, Vec3, i32)>>,
     /// `hit` without his own parts: `hit`'s id is -1 for himself and for the static world alike (RDR2 core's BCR)
@@ -1775,7 +1804,7 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { fric_clamp: None, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+        Ragdoll { fric_clamp: None, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
                   sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
@@ -2720,6 +2749,23 @@ impl Ragdoll {
             }
         }
         let n_self = blocks.len();
+        if let Some([l, r]) = self.slip_legs {
+            let caps = LINK_CAPSULES.read().unwrap();
+            let turns = self.turns();
+            let world = |k: usize, v: Vec3| crate::vm4(turns[k].x_axis, turns[k].y_axis, turns[k].z_axis, self.bound_world(k), v);
+            let (mut met, mut gap) = (vec![], self.leg_gap);
+            for (g, (a, c)) in [(l[0], r[0]), (l[1], r[1])].into_iter().enumerate() {
+                let (Some(x), Some(y)) = (caps.get(a), caps.get(c)) else { continue };
+                let now = segments_apart(world(a, x.0), world(a, x.1), world(c, y.0), world(c, y.1)) - x.2 - y.2;
+                if gap[g] >= 0.0 && now < 0.0 {
+                    met.push((a.min(c), a.max(c)));
+                }
+                gap[g] = now;
+            }
+            drop(caps);
+            self.self_met.extend(met);
+            self.leg_gap = gap;
+        }
         for (k, a) in accs.iter().enumerate().filter(|(_, a)| a.2 > 0.0) {
             self.hit_out[k] = touch_hit(*a).map(|h| (h.0, h.1, a.2));
         }
@@ -3230,6 +3276,7 @@ impl Ragdoll {
             self.pins.iter_mut().flatten().for_each(|p| p.translation -= d);
         }
         self.age += dt;
+        self.self_met.clear();
         for t in &mut self.touch {
             *t = (*t & !delirium_data::kv!(409 int)) | ((*t >> delirium_data::kv!(0 int)) & delirium_data::kv!(1 int));
         }

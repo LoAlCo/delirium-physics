@@ -137,6 +137,10 @@ pub struct Out {
     pub dbm_turn_facing: Option<f32>,
     /// RDR2 core: staggerFall's stagger mode for the balancer this step, and its prediction time
     pub dbm_stagger: bool,
+    /// bal+0x349: a staggering leg pushes off
+    pub dbm_push_off: bool,
+    /// bal+0x338: staggerFall's fall has begun
+    pub dbm_falling: bool,
     pub dbm_lead: Option<f32>,
     /// RDR2 core: teeter's addition to the balancer's prediction time this step (bal+0x6bc with +0x6c0 on)
     pub dbm_lead_add: f32,

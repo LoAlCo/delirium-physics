@@ -955,7 +955,10 @@ impl StgRdr2 {
         let fall_time = self.t > p.time_to_fall && c.out.dbm_force_balance;
         for i in 0..2 {
             let o = 1 - i;
-            if !(fall_time || (bal.stepping as usize == o + 1 && !bal.planted[o])) {
+            // the stepping foot off the ground, this tick or the last (bal+0x550 & 3, & 0xc)
+            let both: u8 = delirium_data::kv!(7 int) | delirium_data::kv!(1 int);
+            let lifted = c.b.doll.touch[Self::foot(c, o)] & both != both;
+            if !(fall_time || (bal.stepping as usize == o + 1 && lifted)) {
                 continue;
             }
             let touch = Self::touching(c, i);
@@ -978,6 +981,7 @@ impl StgRdr2 {
                 self.leg[o] = 5;
             }
         }
+        c.out.dbm_push_off = self.leg.iter().any(|&l| l == 3 || l == 4);
         // leg stiffness (0x2a9e8a4). (hip, knee, ankle) of a leg with no state: base - 1, base - 3, base - 1; a stance leg, the
         // other foot stepping: base, base, base + 2; once released (it stopped opposing gravity): the hip less the strike
         // reduction, the knee less twice it, the ankle base. Each less the steps past stepsTillStartEnd's reduction.
@@ -1032,6 +1036,7 @@ impl StgRdr2 {
                 _ => {}
             }
         }
+        c.out.dbm_falling = elapsed && self.latch;
     }
 
     /// RDR2's stagger arms (0x2a7af24, upperBodyReaction): while the chest moves fast and not backward, the arms' pose is

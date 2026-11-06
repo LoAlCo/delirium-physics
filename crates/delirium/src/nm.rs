@@ -1674,7 +1674,7 @@ impl Agent {
                         // RDR2 core: the balancer sets the foot yaw hold's gains every step it runs (they stay after),
                         // and its fall assist runs on this tick
                         if let Some(r) = dbm.p.rdr2 {
-                            let k = if r.running { r.p.foot_slip_stiffness_run } else { r.p.foot_slip_stiffness };
+                            let k = if r.run_fast { r.p.foot_slip_stiffness_run } else { r.p.foot_slip_stiffness };
                             ch.core.foot_slip = (k, 2.0 * k.sqrt());
                             let rec = crate::nmdbm_rdr2::stay_live(&ch.core.stay, s.vel);
                             fall_assist = rec.fall_assist(r.time, s.vel, self.doll.mass());
@@ -2235,6 +2235,7 @@ impl Agent {
                     r.kneeling = out.dbm_kneeling.unwrap_or(r.kneeling);
                     r.force_fail |= out.dbm_force_fail;
                     (r.stagger, r.lead) = (out.dbm_stagger, out.dbm_lead);
+                    (r.push_off, r.falling) = (out.dbm_push_off, out.dbm_falling);
                     // teeter's prediction boost and exclusion plane (this step), and taperKneeStrength (until changed)
                     (r.lead_add, r.plane) = (out.dbm_lead_add, out.dbm_plane);
                     if let Some(t) = out.dbm_taper {
@@ -2724,11 +2725,24 @@ impl Agent {
         self.doll.contact_off = self.nm_gr.contact_off | self.extras.contact_off;
         if let Some(pairs) = crate::nmrs::SELF[build.nm].get().filter(|_| build.parts.len() == delirium_data::nm_asset::PARTS.len()) {
             let legs = self.balance.as_ref().and_then(|b| b.dbm.as_ref()).is_some_and(|d| d.held);
+            // RDR2 (0x2a2b884, masks 0x32 and 0xc4 while the balancer runs): contacts between the legs go, except a thigh's or
+            // calf's first touch, kept for that tick without friction: only its report (`Ragdoll::slip_legs`) is kept here
+            let masks = self.rdr2_core.is_some() && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
+            let legs = legs || masks;
+            let (lf, rf) = match self.ch.as_ref() {
+                Some(ch) => {
+                    let side = |i: usize| [(*crate::nmrs::HIP())[i], (*crate::nmrs::KNEE())[i], (*crate::nmrs::ANKLE())[i]].map(|j| ch.joints[j].child);
+                    (side(0), side(1))
+                }
+                None => ([0; 3], [0; 3]),
+            };
+            self.doll.slip_legs = masks.then_some([[lf[0], lf[1]], [rf[0], rf[1]]]);
+            let foot_met = |&(a, b): &(usize, usize)| masks && ((lf.contains(&a) && rf.contains(&b)) || (lf.contains(&b) && rf.contains(&a)));
             let hands = self.nm_fl.hands_off;
             // RDR2 core's pointGun: its arms leave these parts alone (nothing without it)
             let off: Vec<(Vec<usize>, Vec<usize>)> = self.extras.pair_off.iter().map(|&(m, i)| (crate::extras_ysk_rdr2::parts(m), crate::extras_ysk_rdr2::parts(i))).collect();
             let off = |&(a, b): &(usize, usize)| off.iter().any(|(m, i)| (m.contains(&a) && i.contains(&b)) || (m.contains(&b) && i.contains(&a)));
-            let on = |p: &(usize, usize)| pair_on(*p, legs, hands) && !off(p);
+            let on = |p: &(usize, usize)| pair_on(*p, legs, hands) && !off(p) && !foot_met(p);
             if self.doll.pairs.len() != pairs.iter().filter(|p| on(p)).count() {
                 self.doll.pairs = game_pairs(pairs.iter().copied().filter(on));
             }
