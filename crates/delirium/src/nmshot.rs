@@ -192,6 +192,10 @@ pub struct Out {
     pub bb_start: Option<crate::nmbb::Params>,
     /// RDR2 core: the balancer's leg stiffness from now on (onFire's bal+0x658/+0x65c)
     pub dbm_leg_stiffness: Option<f32>,
+    /// RDR2 core: the balancer's leg stiffness per leg, left and right (yanked's bal+0x658, +0x65c)
+    pub dbm_leg_each: Option<[f32; 2]>,
+    /// RDR2 core: while turning, keep the usual "other foot farther" margin (yanked's turn block, bal+0x618)
+    pub dbm_turn_margin: Option<bool>,
     /// RDR2 core: pedalLegs' one-tick reverse flags (left, right) for its next tick, as RDR2's yanked writes them
     pub pedal_reverse: Option<[bool; 2]>,
     /// RDR2 core, fall to knees: the balancer's balanceAbortThreshold (bal+0x294), failMustCollide (+0x6d8), kneeling

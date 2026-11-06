@@ -294,9 +294,9 @@ impl Extras {
             self.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.pg_duck_set(s));
         }
         // RDR2 core: yanked's coupling into a running pointGun
-        for s in self.on.iter().filter_map(|(_, e)| e.pg_yanked()).collect::<Vec<_>>() {
-            self.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.pg_yanked_set(s));
-        }
+        // (it reads the running yanked each time, so it lapses when yanked stops)
+        let s = self.on.iter().any(|(_, e)| e.pg_yanked() == Some(true));
+        self.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.pg_yanked_set(s));
         self.take_off(|_, e| e.done());
     }
 
