@@ -644,6 +644,9 @@ fn moment(f: Vec3, d: Vec3, t: Vec3) -> Vec3 {
     Vec3::new((-f.y).mul_add(d.z, f.z.mul_add(d.y, t.x)), (-f.z).mul_add(d.x, f.x.mul_add(d.z, t.y)), (-f.x).mul_add(d.y, f.y.mul_add(d.x, t.z)))
 }
 
+/// RDR2's joint order on the articulated body, in Delirium's joint numbers (the recorder's map: hip L, hip R, spine 0, knee L, ...)
+const RAGE_JOINTS: [usize; 20] = [0, 3, 6, 1, 2, 4, 5, 7, 8, 9, 12, 16, 10, 13, 14, 15, 17, 18, 19, 11];
+
 fn pair(_joints: &[Option<Joint>], k: usize, t: DVec3, ev: &mut Vec<(usize, Vec3)>) {
     ev.push((k, t.as_vec3()));
 }
@@ -730,6 +733,8 @@ struct G11 {
     t: f32,
     k: f32,
     mu: f32,
+    /// RDR2 core: the row keeps its impulse for the next step's start, under this key
+    warm: Option<(u32, u32)>,
 }
 
 #[derive(Clone, Copy)]
@@ -1067,6 +1072,13 @@ fn impulses_g(rows: &mut [Row], blocks: &mut [Block], artic: &Artic, base: Vec<a
     };
     let mut r7: Vec<Vec3> = blocks.iter().map(|b| -b.lambda.as_vec3()).collect();
     let mut r11 = vec![0.0f32; rows.len()];
+    for (r, row) in r11.iter_mut().zip(rows.iter()).filter(|(_, row)| row.lambda != 0.0) {
+        let g = row.g.unwrap();
+        *r = -row.lambda as f32;
+        let pp = (Vec3::ZERO, g.u * row.lambda as f32);
+        lz.push(g.p, pp);
+        lz.push(g.c, (Vec3::ZERO - pp.0, Vec3::ZERO - pp.1));
+    }
     let mut moved = Vec3::ZERO;
     for (b, r) in blocks.iter().zip(&r7).filter(|(b, _)| !b.g.as_ref().unwrap().pin) {
         push7(&mut lz, &mut vb, b.g.as_ref().unwrap(), Vec3::ZERO - *r, &mut moved);
@@ -1150,6 +1162,13 @@ fn impulses_g(rows: &mut [Row], blocks: &mut [Block], artic: &Artic, base: Vec<a
         *e = (0..links).map(|k| (lz.spin(k), lz.at(k, Vec3::ZERO))).collect();
     }
     true
+}
+
+/// RDR2 core: how fast a contact point must part (< 0: may close), by how deep it is (x < 0: short of the surface), 0x28936f8
+fn contact_b(x: f32, h: f32) -> f32 {
+    let (a, b, c) = (-0.002f32, 0.003f32, 0.007f32);
+    let invh = 1.0 / h;
+    (x.clamp(b, c) - b) * (720.0 * h).min(invh) + (x - a).min(0.0) * invh + x.max(a).min(b) * 0.05 * invh
 }
 
 #[allow(non_snake_case)]
@@ -1588,6 +1607,15 @@ fn out(gap: f32) -> f32 {
 }
 
 impl Ragdoll {
+    /// RDR2 core: the position pass's contact row (0x28a5b30, its branch for that pass): nothing to 0.007 deep, a quarter past
+    /// it, no warm start (0x28e4740 passes 0 for it there)
+    fn push_block_rage(b: &Block, gap: f32, h: f32) -> Block {
+        let e = -gap - 0.007;
+        let t = (if e > 0.0 { e * 0.25 } else { e }) / h;
+        let g = b.g.map(|g| G7 { target: Vec3::new(t, 0.0, 0.0), ..g });
+        Block { target: DVec3::new(t as f64, 0.0, 0.0), lambda: DVec3::ZERO, held: None, scale: DVec3::ONE, g, ..b.clone() }
+    }
+
     fn push_block(b: &Block, over: f32, h: f32, last: Vec3) -> Block {
         let g = b.g.map(|g| G7 { target: Vec3::new(out(over) * (1.0 / h), 0.0, 0.0), ..g });
         Block { target: DVec3::new((out(over) / h) as f64, 0.0, 0.0), lambda: last.as_dvec3(), held: None, scale: DVec3::ONE, g, ..b.clone() }
@@ -1724,6 +1752,7 @@ pub struct Ragdoll {
     /// RDR2 core: the bodies move at the end of a step, so the next tick reads, and its drive starts from, where the
     /// solve will be (rdr2_core3.md 11.1); what `begin` keeps from before the move
     pub nm_first: bool,
+    lim_warm: Vec<((u32, u32), f32)>,
     early: Option<(Vec<Vec3>, Vec<[Vec3; 3]>, Vec<(Vec3, Mat3)>)>,
     pub inertia: Option<Vec<Vec3>>,
     pub inst: Option<[Vec3; 4]>,
@@ -1813,7 +1842,7 @@ impl Ragdoll {
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
         Ragdoll { hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
-                  sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
+                  sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, lim_warm: vec![], early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
 
@@ -2309,9 +2338,25 @@ impl Ragdoll {
         Artic::new(&links, &js, &self.order)
     }
 
-    fn muscles(&self, artic: &Artic, joints: &[Option<Joint>], drive: &Drive, h: f32, lt: &mut Vec<(usize, Vec3)>, out: &mut [Vec3], hb: &mut [Option<f32>]) {
+    fn muscles(&self, artic: &Artic, joints: &[Option<Joint>], drive: &Drive, h: f32, lt: &mut Vec<(usize, Vec3)>, out: &mut [Vec3], hb: &mut [Option<f32>], nm: &[Acc]) {
         let b = &self.bodies;
-        for (i, m) in drive.muscles.iter().enumerate().filter(|(i, m)| (m.stiffness > 0.0 || drive.rigid.get(*i).is_some()) && self.gone >> *i & 1 == 0) {
+        // RDR2 core: the muscles run one joint at a time (0x286a704 walks body+0xc0), each impulse goes into the body at once
+        // (0x286646c; the flag 0x5978913 only makes it lazy, 0x2874a74 catches up on every read), so a joint's speed has the
+        // joints before it in it, and NM's forces for the step, which are in the velocities by now.
+        let rage = self.nm_first && !drive.rigid.is_empty();
+        let mut lz = rage.then(|| {
+            let mut lz = artic::Lazy::new(artic, b.iter().map(|b| (b.w, Vec3::ZERO)).collect());
+            for (k, a) in nm.iter().enumerate().filter(|(_, a)| a.0 != Vec3::ZERO || a.1 != Vec3::ZERO) {
+                lz.push(k, (a.0 * h, a.1 * h));
+            }
+            lz
+        });
+        let seq: Vec<usize> = if rage && drive.muscles.len() == RAGE_JOINTS.len() + 1 {
+            std::iter::once(0).chain(RAGE_JOINTS.iter().map(|&j| j + 1)).collect()
+        } else {
+            (0..drive.muscles.len()).collect()
+        };
+        for (i, m) in seq.into_iter().map(|i| (i, &drive.muscles[i])).filter(|(i, m)| (m.stiffness > 0.0 || drive.rigid.get(*i).is_some()) && self.gone >> *i & 1 == 0) {
             let parent = joints[i].map(|j| j.parent);
             let (pq, pw) = parent.map_or((Quat::IDENTITY, Vec3::ZERO), |j| (b[j].q, b[j].w));
             let err = short((pq * m.target * b[i].q.inverse()).normalize()).to_scaled_axis();
@@ -2325,8 +2370,22 @@ impl Ragdoll {
                     Some(c) => (m / (1.0 - r.blend).max(delirium_data::kv!(134))).min(c),
                     None => m / (1.0 - r.blend).max(delirium_data::kv!(134)),
                 };
-                let speed = |a: Vec3, o: &[u8; 3]| sdot(cl.w, a, o) - sdot(pl.w, a, o);
-                let held = |acc: f32, v: f32, at: f32, to: f32| if acc.abs() > delirium_data::kv!(50) && !((acc.fma(h, v).fma(h, at) - to) * (at - to) >= 0.0) { 0.0 } else { acc };
+                let (cw, pw) = match lz.as_mut() {
+                    Some(lz) => (lz.spin(i), lz.spin(j.parent)),
+                    None => (cl.w, pl.w),
+                };
+                let speed = |a: Vec3, o: &[u8; 3]| sdot(cw, a, o) - sdot(pw, a, o);
+                let held = |acc: f32, v: f32, at: f32, to: f32| {
+                    if !(acc.abs() > delirium_data::kv!(50) && !((acc.fma(h, v).fma(h, at) - to) * (at - to) >= 0.0)) {
+                        return acc;
+                    }
+                    if !rage {
+                        return 0.0;
+                    }
+                    // RDR2 core (0x2869f00): a step that would cross the target lands on it; 0 if that needs the other sign
+                    let landed = acc - (acc.fma(h, v).fma(h, at) - to) / (h * h);
+                    if acc * landed < 0.0 { 0.0 } else { landed }
+                };
                 if !r.hinge {
                     let st = crate::rigid::swing3(&j.jc, &pl, &cl);
                     let (cs, sn) = (sdot(st.s, crate::rigid::col(&st.pr, 1), b"zyx"), fneg(sdot(st.s, crate::rigid::col(&st.pr, 0), b"yzx")));
@@ -2349,6 +2408,10 @@ impl Ragdoll {
                     let t = st.bis.mul_add(Vec3::splat(t2), st.across.mul_add(Vec3::splat(t0.fma(sn, fneg(t1 * cs))), st.s * t0.fma(cs, t1 * sn)));
                     pair(joints, i, t.as_dvec3(), lt);
                     out[i] += t;
+                    if let Some(lz) = lz.as_mut() {
+                        lz.push(i, (Vec3::ZERO, t * h));
+                        lz.push(j.parent, (Vec3::ZERO, t * -h));
+                    }
                     continue;
                 }
                 let n = crate::rigid::hinge_axis(&j.jc, &cl);
@@ -2360,6 +2423,10 @@ impl Ragdoll {
                 let t = if k > delirium_data::kv!(70) { n * (acc / k).clamp(-mt, mt) } else { Vec3::ZERO };
                 pair(joints, i, t.as_dvec3(), lt);
                 out[i] += t;
+                if let Some(lz) = lz.as_mut() {
+                    lz.push(i, (Vec3::ZERO, t * h));
+                    lz.push(j.parent, (Vec3::ZERO, t * -h));
+                }
             } else if drive.rigid.is_empty() {
                 let (s, d) = (m.stiffness * m.stiffness, 2.0 * m.damping * m.stiffness);
                 let a = (err * s - rel * (d + h * s)) / (1.0 + h * d + h * h * s);
@@ -2545,19 +2612,21 @@ impl Ragdoll {
                     }
                 }
             }
+            let mut dof = 0u32;
             for (u, o, across) in dofs {
-                let mut row = |u: Vec3, t: f32, mu: f32| {
+                let mut row = |u: Vec3, t: f32, mu: f32, tag: u32| {
                     let mut jr = vec![0.0; n];
                     for i in 0..3 {
                         jr[6 * k + 3 + i] = -u[i] as f64;
                         jr[6 * j.parent + 3 + i] += u[i] as f64;
                     }
                     let q = u.dot(artic.answer(k, u));
-                    found.push((jr, o, G11 { c: k, p: j.parent, u, t, k: -1.0 / q, mu }));
+                    found.push((jr, o, G11 { c: k, p: j.parent, u, t, k: -1.0 / q, mu, warm: Some((k as u32, tag)) }));
                 };
-                row(u, rate(u) - allowed(o), 0.0);
+                dof += 1;
+                row(u, rate(u) - allowed(o), 0.0, 2 * dof);
                 if let Some(a) = across {
-                    row(a, rate(a), 0.2);
+                    row(a, rate(a), 0.2, 2 * dof + 1);
                 }
             }
         }
@@ -2570,8 +2639,9 @@ impl Ragdoll {
             for ((jr, o, g11), mj) in g.iter().cloned().zip(mj) {
                 let mut r = Row::with(jr, mj, -g11.t as f64, RowKind::Push);
                 if g11.mu == 0.0 {
-                    push.push(Row { j: r.j.clone(), mj: r.mj.clone(), target: correct(o) as f64, g: Some(G11 { t: correct(o), ..g11 }), ..r.clone() });
+                    push.push(Row { j: r.j.clone(), mj: r.mj.clone(), target: correct(o) as f64, g: Some(G11 { t: correct(o), warm: None, ..g11 }), ..r.clone() });
                 }
+                r.lambda = self.lim_warm.iter().find(|w| Some(w.0) == g11.warm).map_or(0.0, |w| w.1 as f64);
                 r.g = Some(g11);
                 rows.push(r);
             }
@@ -2643,7 +2713,7 @@ impl Ragdoll {
                 let t = fneg(m.mul_add(1.0 / h, -(bv * c)));
                 let q = sdot(u, artic.answer(k, u), b"yzx") * c;
                 let r = crate::estimate::vrefp(q);
-                found.push((jr, to, o, c, G11 { c: k, p: j.parent, u, t, k: 0.0 - r.mul_add(fneg(r.mul_add(q, -1.0)), r), mu: 0.0 }));
+                found.push((jr, to, o, c, G11 { c: k, p: j.parent, u, t, k: 0.0 - r.mul_add(fneg(r.mul_add(q, -1.0)), r), mu: 0.0, warm: None }));
             }
         }
         for g in found.chunks(delirium_data::kv!(1 int)) {
@@ -2664,6 +2734,7 @@ impl Ragdoll {
                 others: &[Capsule], free: &[f64], fc: &[artic::P2], joints: &[Option<Joint>], first: bool)
                 -> (Vec<Row>, Vec<Block>, Vec<Block>, Vec<usize>, Vec<bool>, Option<Artic>) {
         let (mut rows, mut blocks, mut push_blocks) = (vec![], vec![], vec![]);
+        let claw = self.nm_first;
         let fv = |j: &[f64]| j.iter().zip(free).map(|(a, b)| a * b).sum::<f64>();
         let (o, turns) = (self.o, self.turns());
         let (r, ip) = (self.inst(), self.inst_place(&self.inst()));
@@ -2893,10 +2964,11 @@ impl Ragdoll {
                     let dot = |t: Vec3| t.x.mul_add(rv.x, t.y.mul_add(rv.y, t.z * rv.z));
                     let over = if -over >= 0.0 { 0.0 } else { over };
                     let e = PART_ELASTICITY() * PART_ELASTICITY();
-                    G7::pair(artic, (a, ra), (c, rc), ts, Vec3::new(over.mul_add(-(1.0 / h), dot(ts[0]) / (e + 1.0)), dot(ts[1]), dot(ts[2])), mu)
+                    let nt = if claw { contact_b(-r.gap, h) + dot(ts[0]) / (e + 1.0) } else { over.mul_add(-(1.0 / h), dot(ts[0]) / (e + 1.0)) };
+                    G7::pair(artic, (a, ra), (c, rc), ts, Vec3::new(nt, dot(ts[1]), dot(ts[2])), mu)
                 };
                 blocks.push(Block { scale: elastic(e), g: Some(g), ..Block::new(artic, j, to, mu as f64, Some((n_links + pi, x)), r.imp, true) });
-                push_blocks.push(Self::push_block(blocks.last().unwrap(), over, h, r.pimp));
+                push_blocks.push(if claw { Self::push_block_rage(blocks.last().unwrap(), r.gap, h) } else { Self::push_block(blocks.last().unwrap(), over, h, r.pimp) });
             }
         }
         let n_self = blocks.len();
@@ -2992,7 +3064,8 @@ impl Ragdoll {
                     let dot = |t: Vec3| t.x.mul_add(rv.x, t.y.mul_add(rv.y, t.z * rv.z));
                     let over = if i >= usize::MAX - 1 { 0.0 } else { ALLOW() + gap0 };
                     let over = if -over >= 0.0 { 0.0 } else { over };
-                    let tg = Vec3::new(over.mul_add(-(1.0 / h), dot(ts[0]) / (e + 1.0)), dot(ts[1]), dot(ts[2]));
+                    let nt = if claw && i < usize::MAX - 1 { contact_b(-gap0, h) + dot(ts[0]) / (e + 1.0) } else { over.mul_add(-(1.0 / h), dot(ts[0]) / (e + 1.0)) };
+                    let tg = Vec3::new(nt, dot(ts[1]), dot(ts[2]));
                     let spin = obstacles[o].inv_inertia.map(|ii| ((vat + self.o) - obstacles[o].com, ii));
                     let g = G7::moving(artic, k, (at + self.o) - (xr.as_vec3() + self.o), ts, tg, mu, (o, obstacles[o].inv_mass), spin);
                     let spin = spin.map(|(rb, ii)| (ts.map(|t| rb.cross(t).as_dvec3()), ii.as_dmat3()));
@@ -3003,13 +3076,13 @@ impl Ragdoll {
                     let dot = |t: Vec3| t.x.mul_add(rv.x, t.y.mul_add(rv.y, t.z * rv.z));
                     let over = if i >= usize::MAX - 1 { 0.0 } else { ALLOW() + gap0 };
                     let over = if -over >= 0.0 { 0.0 } else { over };
-                    let to = Vec3::new(over.mul_add(-(1.0 / h), dot(ts[0]) / (e + 1.0)), dot(ts[1]), dot(ts[2]));
+                    let to = if claw && i < usize::MAX - 1 { Vec3::new(contact_b(-gap0, h) + dot(ts[0]) / (e + 1.0), dot(ts[1]), dot(ts[2])) } else { Vec3::new(over.mul_add(-(1.0 / h), dot(ts[0]) / (e + 1.0)), dot(ts[1]), dot(ts[2])) };
                     G7::new(artic, k, at - xr.as_vec3(), ts, to, mu)
                 }), ..Block::new(artic, j, to, mu as f64, held, warm, false) },
             };
             let pin = i == usize::MAX - 1;
             blocks.push(Block { scale: elastic(e as f64), ob, joined, pin, g: b.g.map(|g| G7 { pin, ..g }), ..b });
-            let pb = Self::push_block(blocks.last().unwrap(), gap, h, held.map_or(Vec3::ZERO, |r| self.rec(r).pimp));
+            let pb = if claw && i < usize::MAX - 1 { Self::push_block_rage(blocks.last().unwrap(), gap0, h) } else { Self::push_block(blocks.last().unwrap(), gap, h, held.map_or(Vec3::ZERO, |r| self.rec(r).pimp)) };
             let to = -gap0 * (1.0 / h);
             push_blocks.push(if pin { Block { target: DVec3::new(to as f64, 0.0, 0.0), g: pb.g.map(|g| G7 { target: Vec3::new(to, 0.0, 0.0), ..g }), ..pb } } else { pb });
         }
@@ -3375,6 +3448,8 @@ impl Ragdoll {
         if !impulses_g(&mut st.rows, &mut st.blocks, &st.artic, base, &st.vb, SOR(), solved.as_mut()) {
             impulses(&mut st.rows, &mut st.blocks, &mut st.qd0.clone(), &mut st.vb.clone());
         }
+        // RDR2 core: the velocity pass's limit rows start the next step from these (0x28e1650's warm start, 0x28a9ca8)
+        self.lim_warm = st.rows.iter().filter_map(|r| Some((r.g?.warm?, r.lambda as f32))).collect();
         if !self.middle(&mut st) {
             return;
         }
@@ -3493,7 +3568,7 @@ impl Ragdoll {
         let mut jt = vec![Vec3::ZERO; self.bodies.len()];
         let mut drive_ev = vec![];
         let mut hb = vec![None; self.bodies.len()];
-        self.muscles(&artic, &joints, &drive, h, &mut drive_ev, &mut jt, &mut hb);
+        self.muscles(&artic, &joints, &drive, h, &mut drive_ev, &mut jt, &mut hb, &lt);
         self.soft_limits(&artic, &joints, &drive, &mut drive_ev, &mut jt);
         self.hinge_b = hb;
         apply(&joints, &drive_ev, &mut lt);
