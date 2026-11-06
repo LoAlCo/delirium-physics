@@ -163,6 +163,76 @@ pub struct Params {
     /// standing (below 1 m/s, not staggering), the stance ankle aims from the actual knee to the actual foot on the
     /// renormalised contact normal (RDR2's +0x9c state test is left out)
     pub flatter_static_feet: bool,
+    /// the timed fail starts once the trunk leans back past this (bal+0x6fc)
+    pub backwards_lean_cutoff: f32,
+    /// below this COM speed, and the rotation below its own, the stable feedback (bal+0x6e0)
+    pub stable_lin: f32,
+    /// (bal+0x6e4)
+    pub stable_rot: f32,
+    /// the fail tests only set a flag (bal+0x6d9)
+    pub ignore_failure: bool,
+    /// a failing test waits for a part off the legs to touch something (bal+0x6d8)
+    pub fail_must_collide: bool,
+    /// below this speed the twist and the sideways force take the way he faces, not the velocity (bal+0x2b0)
+    pub use_com_dir_turn_vel_thresh: f32,
+    /// feeds the stance legs the pelvis error ahead, and eases the single support pitch rule (bal+0x700)
+    pub hip_error: f32,
+    /// the same when running (bal+0x74c)
+    pub hip_error_run: f32,
+    /// the most that feed turns the pelvis frame, rad (bal+0x2c8)
+    pub hip_error_max: f32,
+    /// the desired pelvis frame is turned against the pelvis's spin (bal+0x2fb)
+    pub damp_pelvis: bool,
+    /// a swing foot moving down lies flat with no gravity opposition on its ankle (bal+0x2f9)
+    pub flatten_down_swing: bool,
+    /// swing ankles aim the foot flat (bal+0x6f0)
+    pub flatter_swing_feet: bool,
+    /// RDR2's 2bc0e7e9: the same when running (bal+0x748)
+    pub flatter_swing_feet_run: bool,
+    /// off, or running: a planted leading foot that lost the ground swings (bal+0x6e8)
+    pub airborne_step: bool,
+    /// running: how far a foot may be behind him, moving backward (bal+0x5c4)
+    pub run_back: f32,
+    /// the same moving forward (bal+0x5cc)
+    pub run_back_fwd: f32,
+    /// running: how far the other foot must be ahead of him, moving backward; the code's doubtful name (bal+0x5c8)
+    pub run_ahead: f32,
+    /// the same moving forward (bal+0x5d0)
+    pub run_ahead_fwd: f32,
+    /// turning: s since the last step before a new one (bal+0x2a4)
+    pub step_turn_wait: f32,
+    /// no new step this long into the balance (bal+0x6a4)
+    pub dont_step_time: f32,
+    /// the swing hip's damping share (bal+0x660)
+    pub swing_damping_l: f32,
+    /// (bal+0x664)
+    pub swing_damping_r: f32,
+    /// hips this, knees twice it, spine 0 this (bal+0x668)
+    pub oppose_gravity_legs: f32,
+    /// ankles twice this (bal+0x66c)
+    pub oppose_gravity_ankles: f32,
+    /// running's footSlipStiffness; the message squares it (bal+0x758)
+    pub foot_slip_stiffness_run: f32,
+    /// the swing target is kept off the other leg (bal+0x2b5)
+    pub avoid_leg: bool,
+    /// the corridor's half width, moving backward (bal+0x5bc)
+    pub avoid_foot_width: f32,
+    /// RDR2's c5ebfd7b: moving forward (bal+0x5c0)
+    pub avoid_foot_width_fwd: f32,
+    /// (bal+0x2bc)
+    pub avoid_feedback: f32,
+    /// RDR2's 428c2b6f (bal+0x714)
+    pub turn_lift_feet: f32,
+    /// RDR2's cfe51361 (bal+0x718)
+    pub turn_lift_feet_variance: f32,
+    /// RDR2's 96c82edf (bal+0x720)
+    pub min_leg_twist_variance: f32,
+    /// RDR2's 5831d084 (bal+0x728)
+    pub max_leg_twist_variance: f32,
+    /// RDR2's 747a3a5c (bal+0x27c)
+    pub slope_pelvis_blend: f32,
+    /// (bal+0x298)
+    pub stagger_fail_height: f32,
 }
 
 impl Default for Params {
@@ -181,14 +251,15 @@ impl Default for Params {
                  fall_reduce_gravity_comp: false, min_leg_twist: -1.9, max_leg_twist: 0.2, ankle_keep_pelvis: false,
                  crouch: false, crouch_bend_thresh: 0.3, crouch_bend_max: 0.55, crouch_time: 0.5, crouch_stand_rate: 0.4,
                  crouch_hip_rate: 0.25, start_flat_twist: 0.05, end_flat_twist: 0.15, ankle_twist_mult: 20.0,
-                 foot_slip_stiffness: 59.29, flatter_static_feet: false }
+                 foot_slip_stiffness: 59.29, flatter_static_feet: false,
+                 backwards_lean_cutoff: 1.1, stable_lin: 0.25, stable_rot: 0.25, ignore_failure: false, fail_must_collide: false, use_com_dir_turn_vel_thresh: 0.0, hip_error: 0.0, hip_error_run: 0.0, hip_error_max: 0.9, damp_pelvis: true, flatten_down_swing: false, flatter_swing_feet: false, flatter_swing_feet_run: true, airborne_step: true, run_back: 0.65, run_back_fwd: 0.65, run_ahead: -0.1, run_ahead_fwd: 0.05, step_turn_wait: -1.0, dont_step_time: 0.0, swing_damping_l: 1.0, swing_damping_r: 1.0, oppose_gravity_legs: 1.0, oppose_gravity_ankles: 1.0, foot_slip_stiffness_run: 161.29, avoid_leg: false, avoid_foot_width: 0.1, avoid_foot_width_fwd: 0.1, avoid_feedback: 0.6, turn_lift_feet: 0.17, turn_lift_feet_variance: 0.07, min_leg_twist_variance: 0.3, max_leg_twist_variance: 0.2, slope_pelvis_blend: 1.0, stagger_fail_height: 0.65 }
     }
 }
 
 impl Params {
     /// configureBalance's value for one of these, as the message sends it.
     pub fn set_message(&mut self, name: &str, v: f32) -> bool {
-        self.set(name, if name == "footSlipStiffness" { v * v } else { v })
+        self.set(name, if matches!(name, "footSlipStiffness" | "footSlipStiffnessRun") { v * v } else { v })
     }
 
     /// Sets one parameter by its RDR2 name; false when the name isn't one of these.
@@ -260,6 +331,41 @@ impl Params {
             "ankleTwistMult" => self.ankle_twist_mult = v,
             "footSlipStiffness" => self.foot_slip_stiffness = v,
             "flatterStaticFeet" => self.flatter_static_feet = v != 0.0,
+            "backwardsLeanCutoff" => self.backwards_lean_cutoff = v,
+            "stableLinSpeedThresh" => self.stable_lin = v,
+            "stableRotSpeedThresh" => self.stable_rot = v,
+            "ignoreFailure" => self.ignore_failure = v != 0.0,
+            "failMustCollide" => self.fail_must_collide = v != 0.0,
+            "useComDirTurnVelThresh" => self.use_com_dir_turn_vel_thresh = v,
+            "hipError" => self.hip_error = v,
+            "hipErrorRun" => self.hip_error_run = v,
+            "hipErrorMax" => self.hip_error_max = v,
+            "dampPelvis" => self.damp_pelvis = v != 0.0,
+            "flattenDownSwing" => self.flatten_down_swing = v != 0.0,
+            "flatterSwingFeet" => self.flatter_swing_feet = v != 0.0,
+            "flatterSwingFeetRun" => self.flatter_swing_feet_run = v != 0.0,
+            "airborneStep" => self.airborne_step = v != 0.0,
+            "runningThresh" => self.run_back = v,
+            "runningThreshB" => self.run_back_fwd = v,
+            "clavicleCrouchingAccumulated" => self.run_ahead = v,
+            "clavicleCrouchingAccumulatedB" => self.run_ahead_fwd = v,
+            "stepTurnWait" => self.step_turn_wait = v,
+            "dontStepTime" => self.dont_step_time = v,
+            "leftLegSwingDamping" => self.swing_damping_l = v,
+            "rightLegSwingDamping" => self.swing_damping_r = v,
+            "opposeGravityLegs" => self.oppose_gravity_legs = v,
+            "opposeGravityAnkles" => self.oppose_gravity_ankles = v,
+            "footSlipStiffnessRun" => self.foot_slip_stiffness_run = v,
+            "avoidLeg" => self.avoid_leg = v != 0.0,
+            "avoidFootWidth" => self.avoid_foot_width = v,
+            "avoidFootWidthB" => self.avoid_foot_width_fwd = v,
+            "avoidFeedback" => self.avoid_feedback = v,
+            "turnLiftFeet" => self.turn_lift_feet = v,
+            "turnLiftFeetVariance" => self.turn_lift_feet_variance = v,
+            "minLegTwistVariance" => self.min_leg_twist_variance = v,
+            "maxLegTwistVariance" => self.max_leg_twist_variance = v,
+            "slopePelvisBlend" => self.slope_pelvis_blend = v,
+            "staggerFailHeight" => self.stagger_fail_height = v,
             _ => return false,
         }
         true
@@ -375,16 +481,12 @@ const SWING_ANKLE_CLAMP: f32 = 9.7;
 const SLOPE_RESTEP: f32 = 0.7;
 /// Stagger mode: the feet may be this much further apart before he re-steps.
 const STAGGER_RESTEP: f32 = 0.3;
-/// Stagger mode fails him once the COM is less than this many leg lengths over the higher foot (staggerFailHeight).
-pub const STAGGER_FAIL_HEIGHT: f32 = 0.65;
 /// stepWait applies below this speed (m/s); above it the wait is FAST_STEP_WAIT, which never holds a step back.
 const STEP_WAIT_SPEED: f32 = 0.7;
 const FAST_STEP_WAIT: f32 = -0.1;
 /// The turn step: facing the heading this closely (cosine) he doesn't turn; the pause's range (s).
 const TURN_FACING: f32 = 0.9;
 const TURN_PAUSE: (f32, f32) = (-0.2, 0.8);
-/// On a slope: how far the pelvis point leans from the feet's midpoint toward RDR2's (+0x27c, unnamed; 1 = all the way).
-const SLOPE_PELVIS_BLEND: f32 = 1.0;
 /// The pelvis never sinks below this over the feet on a slope.
 const SLOPE_FLOOR: f32 = 0.2;
 /// Running: the swing leg's stiffness share.
@@ -401,8 +503,6 @@ const ALTERNATE: f32 = 0.06;
 /// variance, the leg-twist limits' variances.
 pub const TURN_TWIST: f32 = 1.9;
 pub const TURN_ANKLE: [f32; 2] = [0.3, 0.8];
-const TURN_LIFT: (f32, f32) = (0.17, 0.07);
-const LEG_TWIST_VAR: (f32, f32) = (0.3, 0.2);
 /// Ankle balance: the COM look-ahead (s), its speed cap, the largest tilt of the aimed normal, the feet's share power.
 const ANKLE_AHEAD: f32 = 0.4;
 const ANKLE_SPEED: f32 = 0.3;
@@ -497,6 +597,12 @@ pub struct Rdr2 {
     /// his standing leg straightness and the leg scale (ctx+0x34d0, bal+0x210), for duck's knee measure
     pub straight: (f32, f32),
     pub steps: u32,
+    /// extraSteps given: taken off the step counter maxSteps is tested against (0x2a63cbc)
+    pub extra_steps: u32,
+    /// flattenDownSwing's flag for each leg this tick (bal+0x342)
+    pub down_swing: [bool; 2],
+    /// the up this tick, for the step decision
+    pub up_now: bevy_math::Vec3,
     /// when the timed fail started (balance time)
     pub failing: Option<f32>,
     /// in [-0.15, 0.15]: which hip folds first
@@ -577,11 +683,11 @@ pub struct Rdr2 {
 
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
-        Rdr2 { p, turn_margin: false, time: 0.0, still: 0.0, straight: (0.99, 1.0), steps: 0, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
+        Rdr2 { p, turn_margin: false, time: 0.0, still: 0.0, straight: (0.99, 1.0), steps: 0, extra_steps: 0, down_swing: [false; 2], up_now: bevy_math::Vec3::Z, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
                since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false, heading_only: false,
-               leg_twist: RESET_LEG_TWIST, turn_lift: TURN_LIFT.0, turn_facing: None, force_balance: false, quality: 0.0, abort: None, must_collide: false, kneeling: false, force_fail: false, pause: 0.0, aligned: false, landed: false, crouching: None,
+               leg_twist: RESET_LEG_TWIST, turn_lift: p.turn_lift_feet, turn_facing: None, force_balance: false, quality: 0.0, abort: None, must_collide: false, kneeling: false, force_fail: false, pause: 0.0, aligned: false, landed: false, crouching: None,
                started: false, first_tick: true, twist_rest: 0.0, car: None, stagger: false, lead: None, lead_add: 0.0, taper: true, plane: None }
     }
 
@@ -596,6 +702,38 @@ impl Rdr2 {
         };
         let x = d(l).min(d(r)).min(d((l + r) * 0.5)) * (5.5555553 / h.max(0.001));
         self.quality = if x <= self.quality { (x - self.quality) * 0.25 + self.quality } else { x };
+    }
+
+    /// configureBalance's extraSteps and extraTime (0x2a63cbc): they give back steps and time, never below none used.
+    pub fn extra(&mut self, name: &str, v: f32) {
+        match name {
+            "extraSteps" if v > 0.0 => self.extra_steps = (self.extra_steps + v as u32).min(self.steps),
+            "extraTime" if v >= 0.0 => self.time = (self.time - v).max(0.0),
+            _ => {}
+        }
+    }
+
+    /// The backward lean (0x2abda8c): how far the trunk's top, its two sides and its direction go behind the pelvis, along
+    /// the pelvis's third axis off `up`. Past backwardsLeanCutoff the timed fail starts. Two of the three are metres and
+    /// one a sine, as in the code.
+    pub fn back_lean(&mut self, up: bevy_math::Vec3, pelvis: &crate::nmdbm::M34, top: &crate::nmdbm::M34) {
+        let back = (pelvis.c - up * pelvis.c.dot(up)).normalize_or_zero();
+        let o = top.d - pelvis.d;
+        let x = (o + top.b * 0.16).dot(back).max(o.normalize_or_zero().dot(back)).max((o - top.b * 0.16).dot(back));
+        if x > self.p.backwards_lean_cutoff && self.failing.is_none() {
+            self.failing = Some(self.time);
+            crate::extras_core_rdr2::trace(|| format!("balancer: leaning back {x:.2} past {} at {:.2} s", self.p.backwards_lean_cutoff, self.time));
+        }
+    }
+
+    /// hipError or its running value.
+    pub fn hip_error(&self) -> f32 {
+        if self.running { self.p.hip_error_run } else { self.p.hip_error }
+    }
+
+    /// Do this leg's swing ankle aim flat (0x2aae0b4)? Moving sideways, flatterSwingFeet or a foot moving down.
+    pub fn flat_swing(&self, i: usize) -> bool {
+        self.sideways || self.down_swing[i] || if self.running { self.p.flatter_swing_feet_run } else { self.p.flatter_swing_feet }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.
@@ -615,15 +753,20 @@ impl Rdr2 {
         }
         self.owned.step(dt);
         if self.failing.is_none() && !self.p.balance_indefinitely
-            && (self.time >= self.p.max_balance_time || self.still >= self.p.max_still_time || self.steps >= self.p.max_steps)
+            && (self.time >= self.p.max_balance_time || self.still >= self.p.max_still_time || self.steps.saturating_sub(self.extra_steps) >= self.p.max_steps)
         {
             self.failing = Some(self.time);
+            crate::extras_core_rdr2::trace(|| format!("balancer: timed fail at {:.2} s, {} steps of {}", self.time, self.steps, self.p.max_steps));
         }
     }
 
     /// Leg (knees, ankles) and per-side hip stiffness while failing, from the balancer's leg stiffness.
     pub fn drain(&self, k: f32) -> Option<(f32, [f32; 2])> {
         let t = self.time - self.failing?;
+        // the whole ramp-down sits under balanceIndefinitely off (0x2abc4ec)
+        if self.p.balance_indefinitely {
+            return None;
+        }
         // fallType 2: keep balancing at full strength (1, keep stepping, and 3, slump, drain as 0: slump is a state of
         // balancerCollisionsReaction, which RDR2 sets and nothing here reads)
         if self.p.fall_type == 2 {
@@ -676,8 +819,8 @@ impl Rdr2 {
         self.prediction = p.prediction_time + p.prediction_time_variance * self.rand();
         self.clamp_add = p.step_clamp_scale_variance * self.rand();
         self.lift = p.lift_feet + p.lift_feet_variance * self.rand();
-        self.leg_twist = (p.min_leg_twist + LEG_TWIST_VAR.0 * self.rand(), p.max_leg_twist + LEG_TWIST_VAR.1 * self.rand());
-        self.turn_lift = TURN_LIFT.0 + TURN_LIFT.1 * self.rand();
+        self.leg_twist = (p.min_leg_twist + p.min_leg_twist_variance * self.rand(), p.max_leg_twist + p.max_leg_twist_variance * self.rand());
+        self.turn_lift = p.turn_lift_feet + p.turn_lift_feet_variance * self.rand();
         let u = (self.rand() + 1.0) * 0.5;
         self.width_scale = p.feet_apart_min + (p.feet_apart_max - p.feet_apart_min) * u;
     }
@@ -902,6 +1045,10 @@ impl Rdr2 {
 
     /// May a new step start now? stepWait holds the next one back when he's slow.
     pub fn may_step(&self) -> bool {
+        // a turn step waits for stepTurnWait (0x2ab32bc)
+        if self.turning && self.p.step_turn_wait > 0.0 && self.since_step <= self.p.step_turn_wait {
+            return false;
+        }
         let wait = if self.speed < STEP_WAIT_SPEED { self.p.step_wait } else { FAST_STEP_WAIT };
         wait <= 0.0 || self.since_step > wait
     }
@@ -941,7 +1088,7 @@ impl Rdr2 {
             let x = (level + hi) * 0.5 + up * (rise * rise / d);
             let t = (x - hi).dot(lo - hi) / along;
             let t = if (0.0..=0.5).contains(&t) { t } else { 0.5 };
-            hi + (lo - hi) * (0.5 - SLOPE_PELVIS_BLEND * (0.5 - t))
+            hi + (lo - hi) * (0.5 - self.p.slope_pelvis_blend * (0.5 - t))
         });
         // stepping, he only sinks moving toward the lower foot
         if stepping && vel.dot(lo - hi) <= 0.0 {
