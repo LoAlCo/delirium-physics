@@ -2119,6 +2119,18 @@ impl Ragdoll {
         self.held[k].iter().map(|r| (if r.age == 1 { r.world } else { crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) }, r.n, r.gap)).collect()
     }
 
+    /// NMX_POSE: the doll was moved outright, so the contacts it held (anchored where it stood) and the twists the last
+    /// step read go.
+    pub fn nmx_forget_contacts(&mut self) {
+        if std::env::var_os("NMX_FORGET").is_some() { self.held.iter_mut().for_each(|h| h.clear()); }
+        self.prep_twist.iter_mut().for_each(|t| *t = None);
+        crate::nmdbm::NMX_RELATCH.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.touch.iter_mut().for_each(|t| *t = 0);
+        let d = self.bodies[self.order[0]].x;
+        self.o += d;
+        self.bodies.iter_mut().for_each(|b| b.x -= d);
+    }
+
     /// NMX_DUMP: a part's own angular momentum.
     pub fn nmx_spin(&self, k: usize) -> Vec3 {
         (self.bodies[k].tensor() * self.bodies[k].w.as_dvec3()).as_vec3()

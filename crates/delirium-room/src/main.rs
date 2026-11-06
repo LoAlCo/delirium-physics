@@ -10276,6 +10276,7 @@ mod nmx {
         for (k, t) in frames.iter().enumerate() {
             sim.agent.doll.set_body(k, t.translation, t.rotation, pose.vel, Vec3::ZERO);
         }
+        sim.agent.doll.nmx_forget_contacts();
         let f = |k: usize| frames[k].translation.xy().distance(frames[0].translation.xy());
         let s = format!("nmx  pose set: feet apart {:.3}, foot z {:.3} {:.3}, foot-pelvis xy {:.3} {:.3}; part distance from the recording's {}", frames[3].translation.distance(frames[6].translation), frames[3].translation.z, frames[6].translation.z, f(3), f(6), gaps.join(" "));
         sim.say(s);
