@@ -1112,6 +1112,9 @@ struct BcrParams {
     leg_red: f32,
     slump_red: f32,
     slump_rate: f32,
+    /// the friction ramps: start, end, rate
+    foot_fric: [f32; 3],
+    back_fric: [f32; 3],
     spin_time: f32,
     mass: f32,
     volume: f32,
@@ -1167,7 +1170,7 @@ struct BcrHit {
 /// bracing arms take the record's stiffness and reach for the point, shortened by the closing speed. Returns the arms bracing
 /// (B+0x7a, +0x7b). Ours [P]: the reach goes through the limb IK with no wrist pose or lead; the sideways offsets use the
 /// constructor's 0.1 (the body's range isn't read).
-pub(crate) fn brace_core(c: &mut Ctx, b: &mut BcrBrace, r: BraceRecord, t: Vec3, vel: Vec3, dt: f32) -> [bool; 2] {
+pub(crate) fn brace_core(c: &mut Ctx, b: &mut BcrBrace, r: BraceRecord, t: Vec3, vel: Vec3, normal: Option<Vec3>, dt: f32) -> [bool; 2] {
         let s = *SPINE();
         let up = BCR_UP;
         let q = c.b.at(s[2] + 1);
@@ -1217,9 +1220,16 @@ pub(crate) fn brace_core(c: &mut Ctx, b: &mut BcrBrace, r: BraceRecord, t: Vec3,
         // shortening by the closing speed, between what leaves braceDistance and 0.3 m
         let x = close * r.absorb;
         let short = if x < dist - r.distance { dist - r.distance } else { x.min(dist - 0.3) };
-        let base = t - dir * short;
+        // the chest part's turning leads the target, its length from there kept (0x2a14094)
+        let chest = c.b.part(s[2] + 1);
+        let d0 = t - dir * short - q;
+        let d1 = d0 + d0.cross(chest.w) * 0.1;
+        let base = q + unit(d1) * d0.length();
         let side = unit((t - c.b.at(0)).cross(up));
         let (st, both) = (r.stiffness, b.arms[0] && b.arms[1]);
+        // both arms: each to its side, or, the target square in front of him (past 0.8), across and further, the elbows out
+        let facing = both && unit(d1).dot(unit(c.b.at(crate::extras_ysk_rdr2::rp(20)) - c.b.at(0)).cross(chest.m.b)) > 0.8;
+        let across = if !both { 0.0 } else if facing { -1.0 } else { 1.0 };
         for i in 0..2 {
             if !arms[i] {
                 continue;
@@ -1233,13 +1243,29 @@ pub(crate) fn brace_core(c: &mut Ctx, b: &mut BcrBrace, r: BraceRecord, t: Vec3,
                 c.ch.eff[j].oppose_gravity = 2.0;
             }
             let shoulder = c.b.joint_pos(l.e[1]);
-            let len = arm_length(c, i) * if both { 0.876 + 0.159 } else { 0.876 };
-            let want = base + side * (if i == 0 { -0.1 } else { 0.1 }) - shoulder;
-            let touching = c.b.doll.collided(&[l.p[2]]);
+            let len = arm_length(c, i) * if facing { 0.876 + 0.159 } else { 0.876 };
+            let off = side * (across * if i == 0 { -0.1 } else { 0.1 });
+            let want = base + off - shoulder;
+            // the reach helper (0x2a1487c): 0.05 further with the hand on something, the swivel when across, the lead 1
+            // with its root's velocity, clavicle mode 3
+            let touching = c.b.doll.collided(&[l.p[3]]);
             let reach = (want.length() + if touching { 0.05 } else { 0.0 }).min(len);
-            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], shoulder + unit(want) * reach, 0.0, 0.0, 1.0 - 2.0 * i as f32, 1.0, Vec3::ZERO, None);
-            c.ch.eff[l.e[0]].desired[0] = 0.0;
-            c.ch.eff[l.e[0]].desired[1] = 0.0;
+            let at = shoulder + unit(want) * reach;
+            let side_arm = 1.0 - 2.0 * i as f32;
+            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], at, if facing { 1.0 } else { 0.0 }, 1.0, side_arm, 1.0, c.b.part(l.p[0]).v, None);
+            crate::nmcf::clav_overflow(c.ch, l.e[0], l.e[1]);
+            // the hand to the surface: its normal, or away from the point it reaches, and the fingers back by how square it is
+            let hand = c.b.at(l.p[3]);
+            let refp = t + off;
+            let (hn, along) = match normal {
+                Some(n) => (n, (hand - refp).dot(n)),
+                None => (unit(hand - refp), (hand - refp).length()),
+            };
+            crate::nmshot::Shot::wrist(c, l, at, hn, side_arm);
+            let w = (along.clamp(0.5, 0.8) - 0.5) * (10.0 / 3.0);
+            let wr = &mut c.ch.eff[l.e[3]].desired;
+            *wr = [wr[0] + (0.4 - wr[0]) * w, wr[1] + (-0.4 - wr[1]) * w, wr[2] + (1.0 - wr[2]) * w];
+            crate::extras_core_rdr2::trace_once("brace reach", || format!("arm {i}, both {both}, facing {facing}, hand pose {w:.2}"));
         }
         arms
 }
@@ -1253,6 +1279,8 @@ pub(crate) fn brace_core(c: &mut Ctx, b: &mut BcrBrace, r: BraceRecord, t: Vec3,
 /// glanceSpinTime), 6 come off the wall (reboundMode decides), 8/9 over a low wall, 10 glance over one, 12 finished.
 /// Ours or left out: see rdr2_bcr.md §12.
 pub struct BcrRdr2 {
+    /// the moving objects under ignoreColMassBelow or ignoreColVolumeBelow
+    small: Vec<i32>,
     p: BcrParams,
     state: u8,
     hits: [Option<BcrHit>; 2],
@@ -1355,12 +1383,14 @@ pub(crate) struct BraceRecord {
 }
 
 /// The slump core's record (0x2a55ddc, +0x478): its clock, the last kinetic energy, the legs' stiffness ramps (hip L, R,
-/// knee L, R). The friction ramps aren't here: Delirium's friction is per material, not per part.
+/// knee L, R), the friction ramps.
 #[derive(Clone, Copy, Debug)]
 struct SlumpRec {
     t: f32,
     ke: f32,
     legs: [f32; 4],
+    /// the friction multipliers now, feet and back (+0x478's +0x30, +0x34)
+    fric: [f32; 2],
 }
 
 /// fling2 (+0x390, block defaults 0x2a3b4e8, start 0x2a2d5dc): per arm whether it flings, the drawn angle and length,
@@ -1389,6 +1419,8 @@ impl BcrRdr2 {
             behind: b(p, "objectBehindVictim", false)?.then_some((at, n)),
             steps: i(p, "numStepsTillSlump", 4)?, zone: f(p, "exclusionZone", 0.2)?, leg_red: f(p, "impactLegStiffReduction", 3.0)?,
             slump_red: f(p, "slumpLegStiffReduction", 1.0)?, slump_rate: f(p, "slumpLegStiffRate", 8.0)?,
+            foot_fric: [f(p, "footFrictionMultStart", 1.0)?, f(p, "?9f8c1522", 0.05)?, f(p, "footFrictionMultRate", 2.0)?],
+            back_fric: [f(p, "backFrictionMultStart", 1.0)?, f(p, "?a88467a8", 0.05)?, f(p, "backFrictionMultRate", 2.0)?],
             spin_time: f(p, "glanceSpinTime", 0.5)?, mass: f(p, "ignoreColMassBelow", 20.0)?, volume: f(p, "ignoreColVolumeBelow", 0.1)?,
             rebound_mode: i(p, "reboundMode", 0)?, forward_mode: i(p, "forwardMode", 0)?, to_forward: f(p, "timeToForward", 0.5)?,
             rebound: f(p, "reboundForce", 0.0)?, brace: b(p, "braceWall", true)?, stable: f(p, "stable2SlumpTime", 1.0)?,
@@ -1412,7 +1444,7 @@ impl BcrRdr2 {
                 None
             },
         };
-        Ok(BcrRdr2 { p, state: 0, hits: [None; 2], speed: 0.0, wall: None, wall_vel: Vec3::ZERO, tte: 0.0, side: -1.0, impacted: false, phase: false,
+        Ok(BcrRdr2 { small: vec![], p, state: 0, hits: [None; 2], speed: 0.0, wall: None, wall_vel: Vec3::ZERO, tte: 0.0, side: -1.0, impacted: false, phase: false,
                      t_hit: 0.0, steps_at: 0, balancing: true, nonfoot: None, started: false, look: None, kind: 3, second: None, second_hit: None,
                      touch_low: false, touch_high: false, low: false, sum: [Vec3::ZERO; 2], rel: Vec3::ZERO, t_stable: 0.0, weak: 1.0005,
                      over_t: 0.0, over_drawn: false, recovered: false, fow_mine: false, rds_on: false, fow_starting: false, roll_on: false, slump: None, fling: None, near: [false; 2], slide: [false; 2], sink: false,
@@ -1422,6 +1454,7 @@ impl BcrRdr2 {
     /// The probes (state 0, moving faster than 0.5 m/s): spheres of 0.25 m from the pelvis and 0.1 m from the chest
     /// along his horizontal velocity for half a second of it. And the probe down the wall's face, when it is asked.
     pub fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
+        self.small = obs.iter().filter(|o| o.inv_mass > 0.0 && (1.0 / o.inv_mass < self.p.mass || 8.0 * o.half.x * o.half.y * o.half.z < self.p.volume)).map(|o| o.id).collect();
         if let Some((from, d)) = self.second.take() {
             self.second_hit = Some(self.sweep(world, obs, from, d, 0.001, 1.0).map(|h| h.at));
         }
@@ -1518,7 +1551,7 @@ impl BcrRdr2 {
             }
             if !self.impacted && self.state != 12 {
                 // moving along his facing faster than 0.5 m/s toward it: his feet wider (0x2af9888)
-                let fwd = flat(-c.m.c);
+                let fwd = unit(-c.m.c - up * up.dot(-c.m.c));
                 if fwd.dot(c.vel) > 0.5 {
                     c.out.dbm_extra_feet = Some(0.2);
                 }
@@ -1555,9 +1588,8 @@ impl BcrRdr2 {
                 if self.t_hit < self.p.react && self.balancing {
                     c.out.rfw_release = [true; 2];
                 }
-                // the head from the wall: the normal, from the chest (ours: RDR2 waits for catchFall and bodyRollUp to
-                // be idle)
-                if c.upright {
+                // the head from the wall: the normal, from the chest, with catchFall and bodyRollUp idle
+                if !c.fall_on {
                     let chest = c.b.at(crate::nmshot::chest_part());
                     self.look_at(chest + n, out);
                 }
@@ -1587,6 +1619,18 @@ impl BcrRdr2 {
         }
         if matches!(self.state, 4 | 7) && c.dbm.is_some() {
             self.slump_core(c, dt);
+        }
+        // the base friction it left stands till he has been down on something more than 0.3 s (0x2a4de94), or the reset
+        if self.nonfoot.unwrap_or(0.0) > 0.3 {
+            if let Some(r) = self.slump.as_mut() {
+                r.fric = [1.0; 2];
+            }
+        }
+        if let Some(r) = self.slump {
+            if r.fric != [1.0; 2] {
+                c.out.part_friction.extend(crate::extras_ysk_rdr2::parts(0xa0).into_iter().map(|k| (k, r.fric[0])));
+                c.out.part_friction.extend(crate::extras_ysk_rdr2::parts(0x1f09).into_iter().map(|k| (k, r.fric[1])));
+            }
         }
         // he has come down on both feet off fallOverWall: back to balancing, state 2 (step 15)
         let feet = c.b.doll.collided(&[limb(2).p[3]]) && c.b.doll.collided(&[limb(3).p[3]]);
@@ -1652,6 +1696,11 @@ impl BcrRdr2 {
             let lows = if self.p.high { 6 } else { 5 };
             for (i, &k) in BCR_PARTS.iter().enumerate() {
                 if let Some((q, cn, depth)) = c.b.doll.hit_out[k] {
+                    // ignoreColMassBelow, ignoreColVolumeBelow: a moving object below either isn't a contact (0x2a748bf)
+                    if self.small.contains(&c.b.doll.hit_out_id[k]) {
+                        crate::extras_core_rdr2::trace_once("bcr ignores a small object", || format!("part {k}"));
+                        continue;
+                    }
                     let h = up.dot(q) - low_foot;
                     if h > BCR_ABOVE_FOOT {
                         let high = i >= lows;
@@ -1672,6 +1721,17 @@ impl BcrRdr2 {
                     self.wall = Some((q, n));
                     out.push(format!("fallOverWall fallOverWallEndA={} fallOverWallEndB={}", v3s(q + n.cross(up)), v3s(q)));
                 }
+            }
+        }
+        // test hook: RDR2_BCR_TEST=<m> puts a wall that far in front of his chest once he is moving, as a high contact
+        {
+            static T: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+            let test = *T.get_or_init(|| std::env::var("RDR2_BCR_TEST").ok().and_then(|x| x.parse().ok()));
+            if let (Some(d), false, true) = (test, self.impacted, c.vel.length() > 0.3) {
+                let fwd = unit(-c.m.c - up * up.dot(-c.m.c));
+                contact = Some(c.b.at(crate::nmshot::chest_part()) + fwd * d);
+                self.sum[1] = -fwd;
+                self.touch_high = true;
             }
         }
         if !self.impacted {
@@ -1781,10 +1841,13 @@ impl BcrRdr2 {
         if matches!(self.state, 8 | 9) {
             self.over_supervise(c, fow_on, dt, out);
         }
-        // still against it (the balancer's fail test writes 3 below its stable speeds, ours the same speeds as its still
-        // test); stable2SlumpTime from moving off it
-        if self.state == 2 && c.vel.length() < 0.2 && c.angvel.length() < 0.5 {
-            self.state = 3;
+        // still against it: the balancer's fail test writes 3 below its stable speeds (0x2abe542); stable2SlumpTime from
+        // moving off it
+        if let Some(b) = c.dbm.filter(|_| self.state == 2) {
+            if c.vel.length() < b.stable.0 && c.angvel.length() < b.stable.1 {
+                crate::extras_core_rdr2::trace_once("bcr state 3", || format!("{:?}", b.stable));
+                self.state = 3;
+            }
         }
         if matches!(self.state, 2 | 3) {
             self.t_stable += dt;
@@ -1825,7 +1888,7 @@ impl BcrRdr2 {
         }
         let rec = BraceRecord { distance: self.p.brace_dist, stiffness: self.p.brace_stiff, predict: self.p.predict, min_brace: self.p.min_brace,
                                 back_time: self.p.back_time, absorb: self.p.absorb };
-        let arms = brace_core(c, &mut self.brace, rec, t, self.wall_vel, dt);
+        let arms = brace_core(c, &mut self.brace, rec, t, self.wall_vel, Some(n), dt);
         arms[0] || arms[1]
     }
 
@@ -1916,7 +1979,9 @@ impl BcrRdr2 {
             c.out.torque(s[1] + 1, t * 0.5);
             c.out.torque(0, t * 0.5);
         } else if self.p.spin_turn > 0.0 {
-            c.out.dbm_turn = Some(unit(c.m.b * sign + c.m.c * 0.5) * 0.5);
+            // (the record 0x2ae4d48 holds the balancer's defaults, and what it changes, +0x5fc, nothing reads)
+            let pel = c.b.part(0).m;
+            c.out.dbm_turn = Some(unit(pel.b * sign + pel.c * 0.5) * 0.5);
         } else {
             c.out.torque(s[2] + 1, t);
             c.out.torque(s[1] + 1, t * 0.5);
@@ -1971,9 +2036,11 @@ impl BcrRdr2 {
         }
     }
 
-    /// One arm on the wall (0x2ae9f5c): the hand direction whose reach meets the plane from the shoulder's distance
-    /// (capped at `cap`), turned out by 0.5 rad to his side. Ours [P]: RDR2 turns that into clavicle, shoulder, elbow and
-    /// wrist rotations in their joint frames (limited to 0.8 rad); here the limb IK takes the same hand point.
+    /// One arm on the wall (0x2ae9f5c): the upper arm's direction meets the plane from the shoulder's distance (capped at
+    /// `cap`), turned about the chest by 0.5 rad to his side. The clavicle part then rotates onto that direction, the upper
+    /// arm too with a 0.7 rad swivel about it, each from its joint frames to its angles; the elbow takes the angle between
+    /// its parent's second axis and the wall's cross with its bend axis; the wrist only the twist that turns the hand's
+    /// first axis against the normal, its leans 0. Ours: the joint limit pass of 0x2a23f18 is the drive's clamp.
     fn brace_arm(&mut self, c: &mut Ctx, i: usize, at: Vec3, n: Vec3, cap: f32) {
         let l = limb(i);
         let s = c.b.joint_pos(l.e[1]);
@@ -1981,15 +2048,48 @@ impl BcrRdr2 {
         if d < 0.0 {
             return;
         }
-        let len = arm_length(c, i).max(1e-3);
-        let out_side = 1.0 - 2.0 * i as f32;
-        let tangent = unit(n.cross(BCR_UP)) * if unit(n.cross(BCR_UP)).dot(c.m.b) * out_side >= 0.0 { 1.0 } else { -1.0 };
-        let v0 = Quat::from_axis_angle(n, -0.5 * out_side) * tangent;
-        let perp = unit(v0.cross(n));
-        let a = ((d - 0.05) / len).clamp(-1.0, 1.0).acos();
-        let h = Quat::from_axis_angle(perp, std::f32::consts::FRAC_PI_2 - a) * v0;
-        if h.is_finite() && perp != Vec3::ZERO {
-            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], s + h * len, 0.0, 0.0, out_side, 1.0, Vec3::ZERO, None);
+        let side = 1.0 - 2.0 * i as f32;
+        let e = c.b.joint_pos(l.e[2]) - s;
+        let chest = c.b.part(crate::nmshot::chest_part()).m;
+        let v = Quat::from_axis_angle(chest.c, -0.5 * side) * unit(chest.b.cross(n));
+        // (the part's radius: 0.05 as the upper arm's capsule; its length, the joints')
+        let a = ((d - 0.05) / e.length().max(1e-3)).clamp(-1.0, 1.0).acos();
+        let w = unit(n.cross(v));
+        let h = Quat::from_axis_angle(w, std::f32::consts::FRAC_PI_2 - a) * v;
+        if !h.is_finite() {
+            return;
+        }
+        crate::extras_core_rdr2::trace_once("bcr arm on the wall", || format!("arm {i}, shoulder {d:.2} off it, angle {a:.2}"));
+        let rows = |m: &crate::nmdbm::M34, x: Vec3| Vec3::new(m.a.dot(x), m.b.dot(x), m.c.dot(x));
+        // the clavicle
+        let f = c.b.eff1(l.e[0]);
+        let q = crate::nmdbm::arc(rows(&f.child, -c.b.part(l.p[0]).m.b), rows(&f.m, h));
+        Self::set_q(c, l.e[0], q, side, true);
+        // the shoulder
+        let f = c.b.eff1(l.e[1]);
+        let to = rows(&f.m, h);
+        let q = Quat::from_axis_angle(unit(to), 0.7 * side) * crate::nmdbm::arc(rows(&f.child, e), to);
+        Self::set_q(c, l.e[1], q, side, true);
+        // the elbow
+        let f = c.b.eff1(l.e[2]);
+        c.ch.eff[l.e[2]].desired[0] = (-f.m.b).dot(unit(n.cross(f.m.c))).clamp(-1.0, 1.0).acos();
+        // the wrist: its twist only
+        let f = c.b.eff1(l.e[3]);
+        let q = crate::nmdbm::arc(rows(&f.child, c.b.part(l.p[3]).m.a * side), rows(&f.m, -n));
+        Self::set_q(c, l.e[3], q, side, false);
+    }
+
+    /// A joint's angles from a rotation in its frames (0x2a4acb0, 0x2a376b4): by side as the limb IK writes them, about its
+    /// limits' middle. Without `leans`, only the twist, the leans 0.
+    fn set_q(c: &mut Ctx, j: usize, q: Quat, side: f32, leans: bool) {
+        let e = c.b.eff3(j);
+        let [tw, l1, l2] = crate::nmrs::angles(q);
+        let d = &mut c.ch.eff[j].desired;
+        d[2] = side * tw + e.mid_twist;
+        if leans {
+            (d[0], d[1]) = (l1 + e.mid_lean1, side * l2 + e.mid_lean2);
+        } else {
+            (d[0], d[1]) = (0.0, 0.0);
         }
     }
 
@@ -2053,12 +2153,14 @@ impl BcrRdr2 {
     /// The slump (0x2a55ddc, from RDR2's code): the leg under the COM collapses first (the other, one time in five, by a
     /// random part of it), then every stiffness falls at slumpLegStiffRate (while his kinetic energy falls below 0.4;
     /// slumpMode 1 always, 2 while it falls at all); no new steps; after sitstarttime the legs blend to the sit pose at
-    /// sitrate. The friction ramps aren't here: Delirium's friction is per material.
+    /// sitrate. The feet's friction and the back's fall at their rates with the stiffness, to their ends, and the foot yaw
+    /// hold lets go.
     fn slump_core(&mut self, c: &mut Ctx, dt: f32) {
         c.out.dbm_force_balance = true;
         let (hip, knee, ankle) = (*HIP(), *KNEE(), *ANKLE());
         let stiff = |c: &Ctx, j: usize| c.ch.eff[j].strength.max(0.0).sqrt();
-        let ke = 0.5 * c.vel.length_squared();
+        // the specific kinetic energy of every part (0x2a34234)
+        let ke = c.b.doll.kinetic();
         let mut r = self.slump.unwrap_or_else(|| {
             let mut legs = [stiff(c, hip[0]), stiff(c, hip[1]), stiff(c, knee[0]), stiff(c, knee[1])];
             let (fl, fr) = (c.b.at(limb(2).p[3]), c.b.at(limb(3).p[3]));
@@ -2072,13 +2174,19 @@ impl BcrRdr2 {
                 legs[other] -= c.ch.random() * self.p.slump_red;
                 legs[2 + other] -= c.ch.random() * self.p.slump_red;
             }
-            SlumpRec { t: 0.0, ke, legs }
+            SlumpRec { t: 0.0, ke, legs, fric: [self.p.foot_fric[0], self.p.back_fric[0]] }
         });
         r.t += dt;
         if (ke <= r.ke && ke < 0.4) || self.p.slump_mode == 1 || (self.p.slump_mode == 2 && ke <= r.ke) {
             r.legs = r.legs.map(|s| s - dt * self.p.slump_rate);
+            r.fric[0] -= dt * self.p.foot_fric[2];
+            r.fric[1] -= dt * self.p.back_fric[2];
         }
+        r.fric = [r.fric[0].max(self.p.foot_fric[1]), r.fric[1].max(self.p.back_fric[1])];
         r.ke = ke;
+        c.ch.core.foot_hold = false;
+        c.ch.core.foot_unlatch = true;
+        crate::extras_core_rdr2::trace_once("bcr slump friction", || format!("feet {:.2}, back {:.2}", r.fric[0], r.fric[1]));
         for i in 0..2 {
             let k = stiff(c, knee[i]).min(r.legs[2 + i]);
             let h = stiff(c, hip[i]).min(r.legs[i]);

@@ -170,6 +170,7 @@ impl Windmill {
             let (s, co) = self.theta[i].sin_cos();
             let at = o + f[1] * ((r[0] + d[0]) * co) + f[2] * ((r[1] + d[1]) * s);            let side = if i == 0 { 1.0 } else { -1.0 };
             crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], at, p.ik_twist, 0.0, side, 1.0, Vec3::ZERO, None);
+            crate::nmpa::share(c.ch, c.b.frames, l.e[0], l.e[1]);
             let a = c.ch.actual(l.e[2], c.b.frames)[0];
             if a < p.elbow_min[i] {
                 let floor = a + (p.elbow_min[i] - a) * (5.0 * dt).clamp(0.0, 1.0);

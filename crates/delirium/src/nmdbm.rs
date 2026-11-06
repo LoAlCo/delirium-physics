@@ -789,7 +789,7 @@ pub(crate) fn asin(x: f32) -> f32 {
     if x <= -1.0 { -std::f32::consts::FRAC_PI_2 } else if x >= 1.0 { std::f32::consts::FRAC_PI_2 } else { (x as f64).asin() as f32 }
 }
 
-fn arc(a: Vec3, b: Vec3) -> Quat {
+pub(crate) fn arc(a: Vec3, b: Vec3) -> Quat {
     let (na, mut nb) = (vnorm(a), vnorm(b));
     let d = na.y.fma(nb.y, na.z.fma(nb.z, na.x * nb.x));
     if (d - 1.0).abs() < delirium_data::kv!(50) {
@@ -1669,6 +1669,9 @@ impl Dbm {
         let off = horizontal(s.com - l, up).length().min(horizontal(s.com - r, up).length())
             .min(horizontal(s.com - (l + r) * 0.5, up).length());
         (self.event, self.success) = (None, false);
+        if let Some(r) = self.p.rdr2.as_mut() {
+            r.fail_ratio.0 = off / h.max(0.001);
+        }
         if off > self.p.rdr2.and_then(|r| r.abort).unwrap_or(self.p.abort) * h || (h < 0.5 && self.p.low_abort) || self.f.countdown == -1 {
             if let Some(r) = self.p.rdr2 {
                 crate::extras_core_rdr2::trace(|| format!("balancer: fail test: {off:.2} off over {h:.2} high at {:.2} s", r.time));
@@ -1680,6 +1683,9 @@ impl Dbm {
             let ha = up.vd(s.com) - up.vd(al).min(up.vd(ar));
             let offa = horizontal(s.com - al, up).length().min(horizontal(s.com - ar, up).length())
                 .min(horizontal(s.com - (al + ar) * 0.5, up).length());
+            if let Some(q) = self.p.rdr2.as_mut() {
+                q.fail_ratio.1 = offa / ha.max(0.001);
+            }
             if h < r.giveup_height() || crate::nmdbm_rdr2::ANKLE_ABORT * ha < offa {
                 crate::extras_core_rdr2::trace(|| format!("balancer: fail test: height {h:.2} under {:.2}, or ankles {ha:.2}, {offa:.2}, at {:.2} s", r.giveup_height(), r.time));
                 return false;
@@ -2010,7 +2016,8 @@ impl Dbm {
     /// RDR2's timed fail: the legs drain, one hip first, until a fail test drops him. Runs after every behaviour has
     /// set its stiffness, just before the muscles are driven.
     pub fn drain(&self, ch: &mut Character) {
-        if let Some((leg, hip)) = self.p.rdr2.and_then(|r| r.drain(self.p.leg_stiffness)) {
+        // (staggering, staggerFall's leg stiffness took these as caps: its floors stand, RDR2's 0x2a9e8a4)
+        if let Some((leg, hip)) = self.p.rdr2.filter(|r| !r.stagger).and_then(|r| r.drain(self.p.leg_stiffness)) {
             for i in 0..2 {
                 for j in [(*KNEE())[i], (*ANKLE())[i]] {
                     ch.eff[j].strength = leg * leg;

@@ -11,7 +11,7 @@ use bevy_math::Vec3;
 /// A message line can say start=false: on=false here, since an extra only starts with start=true.
 const ON: Param = Param { name: "on", kind: Kind::Bool, used: true, doc: "false: RDR2's start=false for this record (true)" };
 
-pub static MESSAGES: [Message; 6] = [
+pub static MESSAGES: [Message; 7] = [
     Message { name: "setOpposeGravity", params: &[
         Param { name: "oppose", kind: Kind::Float, used: true, doc: "the joints' gravity opposition, this step's request (1)" },
         Param { name: "mask", kind: Kind::Str, used: true, doc: "the joints (fb)" },
@@ -42,6 +42,18 @@ pub static MESSAGES: [Message; 6] = [
         Param { name: "characterStrength", kind: Kind::Float, used: true, doc: "ctx+0x102c: scales the bullets' leak and torque share (1)" },
     ] },
     Message { name: "configureBullets", params: BULLET_PARAMS },
+    Message { name: "setcharacterunderwater", params: &[
+        Param { name: "Underwater", kind: Kind::Bool, used: true, doc: "ctx+0x10c4: the core's water is on" },
+        Param { name: "surfacePoint", kind: Kind::Vec3, used: true, doc: "a point on the water (0 0 1)" },
+        Param { name: "surfaceNormal", kind: Kind::Vec3, used: true, doc: "the water's up" },
+        Param { name: "viscosity", kind: Kind::Float, used: true, doc: "a part under drags by this x its speed squared (0)" },
+        Param { name: "stroke", kind: Kind::Float, used: true, doc: "a hand or foot under, moving back along the axis, pushes by this x its speed (0)" },
+        Param { name: "?704d3c8f", kind: Kind::Float, used: true, doc: "the feet's share of the stroke (0)" },
+        Param { name: "?17e435bb", kind: Kind::Float, used: true, doc: "the speed a stroke needs (0.73)" },
+        Param { name: "?d83b0b56", kind: Kind::Int, used: true, doc: "the stroke's axis: 0 his side's, 1 the water's up, else the character's up" },
+        Param { name: "?4077910a", kind: Kind::Bool, used: true, doc: "a stroke pushes at the hand or foot, not the chest" },
+        Param { name: "?4158ed9b", kind: Kind::Bool, used: true, doc: "ctx+0x10c6: no reader in NM" },
+    ] },
 ];
 
 const fn b(name: &'static str) -> Param {
@@ -53,8 +65,7 @@ const fn f(name: &'static str) -> Param {
 const fn i(name: &'static str) -> Param {
     Param { name, kind: Kind::Int, used: true, doc: "" }
 }
-/// What's used by the record's tick; the rb family (a rigid-body spread of the impulse over the body) and the stability
-/// and velocity factors are taken and left, see `rdr2_params.md`.
+/// What the record's tick doesn't read: the counter impulse (doCounterImpulse: no set sends it true, `rdr2_core4.md`).
 const fn left(name: &'static str, kind: Kind) -> Param {
     Param { name, kind, used: false, doc: "RDR2's; taken and not used here yet" }
 }
@@ -66,16 +77,16 @@ static BULLET_PARAMS: &[Param] = &[
     b("impulseOneLegOn"), f("impulseOneLegMult"), f("impulseOneLegMultStart"), f("impulseOneLegMax"), f("impulseOneLegApplyAbove"),
     f("impulseNoBalMult"), f("liftGain"),
     i("torqueMode"), i("torqueSpinMode"), i("torqueFilterMode"), b("torqueAlwaysSpine3"), f("torqueDelay"), f("torquePeriod"), f("torqueGain"), f("torqueCutoff"), f("torqueReductionPerTick"),
-    left("impulseTorqueScale", Kind::Float), left("impulseSpreadOverParts", Kind::Bool), left("loosenessFix", Kind::Bool),
-    left("impulseBalStabStart", Kind::Float), left("impulseBalStabEnd", Kind::Float), left("impulseBalStabMult", Kind::Float),
-    left("impulseSpineAngStart", Kind::Float), left("impulseSpineAngEnd", Kind::Float), left("impulseSpineAngMult", Kind::Float),
-    left("impulseVelStart", Kind::Float), left("impulseVelEnd", Kind::Float), left("impulseVelMult", Kind::Float),
+    f("impulseTorqueScale"), b("impulseSpreadOverParts"), b("loosenessFix"),
+    f("impulseBalStabStart"), f("impulseBalStabEnd"), f("impulseBalStabMult"),
+    f("impulseSpineAngStart"), f("impulseSpineAngEnd"), f("impulseSpineAngMult"),
+    f("impulseVelStart"), f("impulseVelEnd"), f("impulseVelMult"),
     left("counterImpulseDelay", Kind::Float), left("counterImpulseMag", Kind::Float), left("counterAfterMagReached", Kind::Bool),
     left("doCounterImpulse", Kind::Bool), left("counterImpulse2Hips", Kind::Float),
-    left("rbRatio", Kind::Float), left("rbLowerShare", Kind::Float), left("rbMoment", Kind::Float), left("rbMaxTwistMomentArm", Kind::Float), left("rbMaxBroomMomentArm", Kind::Float),
-    left("rbRatioAirborne", Kind::Float), left("rbMomentAirborne", Kind::Float), left("rbMaxTwistMomentArmAirborne", Kind::Float), left("rbMaxBroomMomentArmAirborne", Kind::Float),
-    left("rbRatioOneLeg", Kind::Float), left("rbMomentOneLeg", Kind::Float), left("rbMaxTwistMomentArmOneLeg", Kind::Float), left("rbMaxBroomMomentArmOneLeg", Kind::Float),
-    left("rbPivot", Kind::Bool), left("rbTwistAxis", Kind::Int),
+    f("rbRatio"), f("rbLowerShare"), f("rbMoment"), f("rbMaxTwistMomentArm"), f("rbMaxBroomMomentArm"),
+    f("rbRatioAirborne"), f("rbMomentAirborne"), f("rbMaxTwistMomentArmAirborne"), f("rbMaxBroomMomentArmAirborne"),
+    f("rbRatioOneLeg"), f("rbMomentOneLeg"), f("rbMaxTwistMomentArmOneLeg"), f("rbMaxBroomMomentArmOneLeg"),
+    b("rbPivot"), i("rbTwistAxis"),
 ];
 
 /// One soft limit record (ctx+0x4810, 0x30 B each).
@@ -109,12 +120,27 @@ pub struct BulletCfg {
     pub torque_gain: f32,
     pub torque_cutoff: f32,
     pub torque_decay: f32,
+    /// the impulse's factors, each (start, end, mult) off the balance quality, the trunk's lean and his speed (+0x54..+0x74)
+    pub bal_stab: [f32; 3],
+    pub spine_ang: [f32; 3],
+    pub vel: [f32; 3],
+    /// the angular part's scale (+0x38), a share to the hit part's neighbours (+0xdd), loosenessFix (+0xdf)
+    pub torque_scale: f32,
+    pub spread: bool,
+    pub loose_fix: bool,
+    /// the rigid-body spread: on both feet, in the air, on one leg, each (ratio, moment, twist arm, broom arm) (+0x98..+0xc8)
+    pub rb: [[f32; 4]; 3],
+    pub rb_lower: f32,
+    pub rb_pivot: bool,
+    pub rb_twist_axis: i32,
 }
 
 impl Default for BulletCfg {
     fn default() -> BulletCfg {
         BulletCfg { period: 0.1, delay: 0.0, air: None, one_leg: None, no_bal: 1.0, lift: 0.0, torque_mode: 0, spin_mode: 0, filter_mode: 0, always_spine3: false,
-                    torque_delay: 0.0, torque_period: 0.12, torque_gain: 4.0, torque_cutoff: 0.5, torque_decay: 0.9 }
+                    torque_delay: 0.0, torque_period: 0.12, torque_gain: 4.0, torque_cutoff: 0.5, torque_decay: 0.9,
+                    bal_stab: [3.0, 10.0, 1.0], spine_ang: [0.7, 0.2, 1.0], vel: [1.0, 4.0, 1.0], torque_scale: 1.0, spread: false, loose_fix: false,
+                    rb: [[0.0, 1.0, 0.5, 1.0]; 3], rb_lower: 0.5, rb_pivot: false, rb_twist_axis: 0 }
     }
 }
 
@@ -172,6 +198,26 @@ impl FallCfg {
     }
 }
 
+/// The core's water (setcharacterunderwater, 0x2a4d8b8; ctx+0x1090..+0x10c6).
+#[derive(Clone, Copy, Debug)]
+pub struct Water {
+    pub on: bool,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub viscosity: f32,
+    pub stroke: f32,
+    pub feet: f32,
+    pub thresh: f32,
+    pub axis: i32,
+    pub at_part: bool,
+}
+
+impl Default for Water {
+    fn default() -> Water {
+        Water { on: false, point: Vec3::Z, normal: Vec3::Z, viscosity: 0.0, stroke: 0.0, feet: 0.0, thresh: 0.73, axis: 0, at_part: false }
+    }
+}
+
 /// What the core messages set: read each tick by `core_tick` and by the bullet records.
 #[derive(Clone, Copy, Debug)]
 pub struct CoreCfg {
@@ -197,11 +243,12 @@ pub struct CoreCfg {
     pub torques: i32,
     pub torque_sign: i32,
     pub fall: FallCfg,
+    pub water: Water,
 }
 
 impl Default for CoreCfg {
     fn default() -> CoreCfg {
-        CoreCfg { soft: Default::default(), soft_was: [false; 4], fric: [1.0; 32], fric_used: false, fric_min: 0.0, fric_max: 9999.0, fric_clamp: false, muscle: None, strength: 1.0,
+        CoreCfg { water: Default::default(), soft: Default::default(), soft_was: [false; 4], fric: [1.0; 32], fric_used: false, fric_min: 0.0, fric_max: 9999.0, fric_clamp: false, muscle: None, strength: 1.0,
                   bullets: Default::default(), reduction: 0.15, min_leak: 0.2, recovery: None, leak_scaled: false, torques: 0, torque_sign: 0, fall: Default::default() }
     }
 }
@@ -251,8 +298,50 @@ fn joint_mask(mask: &str) -> [bool; 32] {
     out
 }
 
+/// The core's water (0x2a5dd58): with the chest under, each hand and foot under that moves back along the axis faster than the
+/// threshold pushes along it, at the chest (the feet by their share); every part under drags by its speed squared.
+/// Ours: no feedback when the chest or head crosses the plane (the game's reader isn't here).
+fn water_tick(c: &mut Ctx) {
+    let w = c.ch.core.cfg.water;
+    if !w.on {
+        return;
+    }
+    let n = w.normal.normalize_or_zero();
+    let under = |p: Vec3| (p - w.point).dot(n) < 0.0;
+    let rp = crate::extras_ysk_rdr2::rp;
+    let chest = rp(9);
+    if under(c.b.at(chest)) && w.stroke > 0.0 {
+        let axis = match w.axis {
+            0 => c.m.b,
+            1 => n,
+            _ => c.up,
+        };
+        for (i, k) in [16, 19, 5, 7].map(rp).into_iter().enumerate() {
+            if under(c.b.at(k)) {
+                let s = -axis.dot(c.b.part(k).v - c.vel);
+                if s > w.thresh {
+                    let g = w.stroke * if i > 1 { w.feet } else { 1.0 } * s;
+                    trace_once("water stroke", || format!("part {k}, {g:.1} N"));
+                    c.out.force(if w.at_part { k } else { chest }, axis * g);
+                }
+            }
+        }
+    }
+    if w.viscosity > 1.2e-7 {
+        trace_once("water drag", || format!("{}", w.viscosity));
+        for k in 0..c.b.frames.len() {
+            if under(c.b.at(k)) {
+                let v = c.b.part(k).v;
+                c.out.force(k, v * (-v.length() * w.viscosity));
+            }
+        }
+    }
+}
+
 /// Each tick with the core on: what the core messages hold (0x2a5d400, 0x2a5c4a0, the muscle record).
 pub fn core_tick(c: &mut Ctx) {
+    c.ch.core.bullet_seen = c.ch.core.bullet_new.take();
+    water_tick(c);
     let cfg = c.ch.core.cfg;
     if cfg.fric_used {
         for (k, x) in c.out.part_friction.iter_mut() {
@@ -322,6 +411,7 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "setCharacterStrength" => strength(p),
         "setOpposeGravity" => oppose(p),
         "configureBullets" => bullets(p),
+        "setcharacterunderwater" => underwater(p),
         _ => return None,
     })
 }
@@ -419,6 +509,19 @@ fn strength(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     }))
 }
 
+fn underwater(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let d = Water::default();
+    let on = p.b("Underwater", d.on)?;
+    let w = Water { on, point: p.v("surfacePoint", d.point)?, normal: p.v("surfaceNormal", d.normal)?, viscosity: p.f("viscosity", d.viscosity)?,
+                    stroke: p.f("stroke", d.stroke)?, feet: p.f("?704d3c8f", d.feet)?, thresh: p.f("?17e435bb", d.thresh)?, axis: p.i("?d83b0b56", d.axis)?,
+                    at_part: p.b("?4077910a", d.at_part)? };
+    p.b("?4158ed9b", false)?;
+    Ok(once(move |c| {
+        c.ch.core.cfg.water = w;
+        trace(|| format!("water {w:?}"));
+    }))
+}
+
 fn bullets(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     let extra = p.b("extra", false)?;
     let fresh = p.b("fresh", false)?;
@@ -428,9 +531,17 @@ fn bullets(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     let leg_v = [o("impulseOneLegMult")?, o("impulseOneLegMultStart")?, o("impulseOneLegMax")?, o("impulseOneLegApplyAbove")?];
     let (nobal, lift) = (o("impulseNoBalMult")?, o("liftGain")?);
     let tq = [o("torqueDelay")?, o("torquePeriod")?, o("torqueGain")?, o("torqueCutoff")?, o("torqueReductionPerTick")?];
+    let fac = [o("impulseBalStabStart")?, o("impulseBalStabEnd")?, o("impulseBalStabMult")?, o("impulseSpineAngStart")?, o("impulseSpineAngEnd")?, o("impulseSpineAngMult")?,
+               o("impulseVelStart")?, o("impulseVelEnd")?, o("impulseVelMult")?, o("impulseTorqueScale")?];
+    let rbs = [[o("rbRatio")?, o("rbMoment")?, o("rbMaxTwistMomentArm")?, o("rbMaxBroomMomentArm")?],
+               [o("rbRatioAirborne")?, o("rbMomentAirborne")?, o("rbMaxTwistMomentArmAirborne")?, o("rbMaxBroomMomentArmAirborne")?],
+               [o("rbRatioOneLeg")?, o("rbMomentOneLeg")?, o("rbMaxTwistMomentArmOneLeg")?, o("rbMaxBroomMomentArmOneLeg")?]];
+    let rb_lower = o("rbLowerShare")?;
     let mut q = |n: &str| p.b(n, false);
     let (air_on, leg_on, scaled, spine3) = (q("impulseAirOn")?, q("impulseOneLegOn")?, q("impulseLeakageStrengthScaled")?, q("torqueAlwaysSpine3")?);
+    let (spread, loose_fix, rb_pivot) = (q("impulseSpreadOverParts")?, q("loosenessFix")?, q("rbPivot")?);
     let (mode, spin, filter) = (p.i("torqueMode", -1)?, p.i("torqueSpinMode", -1)?, p.i("torqueFilterMode", -1)?);
+    let rb_axis = p.i("rbTwistAxis", -1)?;
     for x in BULLET_PARAMS.iter().filter(|x| !x.used) {
         match x.kind {
             Kind::Float => drop(p.f(x.name, 0.0)?),
@@ -462,6 +573,27 @@ fn bullets(p: &mut P) -> Result<Box<dyn Extra>, Error> {
         t.air = air_on.then(|| curve(air_v, t.air));
         t.one_leg = leg_on.then(|| curve(leg_v, t.one_leg));
         t.always_spine3 = spine3;
+        for (n, x) in [t.bal_stab[0], t.bal_stab[1], t.bal_stab[2], t.spine_ang[0], t.spine_ang[1], t.spine_ang[2], t.vel[0], t.vel[1], t.vel[2], t.torque_scale].into_iter().enumerate() {
+            let v = fac[n].unwrap_or(x);
+            match n {
+                0..=2 => t.bal_stab[n] = v,
+                3..=5 => t.spine_ang[n - 3] = v,
+                6..=8 => t.vel[n - 6] = v,
+                _ => t.torque_scale = v,
+            }
+        }
+        for s in 0..3 {
+            for n in 0..4 {
+                if let Some(v) = rbs[s][n] {
+                    t.rb[s][n] = v;
+                }
+            }
+        }
+        set(&mut t.rb_lower, rb_lower);
+        (t.spread, t.loose_fix, t.rb_pivot) = (spread, loose_fix, rb_pivot);
+        if rb_axis >= 0 {
+            t.rb_twist_axis = rb_axis;
+        }
         if mode >= 0 {
             t.torque_mode = mode;
         }

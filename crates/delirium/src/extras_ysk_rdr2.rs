@@ -1364,6 +1364,7 @@ impl YankedRdr2 {
             let to = c.b.joint_pos(limb(i).e[1]) + (ax * th.cos() + bx * (s * th.sin())) * r;
             arm_ik(c, i, to, a[5], Vec3::ZERO);
             let l = limb(i);
+            crate::nmcf::clav_overflow(c.ch, l.e[0], l.e[1]);
             set_k(c, &[l.e[0], l.e[1], l.e[2]], k, 0.5, None);
             self.ran(33, "the reach: the arm's IK");
         }
@@ -1763,6 +1764,8 @@ impl Swim {
                 let k = if e.length() > 0.0 { (s.speed * s.timer / e.length()).clamp(0.0, 1.0) } else { 1.0 };
                 let to = q + e * k;
                 arm_ik_drag(c, i, to, self.twist, 1.0, c.vel);
+                crate::nmpa::share(c.ch, c.b.frames, limb(i).e[0], limb(i).e[1]);
+                crate::extras_core_rdr2::trace_once("swim clavicle mode 2", || format!("arm {i}"));
                 let ed = e.normalize_or_zero();
                 let off = to - hand;
                 let along = off.dot(ed).max(0.0);
@@ -1773,6 +1776,7 @@ impl Swim {
             }
             2 => {
                 arm_ik_drag(c, i, q, self.twist, 1.0, c.vel);
+                crate::nmpa::share(c.ch, c.b.frames, limb(i).e[0], limb(i).e[1]);
                 // the request's hand normal: against the stroke's direction
                 crate::nmshot::Shot::wrist(c, limb(i), q, -s.dir, 1.0 - 2.0 * i as f32);
                 if (q - hand).length() < 0.1 {
@@ -1848,9 +1852,10 @@ impl Extra for Swim {
             self.kids.start("bodyBalance", "bodyBalance start=true".into());
         }
         // the water plane (0x2a5dd58 keeps these): in the water is spine part 9 under it, deep the head part 20 [C]
-        let n = self.normal.normalize_or_zero();
-        let state = if self.surface != Vec3::ZERO && n != Vec3::ZERO {
-            let under = |p: Vec3| (p - self.surface).dot(n) < 0.0;
+        let w = c.ch.core.cfg.water;
+        let (surface, n) = if w.on { (w.point, w.normal.normalize_or_zero()) } else { (self.surface, self.normal.normalize_or_zero()) };
+        let state = if (w.on || surface != Vec3::ZERO) && n != Vec3::ZERO {
+            let under = |p: Vec3| (p - surface).dot(n) < 0.0;
             let in_water = under(pos(c, rp(9)));
             let deep = under(pos(c, rp(20)));
             if !in_water { 0 } else if !deep { 3 } else if -n.dot(c.vel) <= 2.5 { 2 } else { 1 }
@@ -1941,6 +1946,7 @@ pub struct KeyframeRdr2 {
     count: Vec<i32>,
     err: f32,
     hold: Vec<(usize, Option<Vec3>, Option<Quat>)>,
+    release: Vec<(usize, Vec3, Vec3)>,
     logged: u8,
     seen_incoming: bool,
 }
@@ -1987,7 +1993,7 @@ impl KeyframeRdr2 {
             momentum: p.b("softpreservemomentum", false)?, forces: p.b("useForces", false)?, target_vel: p.b("usetargetvel", false)?,
             spikes: p.i("spikes", 0)?, cool: p.i("spikecooldown", 3)?, spike_ang: p.v("spikeangaccel", Vec3::splat(1000.0))?,
             started: false, failed: false, ramp: (0.0, 0.0), pose: vec![], angles: vec![], prev: vec![], count: vec![], err: 0.0,
-            hold: vec![], logged: 0, seen_incoming: false,
+            hold: vec![], release: vec![], logged: 0, seen_incoming: false,
         })
     }
 
@@ -2057,6 +2063,13 @@ impl KeyframeRdr2 {
         // the hard keyed parts: 0x2a1b1a4 sets their pose from the buffer and their velocities to nothing while the mode
         // is 3 (ours: Delirium's hard constraints on the pose)
         self.hold = self.hard.iter().filter_map(|&k| target.get(k).map(|t| (k, Some(t.translation), Some(t.rotation)))).collect();
+        // what mode 4 gives them when it ends: the pose buffers' velocities (0x2a1ec9c)
+        self.release = self.hard.iter().filter_map(|&k| {
+            let (t, p) = (target.get(k)?, self.prev.get(k)?);
+            let (axis, angle) = (t.rotation * p.rotation.inverse()).to_axis_angle();
+            let angle = if angle > std::f32::consts::PI { angle - std::f32::consts::TAU } else { angle };
+            Some((k, (t.translation - p.translation) / dt.max(1e-4), axis * (angle / dt.max(1e-4))))
+        }).collect();
         if !self.failed {
             if self.brk >= 0.0 && self.brk < self.err {
                 self.failed = true;
@@ -2262,6 +2275,25 @@ impl KeyframeRdr2 {
     /// Deactivate: hard keying off; with the core, the foot yaw hold and ZMP gravity compensation back on.
     pub fn stop(&mut self, c: &mut Ctx) {
         self.hold.clear();
+        // mode 4, one step (0x2a1b1a4): the hard parts leave with the animation's velocities
+        if c.ch.rdr2 && !self.release.is_empty() {
+            let mut most = 0.0f32;
+
+
+            for (k, v, w) in std::mem::take(&mut self.release) {
+                let p = c.b.part(k);
+                let dv = v - p.v;
+                most = most.max(dv.length());
+                c.out.impulse.push((k, c.b.doll.centre(k), dv * c.b.doll.part_mass(k)));
+                let dw = w - p.w;
+                let l = dw.length();
+                if l > 1e-6 {
+                    let i = c.b.doll.inertia(k, dw / l);
+                    c.out.torque(k, dw * (i * 60.0));
+                }
+            }
+            note(format_args!("keyframe: mode 4, the hard parts released, up to {most:.2} m/s changed"));
+        }
         if self.started && c.ch.rdr2 {
             (c.ch.core.foot_hold, c.ch.core.zmp) = (true, true);
             note(format_args!("keyframe: deactivate, foot hold and ZMP on"));

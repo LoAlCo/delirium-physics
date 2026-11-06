@@ -212,6 +212,8 @@ pub struct Out {
     pub dbm_turn_margin: Option<bool>,
     /// RDR2 core: pedalLegs' one-tick reverse flags (left, right) for its next tick, as RDR2's yanked writes them
     pub pedal_reverse: Option<[bool; 2]>,
+    /// RDR2 core: staggerFall's live armsWindmillAdaptive fields, angSpeed and each arm's activity (+0x50, +0xc1, +0xc3)
+    pub aw_live: Option<(f32, [bool; 2])>,
     /// RDR2 core, fall to knees: the balancer's balanceAbortThreshold (bal+0x294), failMustCollide (+0x6d8), kneeling
     /// (+0x33a), from now on; and its fail now (0x2ab4b7c)
     pub dbm_abort: Option<f32>,
@@ -393,6 +395,8 @@ pub struct Ctx<'a, 'b> {
     pub upright: bool,
     /// headLook is running; only the RDR2 core's duck reads it
     pub head_look_on: bool,
+    /// RDR2 core: catchFall or bodyRollUp runs
+    pub fall_on: bool,
     /// RDR2 core: what the balancer is doing, for the extras that read it (staggerFall); None without a balancer
     pub dbm: Option<DbmView>,
     /// RDR2 core: the shot behaviour is running (staggerFall leaves the fall to it)
@@ -445,6 +449,12 @@ pub struct DbmView {
     pub lean_on: bool,
     /// his standing leg straightness and the leg scale (ctx+0x34d0, bal+0x210)
     pub straight: (f32, f32),
+    /// the fail test's ratios: horizontal distance over height at the contacts (bal+0x6c) and at the ankles (bal+0x70)
+    pub fail_ratio: (f32, f32),
+    /// the timed fail's ramp while it runs (bal+0x62c..+0x640): knees and ankles, each hip
+    pub fail_caps: Option<(f32, [f32; 2])>,
+    /// stableLinSpeedThresh and stableRotSpeedThresh (bal+0x6e0, +0x6e4)
+    pub stable: (f32, f32),
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {
@@ -452,7 +462,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
         Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed, head_look_on: false,
-              dbm: None, shot_on: false, rfw: None, bb_on: false, sit_state: None, extras_on: vec![], incoming: &[], shot_scale: 1.0 }
+              dbm: None, shot_on: false, fall_on: false, rfw: None, bb_on: false, sit_state: None, extras_on: vec![], incoming: &[], shot_scale: 1.0 }
     }
 
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.
@@ -852,6 +862,9 @@ impl Shot {
     /// off the shoulder, stiff until its relax time or the hand has stopped.
     fn fling2_rdr2(&mut self, c: &mut Ctx, dt: f32) {
         let r = self.p.rdr2;
+        c.ch.core.shot_brace = r.brace;
+        c.ch.core.fling_stagger = [self.fling2.is_some() && r.fling2_override_stagger && r.fling2_side[0],
+                                   self.fling2.is_some() && r.fling2_override_stagger && r.fling2_side[1]];
         if self.new_hit && r.fling2 && (r.fling2_side[0] || r.fling2_side[1]) {
             let g = |i: usize| {
                 let l = limb(i);

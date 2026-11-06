@@ -365,7 +365,7 @@ fn shot_block(hash: u32) -> bool {
 
 /// The core messages: an extra here, so each carries start=true, and the game's start in on and fresh.
 fn core_message(hash: u32) -> bool {
-    ["configuresoftlimit", "setfrictionscale", "setmusclestiffness", "setcharacterstrength", "configurebullets", "configurebulletsextra", "setopposegravity"].iter().any(|n| joaat(n) == hash)
+    ["configuresoftlimit", "setfrictionscale", "setmusclestiffness", "setcharacterstrength", "configurebullets", "configurebulletsextra", "setopposegravity", "setcharacterunderwater"].iter().any(|n| joaat(n) == hash)
 }
 
 /// The port's own message for the game's. The same name by hash, or one of the port's own names for it.

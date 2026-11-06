@@ -161,6 +161,12 @@ impl Windmill {
         ch.set_stiffness(self.rdr2.body_stiffness, 0.5, self.rdr2.mask, None);
     }
 
+    /// RDR2 core: a behaviour that owns the running windmill writes its speed and arm flags each tick (0x2a7af24).
+    pub fn set_live(&mut self, ang_speed: f32, on: [bool; 2]) {
+        self.rdr2.ang_speed = ang_speed;
+        self.going = [on[0] && !self.hit[0], on[1] && !self.hit[1]];
+    }
+
     /// RDR2's armsWindmillAdaptive (rdr2_windmill.md B.4): the arms circle at angSpeed rad/s the way his spin about
     /// his side says (or armDirection), the clavicle and shoulder swinging by amplitude with lean mults and offsets,
     /// the elbow kept above 15 degrees and drawn to its elbowAngle at elbowRate, bent on the forward half with

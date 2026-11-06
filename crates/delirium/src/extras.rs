@@ -264,6 +264,16 @@ impl Extras {
         }
         if std::mem::take(&mut self.stop_soft) {
             c.ch.core.cfg.soft.iter_mut().for_each(|r| r.on = false);
+            // RDR2's stopAllBehaviours also queues a neutral request on each limb (0x2a5bce0, type 5): the pose held, stiffness
+            // 5, damping 0.5, under whatever asks this step
+            if c.ch.rdr2 {
+                crate::extras_core_rdr2::trace_once("neutral limbs", String::new);
+                for j in 0..c.ch.eff.len() {
+                    let a = c.ch.actual(j, c.b.frames);
+                    c.ch.eff[j].desired = a;
+                    c.ch.eff[j].set_stiffness(5.0, 0.5, None);
+                }
+            }
         }
         c.extras_on = self.on.iter().map(|(n, _)| *n).collect();
         self.sit_state = self.on.iter().find_map(|(_, e)| e.sit_state());
@@ -339,7 +349,7 @@ impl Extras {
     pub fn stop_all(&mut self) {
         let held: Vec<usize> = self.wanted.iter().copied().chain(self.hard.iter().flat_map(HardConstraint::parts)).collect();
         // RDR2's bullet records live in NM's core, not in a behaviour: stopping the behaviours leaves them running
-        let bullets: Vec<_> = std::mem::take(&mut self.on).into_iter().filter(|(n, _)| matches!(*n, "applyBulletImpulse" | "configureBullets" | "setCharacterStrength" | "configureSoftLimit" | "setFrictionScale" | "setMuscleStiffness")).collect();
+        let bullets: Vec<_> = std::mem::take(&mut self.on).into_iter().filter(|(n, _)| matches!(*n, "applyBulletImpulse" | "configureBullets" | "setcharacterunderwater" | "setCharacterStrength" | "configureSoftLimit" | "setFrictionScale" | "setMuscleStiffness")).collect();
         *self = Default::default();
         self.release = held;
         self.on = bullets;

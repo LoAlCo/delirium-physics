@@ -911,10 +911,14 @@ impl Buoyancy {
     /// chestBuoyancy on the upper two spine parts, x footBuoyancy on the shins and feet) along the normal and a
     /// mass-free drag of -damping x its velocity. Righting: with the third spine part (RDR2's part 9) wet, a torque
     /// about up x its axis 0, (angle - 0.2) x rightingStrength, ramping in over 2 s from when it got wet.
-    /// Ours: Delirium has no core water plane (setCharacterUnderwater), so the message's plane (or its defaults) is
-    /// always used; the part's half-size and volume are from its capsule or box (RDR2 reads its bound's); RDR2's
+    /// The core's water plane when setcharacterunderwater has it on, else (ours) the message's plane or its defaults; the
+    /// part's half-size and volume are from its capsule or box (RDR2 reads its bound's); RDR2's
     /// "vector x dt at the part" is taken as a force.
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
+        let w = c.ch.core.cfg.water;
+        if w.on {
+            (self.rdr2.point, self.rdr2.normal) = (w.point, w.normal);
+        }
         let r = &self.rdr2;
         let n = r.normal.normalize_or_zero();
         let spine = crate::nmshot::spine_parts();

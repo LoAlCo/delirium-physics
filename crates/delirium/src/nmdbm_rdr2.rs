@@ -612,6 +612,8 @@ pub struct Rdr2 {
     pub up_now: bevy_math::Vec3,
     /// when the timed fail started (balance time)
     pub failing: Option<f32>,
+    /// the fail test's ratios (bal+0x6c, bal+0x70): off over height at the contacts and at the ankles
+    pub fail_ratio: (f32, f32),
     /// in [-0.15, 0.15]: which hip folds first
     pub asym: f32,
     pub on_slope: bool,
@@ -705,7 +707,7 @@ impl Rdr2 {
                since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, run_fast: false, wait: [0.0; 2], give_way: false, push_off: false, falling: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false, heading_only: false,
-               leg_twist: RESET_LEG_TWIST, turn_lift: p.turn_lift_feet, turn_facing: None, force_balance: false, quality: 0.0, abort: None, must_collide: false, kneeling: false, force_fail: false, pause: 0.0, aligned: false, landed: false, crouching: None,
+               leg_twist: RESET_LEG_TWIST, turn_lift: p.turn_lift_feet, turn_facing: None, force_balance: false, fail_ratio: (0.0, 0.0), quality: 0.0, abort: None, must_collide: false, kneeling: false, force_fail: false, pause: 0.0, aligned: false, landed: false, crouching: None,
                started: false, first_tick: true, twist_rest: 0.0, car: None, stagger: false, lead: None, lead_add: 0.0, taper: true, plane: None }
     }
 

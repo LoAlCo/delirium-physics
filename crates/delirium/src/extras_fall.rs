@@ -62,6 +62,7 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "timeAtStartValues", kind: Kind::Float, used: true, doc: "s the start gains are held (0.5)" },
         Param { name: "rampTimeFromStartValues", kind: Kind::Float, used: true, doc: "s to ramp from them to steady (1)" },
         Param { name: "lowerBodyStiffness", kind: Kind::Float, used: true, doc: "leg stiffness (12)" },
+        Param { name: "fallreduction", kind: Kind::Float, used: true, doc: "RDR2 core: stands in for the per-step reduction near failing (0)" },
         Param { name: "strikeReduction", kind: Kind::Float, used: true, doc: "RDR2 core: a released stance leg's hip takes this off and its knee twice it, going forward (1)" },
         Param { name: "strikereductionb", kind: Kind::Float, used: true, doc: "RDR2 core: the same going back (1)" },
         Param { name: "lowerbodystiffnessb", kind: Kind::Float, used: true, doc: "RDR2 core: all the leg stiffness times this going back (1)" },
@@ -159,10 +160,12 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "numStepsTillSlump", kind: Kind::Int, used: true, doc: "steps allowed before forcing a slump, 0.3 s each (3)" },
         Param { name: "stable2SlumpTime", kind: Kind::Float, used: true, doc: "still this long after impact: slump anyway, s (1.0)" },
         Param { name: "exclusionZone", kind: Kind::Float, used: true, doc: "RDR2 core: the balancer keeps his predicted COM this far off the wall, m (0.2); not done without it" },
-        Param { name: "footFrictionMultStart", kind: Kind::Float, used: false, doc: "(not done: 1)" },
-        Param { name: "footFrictionMultRate", kind: Kind::Float, used: false, doc: "(not done: 0)" },
-        Param { name: "backFrictionMultStart", kind: Kind::Float, used: false, doc: "(not done: 1)" },
-        Param { name: "backFrictionMultRate", kind: Kind::Float, used: false, doc: "(not done: 0)" },
+        Param { name: "?9f8c1522", kind: Kind::Float, used: true, doc: "RDR2 core: where the feet's friction ramp ends (0.05)" },
+        Param { name: "?a88467a8", kind: Kind::Float, used: true, doc: "RDR2 core: where the back's friction ramp ends (0.05)" },
+        Param { name: "footFrictionMultStart", kind: Kind::Float, used: true, doc: "RDR2 core: slump's friction ramp (1)" },
+        Param { name: "footFrictionMultRate", kind: Kind::Float, used: true, doc: "RDR2 core: slump's friction ramp (2)" },
+        Param { name: "backFrictionMultStart", kind: Kind::Float, used: true, doc: "RDR2 core: slump's friction ramp (1)" },
+        Param { name: "backFrictionMultRate", kind: Kind::Float, used: true, doc: "RDR2 core: slump's friction ramp (2)" },
         Param { name: "impactLegStiffReduction", kind: Kind::Float, used: true, doc: "leg stiffness dropped on impact, of its value (0.3)" },
         Param { name: "slumpLegStiffReduction", kind: Kind::Float, used: true, doc: "leg stiffness dropped when slumping, of its value (0.8)" },
         Param { name: "slumpLegStiffRate", kind: Kind::Float, used: true, doc: "slump drop reached at this per second (1.0)" },
@@ -616,6 +619,9 @@ impl Extra for StaggerFall {
             if self.rp.head {
                 self.out.push("headLook start=false".into());
             }
+            if rd.wm {
+                self.out.push("armsWindmillAdaptive start=false".into());
+            }
             if rd.handed {
                 self.out.push("catchFall start=false".into());
                 self.out.push("rollDownStairs start=false".into());
@@ -752,6 +758,8 @@ struct StgParams {
     fall_type: i32,
     firing: bool,
     upper_body: bool,
+    /// fallreduction (+0xd0): takes the place of the per-step reduction when the balancer's fail ratios are near failing
+    fall_red: f32,
 }
 
 impl StgParams {
@@ -781,9 +789,10 @@ impl StgParams {
         let (time_to_fall, fall_type) = (p.f("timeToFall", 2.0)?, p.i("fallType", 4)?);
         let firing = p.b("firingInputOutput", false)?;
         let upper_body = p.b("upperBodyReaction", true)?;
+        let fall_red = p.f("fallreduction", 0.0)?;
         Ok(StgParams { arm, spine, arm_start, spine_start, hold, ramp, steps_end, legs, legs_end, strike, per_step, legs_back, prediction, lean_rate, com, hip,
                        total: STG_TOTAL, bonus: STG_BONUS, push_dist, push_knee, push_vel, force_thresh, head_vel_prob, head,
-                       time_to_fall, fall_type, firing, upper_body })
+                       time_to_fall, fall_type, firing, upper_body, fall_red })
     }
 }
 
@@ -821,6 +830,8 @@ struct StgRdr2 {
     fell: bool,
     handed: bool,
     leg_len: f32,
+    /// the armsWindmillAdaptive it started (0x2a7af24)
+    wm: bool,
 }
 
 impl StgRdr2 {
@@ -838,7 +849,7 @@ impl StgRdr2 {
             out.push(format!("headLook start=true vel={},{},{} stiffness={STG_HEAD} damping=1", c.vel.x, c.vel.y, c.vel.z));
         }
         let leg_len = (c.b.joint_pos((*HIP())[0]) - c.b.joint_pos((*ANKLE())[0])).length().max(0.1);
-        StgRdr2 { t: 0.0, seed, last: 0, steps: 0, just: [0.0; 2], leg: [0; 2], force: false, latch: false, fell: false, handed: false,
+        StgRdr2 { t: 0.0, seed, last: 0, steps: 0, just: [0.0; 2], leg: [0; 2], force: false, latch: false, fell: false, handed: false, wm: false,
                   leg_len }
     }
 
@@ -985,9 +996,19 @@ impl StgRdr2 {
         // leg stiffness (0x2a9e8a4). (hip, knee, ankle) of a leg with no state: base - 1, base - 3, base - 1; a stance leg, the
         // other foot stepping: base, base, base + 2; once released (it stopped opposing gravity): the hip less the strike
         // reduction, the knee less twice it, the ankle base. Each less the steps past stepsTillStartEnd's reduction.
-        // Ours: the balancer's fail-ramp caps aren't here (its own ramp lowers the legs after this), nor fallreduction
-        // (0 in every set; it needs two balancer fields not traced).
-        let past_end = |n: i32| if self.steps > p.steps_end + n { p.per_step * (self.steps - p.steps_end - n) as f32 } else { 0.0 };
+        // Near failing (bal+0x6c over 0.6, or bal+0x70 over 1.6) fallreduction stands in for the per-step reduction. While
+        // the balancer's timed fail runs each value is capped by its ramp (bal+0x62c..+0x640) before the scale and the floors.
+        let near_fail = bal.fail_ratio.0 > 0.6 || bal.fail_ratio.1 > 1.6;
+        if near_fail {
+            crate::extras_core_rdr2::trace_once("stagger fallreduction", || format!("{:?}, fallreduction {}", bal.fail_ratio, p.fall_red));
+        }
+        let past_end = |n: i32| if near_fail {
+            p.fall_red
+        } else if self.steps > p.steps_end + n {
+            p.per_step * (self.steps - p.steps_end - n) as f32
+        } else {
+            0.0
+        };
         let strike = p.strike[k];
         let red = c.ch.bcr.map_or(0.0, |b| b.2);
         let [w0, w1, wmin] = STG_WEAK;
@@ -1006,6 +1027,13 @@ impl StgRdr2 {
                 let r = past_end(1);
                 (base - 1.0 - r, base - 3.0 - r, base - 1.0 - r)
             };
+            let (hip, knee, ankle) = match bal.fail_caps {
+                Some((leg, hips)) => {
+                    crate::extras_core_rdr2::trace_once("stagger fail caps", || format!("legs {leg:.2}, hips {hips:?}, asked {hip:.2} {knee:.2} {ankle:.2}"));
+                    (hip.min(hips[i]), knee.min(leg), ankle.min(leg))
+                }
+                None => (hip, knee, ankle),
+            };
             let scale = if backward { p.legs_back } else { 1.0 };
             let (mut hip, mut knee) = (((hip * scale) - red).max(STG_FLOOR[0]), ((knee * scale) - red).max(STG_FLOOR[0]));
             let ankle = ((ankle * scale) - red).max(STG_FLOOR[1]);
@@ -1019,7 +1047,7 @@ impl StgRdr2 {
         }
         c.ch.set_stiffness(spine[0], spine[1], "us", None);
         c.ch.set_stiffness(spine[0], spine[1], "un", None);
-        self.arms(c, p);
+        self.arms(c, p, u, out);
         // fall types (timeToFall)
         let elapsed = self.t > p.time_to_fall;
         let leaves = |s: u8| (0..2).any(|i| prev[i] == s && self.leg[i] != s);
@@ -1040,10 +1068,10 @@ impl StgRdr2 {
     }
 
     /// RDR2's stagger arms (0x2a7af24, upperBodyReaction): while the chest moves fast and not backward, the arms' pose is
-    /// left to the brace helper (0x2a7741c, an IK reach not ported: here they keep what lower behaviours ask); otherwise
-    /// the arms are held by how far the chest is from the pelvis, plus their relative speed. armsWindmillAdaptive, which it
-    /// starts going back fast without the shot's brace, isn't started here.
-    fn arms(&mut self, c: &mut Ctx, p: &StgParams) {
+    /// left to the brace helper (0x2a7741c, which reaches out only once a shoulder drops to the pelvis); going back fast
+    /// without the shot's brace, armsWindmillAdaptive circles them; otherwise the arms are held by how far the chest is from
+    /// the pelvis, plus their relative speed.
+    fn arms(&mut self, c: &mut Ctx, p: &StgParams, u: f32, out: &mut Vec<String>) {
         if !p.upper_body {
             return;
         }
@@ -1059,6 +1087,8 @@ impl StgRdr2 {
         let back = vc.normalize_or_zero().dot(top.m.c);
         let side = c.vel.normalize_or_zero().dot(c.m.a);
         let mut free = [true; 2];
+        let fling = c.ch.core.fling_stagger;
+        let mut held = [false; 2];
         if (back < 0.2 || (back < 0.7 && side.abs() > 0.7)) && spd > 0.5 {
             // each arm by a draw until he moves fast, then both; going sideways only the arm on that side
             let (mut l, mut r) = (true, true);
@@ -1070,10 +1100,29 @@ impl StgRdr2 {
                 (l, r) = (true, false);
             }
             free = if side <= 0.7 { [!l, !r] } else { [true, false] };
+            held = [!free[0], !free[1]];
+            let reached = Self::brace_helper(c, p, u);
+            free = [free[0] && !reached[0], free[1] && !reached[1]];
+            if self.wm {
+                self.wm = false;
+                out.push("armsWindmillAdaptive start=false".into());
+            }
         }
-        if back > 0.2 && spd > 0.5 && !c.shot_on {
+        if back > 0.2 && spd > 0.5 && !(c.shot_on && c.ch.core.shot_brace) {
+            if !self.wm {
+                self.wm = true;
+                crate::extras_core_rdr2::trace_once("stagger windmill", || format!("going back at {spd:.2} m/s, back {back:.2}, side {side:.2}"));
+                out.push("armsWindmillAdaptive start=true armDirection=-1 phase=0.8 leftElbowAngle=0.6 rightElbowAngle=0.6 armStiffness=9                           disableOnImpact=true setBackAngles=false mask=ua".into());
+            }
+            let period = (10.0 - 10.0 * spd).clamp(0.7, 2.0);
+            let on = [!held[0] && side <= 0.9 && !fling[0], !held[1] && side >= -0.9 && !fling[1]];
+            c.out.aw_live = Some((std::f32::consts::TAU / period, on));
             free = [false; 2];
+        } else if self.wm {
+            self.wm = false;
+            out.push("armsWindmillAdaptive start=false".into());
         }
+        free = [free[0] && !fling[0], free[1] && !fling[1]];
         let d = (top.m.d - pel.m.d) + (top.v - pel.v) * 0.6;
         let a = (d.length() - 0.15).clamp(0.0, 1.0);
         for i in 0..2 {
@@ -1109,6 +1158,54 @@ impl StgRdr2 {
         for &j in SPINE().iter().chain(NECK().iter()) {
             c.ch.eff[j].blend_to_zero(1.0 - f);
         }
+    }
+
+    /// RDR2's brace helper (0x2a7741c): an arm whose shoulder, led 0.3 s by the chest's fall at that point, is below 0.1 over
+    /// the pelvis reaches where the second spine part will be, 0.3 s of the trunk's speed on, no further than its length. The
+    /// shot's fling2, when it overrides the stagger, keeps the arm; as read, the left arm's flag gates both reaches.
+    fn brace_helper(c: &mut Ctx, p: &StgParams, u: f32) -> [bool; 2] {
+        let fling = c.ch.core.fling_stagger;
+        let mut reached = [false; 2];
+        if fling[0] && fling[1] {
+            return reached;
+        }
+        let up = c.up;
+        let sp = crate::nmshot::spine_parts();
+        let (top, pel, mid, low) = (c.b.part(sp[4]), c.b.part(sp[0]), c.b.part(sp[2]), c.b.part(sp[1]));
+        let line = up.dot(pel.m.d) + 0.1;
+        // (the floor's velocity ctx+0x4790: nothing under him moves in Delirium)
+        let mut v = (top.v + pel.v) * 0.3;
+        let lying = up.dot(mid.m.c) > 0.8;
+        if lying {
+            v -= mid.m.c * (v.length() * 0.2);
+        }
+        let (stiff, damp) = (p.arm_start[0] + (p.arm[0] - p.arm_start[0]) * u, p.arm_start[1] + (p.arm[1] - p.arm_start[1]) * u);
+        for i in 0..2 {
+            let l = crate::nmshot::limb(i);
+            let sh = c.b.joint_pos(l.e[1]);
+            let at = top.v + top.w.cross(sh - top.m.d);
+            if up.dot(sh) + at.dot(up).min(0.0) * 0.3 >= line || fling[0] {
+                continue;
+            }
+            reached[i] = true;
+            crate::extras_core_rdr2::trace_once("stagger brace helper", || format!("arm {i}, lying {lying}"));
+            for j in l.e {
+                c.ch.eff[j].set_stiffness(stiff, damp, None);
+            }
+            c.ch.eff[l.e[2]].set_stiffness(stiff, 0.75 * damp, None);
+            c.ch.eff[l.e[3]].set_stiffness(stiff - 1.0, 1.75, None);
+            c.ch.eff[l.e[3]].desired = [0.4, if lying { -3.8 } else { -0.4 }, 1.0];
+            let d = low.m.d + v - sh;
+            let el = c.b.joint_pos(l.e[2]);
+            let reach = 1.003 * ((el - sh).length() + (c.b.part(l.p[3]).m.d - el).length());
+            let target = sh + d.normalize_or_zero() * d.length().min(reach);
+            let side = if i == 0 { 1.0 } else { -1.0 };
+            // a swing request (+0xac): its weight a draw under 0.4 (+0x90), its speed 5 (+0x94); clavicle mode 3 (+0xa4)
+            let w = c.ch.random() * 0.4;
+            crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], target, 0.3, 1.0, side, 1.0, c.b.part(l.p[0]).v, Some((5.0, w)));
+            crate::nmcf::clav_overflow(c.ch, l.e[0], l.e[1]);
+        }
+        reached
     }
 
     /// The balancer gave up: the legs held where they are and soft, catchFall, and rollDownStairs lying face up.
@@ -2012,7 +2109,7 @@ impl Injured {
         let Some((hit, e)) = r.hit else { return false };
         let f = if r.push_t >= r.push_start - 0.7 { 1.0 } else { r.push_t / (r.push_start - 0.7) };
         let at = hit + e * ((1.0 - f) * 0.25 - 0.2);
-        let arms = crate::extras_fall_rdr2::brace_core(c, &mut r.brace, IOG_BRACE, at, Vec3::ZERO, dt);
+        let arms = crate::extras_fall_rdr2::brace_core(c, &mut r.brace, IOG_BRACE, at, Vec3::ZERO, None, dt);
         for i in 0..2 {
             used[i] |= arms[i];
         }
