@@ -521,6 +521,10 @@ fn ramp(a: f32, b: f32, t: f32, t0: f32, time: f32) -> f32 {
 }
 
 impl Extra for Yanked {
+    fn yanked_stirrups_set(&mut self, alive: Option<[bool; 2]>) {
+        self.r2.stirrups = alive;
+    }
+
     /// RDR2's pointGun reads yanked's lassoedtype (+0x184 = 1: the arm straight along the aim).
     fn pg_yanked(&self) -> Option<bool> {
         Some(self.r2.p.lassoed == 1)

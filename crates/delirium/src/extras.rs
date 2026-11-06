@@ -119,6 +119,12 @@ pub trait Extra: Send + Sync {
     }
     /// The RDR2 core's pointGun: yanked's coupling.
     fn pg_yanked_set(&mut self, _on: bool) {}
+    /// The RDR2 core's sit: its stirrups, left and right, alive (yanked reads them dragged by a stirrup).
+    fn sit_stirrups(&self) -> Option<[bool; 2]> {
+        None
+    }
+    /// The RDR2 core's yanked: a running sit's stirrups.
+    fn yanked_stirrups_set(&mut self, _alive: Option<[bool; 2]>) {}
     /// The RDR2 core's pointGun: part masks (RDR2's bits) that leave each other alone this step.
     fn pair_off(&self) -> Vec<(u32, u32)> {
         vec![]
@@ -297,6 +303,9 @@ impl Extras {
         // (it reads the running yanked each time, so it lapses when yanked stops)
         let s = self.on.iter().any(|(_, e)| e.pg_yanked() == Some(true));
         self.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.pg_yanked_set(s));
+        // RDR2 core: yanked reads a running sit's stirrups
+        let s = self.on.iter().find_map(|(_, e)| e.sit_stirrups());
+        self.on.iter_mut().for_each(|(_, e)| e.yanked_stirrups_set(s));
         self.take_off(|_, e| e.done());
     }
 
