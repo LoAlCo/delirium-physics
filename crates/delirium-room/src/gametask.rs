@@ -336,7 +336,8 @@ pub fn gate_modules(merged: Vec<SentMessage>, hit: ShotHit, part: usize) -> Vec<
         } else if is("shotfrombehind") {
             flag(m, "shotFromBehind") && hit == ShotHit::Back
         } else if is("shotspin") {
-            flag(m, "shotspin")
+            // the switch is the module's: the block's spine limits are the shot's either way (see the map below)
+            flag(m, "shotspin") || m.params.iter().any(|p| spine_limit(p.hash))
         } else if is("shotfalltoknees") {
             flag(m, "FallToKnees")
         } else if is("configureshotinjuredleg") {
@@ -346,7 +347,18 @@ pub fn gate_modules(merged: Vec<SentMessage>, hit: ShotHit, part: usize) -> Vec<
         } else {
             true
         }
+    }).map(|mut m| {
+        if m.hash == joaat("shotspin") && !flag(&m, "shotspin") {
+            m.params.retain(|p| spine_limit(p.hash) || p.hash == joaat("start"));
+            m.params.push(SentParam { hash: joaat("shotSpin"), label: "shotSpin".into(), val: Val::Bool(false) });
+        }
+        m
     }).collect()
+}
+
+/// shotspin's four that the shot's own tick reads (+0x3a0..+0x3ac).
+fn spine_limit(hash: u32) -> bool {
+    ["spinelean1limit", "spinelean2limit", "spinetwistlimit", "torqueexaggeratejumplimit"].iter().any(|n| joaat(n) == hash)
 }
 
 /// A set of the shot's by its id: a name or the hash in hex, of any case.
@@ -414,6 +426,9 @@ pub fn line(m: &SentMessage, port: &Message) -> (String, Vec<String>) {
         let wanted = own.iter().find(|o| o.0 == p.hash).map(|o| o.1).or_else(|| crate::own_names::OWN.iter().find(|o| o.0 == p.hash && port.params.iter().any(|x| x.name == o.1)).map(|o| o.1)).map_or(p.hash, joaat);
         // a module's switch, used by gate_modules
         if ["snap", "shotinguts", "shotfrombehind", "shotspin", "falltoknees"].iter().any(|n| joaat(n) == p.hash) && m.hash != joaat("shot") {
+            if m.hash == joaat("shotspin") && p.hash == joaat("shotspin") && matches!(p.val, Val::Bool(false)) {
+                s += " shotSpin=false";
+            }
             continue;
         }
         let by_hash = format!("?{:08x}", p.hash);

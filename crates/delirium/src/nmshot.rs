@@ -226,6 +226,9 @@ pub struct Out {
     pub dbm_must_collide: Option<bool>,
     pub dbm_kneeling: Option<bool>,
     pub dbm_force_fail: bool,
+    /// RDR2 core: configureShotInjuredLeg's limp fields for the balancer, and one leg's lift multiplier (bal+0x23c, +0x240)
+    pub dbm_limp_cfg: Option<crate::nmdbm_rdr2::LimpCfg>,
+    pub dbm_lift: Option<(usize, f32)>,
 }
 
 impl Out {
@@ -307,6 +310,8 @@ pub struct Shot {
     spin_blend: f32,
     t190: f32,
     pub t194: f32,
+    /// RDR2 core: shotRelax's lower period (None: its default)
+    pub relax_lower: Option<f32>,
     behind: f32,
     side: f32,
     reach_part: [Option<usize>; 2],
@@ -562,7 +567,7 @@ impl Shot {
             fling2: None, p, new_hit: false, no_balance: false, since_hit: 0.0, reach_t: [0.0; 2], time: 0.0,
             s150: delirium_data::kv!(117), s154: bs, s158: 1.0, s15c: bs * delirium_data::kv!(540), s160: 1.0, s164: bs / delirium_data::kv!(117) * delirium_data::kv!(25), s168: delirium_data::kv!(27) * dt,
             s16c: bs * delirium_data::kv!(541), s170: delirium_data::kv!(27) * dt, t174: if p.fling { delirium_data::kv!(201) } else { delirium_data::kv!(542) }, head_t: p.head_look_at_wound_max_timer,
-            fall: [1.0; 2], spin: INIT_SPIN[0], spin_blend: INIT_SPIN[1], t190: 0.0, t194: 0.0, behind: 0.0, side: 0.0, reach_part: [None; 2],
+            fall: [1.0; 2], spin: INIT_SPIN[0], spin_blend: INIT_SPIN[1], t190: 0.0, t194: 0.0, relax_lower: None, behind: 0.0, side: 0.0, reach_part: [None; 2],
             loose: delirium_data::kv!(51), wound: Vec3::ZERO, hit_local: Vec3::ZERO, normal_local: Vec3::ZERO, reach_pos: [Vec3::ZERO; 2],
             reach_normal: [Vec3::ZERO; 2], chicken_t: 0.0, react_t: 0.0, react_elbow: 0.0, react_phase: 0.0,
             reach: [Reach::default(); 2], cur_reach: 0, cur_arm: 0, m228: 0.0, m248: 0.0, m24c: 0.0, m250: 0.0, m254: 0.0,
@@ -1762,7 +1767,7 @@ struct ShotRdr2State {
     fall_writhe: bool,
 }
 
-/// RDR2's relax: shotRelax's lower-body period with its default (ours: our relax message gives only the upper one).
+/// RDR2's relax: shotRelax's lower-body period, its registered default for a message with no value.
 const RDR2_RELAX_LOWER: f32 = 0.4;
 
 /// RDR2's strength block (the shot's, shared with meleeReact): the weakness k, the base stiffnesses, the neck's
@@ -2027,9 +2032,17 @@ impl Shot {
     /// sub-module from the first bullet, the fall (fallingReaction) and the arm shapes, then the spine blend.
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
         let p = self.p;
+        // the prologue: for a while after a bullet the spine's limits take the shotspin block's (0x2a4eaa0 on the four joints)
+        let lim = c.ch.core.cfg.shot_spine;
+        if lim[3] > self.since_hit {
+            for j in (*SPINE()) {
+                c.ch.lim_raise(j, [lim[0], lim[1], lim[2]]);
+            }
+            crate::extras_core_rdr2::trace_once("shot: the spine's limits raised", || format!("to {lim:?}, {} s after the bullet", self.since_hit));
+        }
         self.t190 = (self.t190 + dt).min(self.t194);
         self.fall[0] = 1.0 - self.t190 / (self.t194 + 1e-6);
-        let low = if self.t194 > 0.0 { RDR2_RELAX_LOWER } else { 0.0 };
+        let low = if self.t194 > 0.0 { self.relax_lower.unwrap_or(RDR2_RELAX_LOWER) } else { 0.0 };
         self.rd.t_low = (self.rd.t_low + dt).min(low);
         self.fall[1] = 1.0 - self.rd.t_low / (low + 1e-6);
         // cStr modulation: U and W scaled by the character's strength (0x2a7f650's ramps)

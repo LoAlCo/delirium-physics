@@ -730,6 +730,8 @@ pub static MESSAGES: [Message; 30] = [
     ] },
     Message { name: "shotRelax", params: &[
         Param { name: "relaxPeriod", kind: Kind::Float, used: true, doc: "" },
+        Param { name: "relaxPeriodUpper", kind: Kind::Float, used: true, doc: "RDR2 core: +0x6fc: s the upper body's strength falls over (2)" },
+        Param { name: "relaxPeriodLower", kind: Kind::Float, used: true, doc: "RDR2 core: +0x704: s the lower body's falls over (0.4)" },
     ] },
     Message { name: "stayUpright", params: &[
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "" },
@@ -915,10 +917,13 @@ impl Default for ActivePose {
 #[derive(Clone, Debug)]
 pub struct ShotRelax {
     pub relax_period: f32,
+    /// RDR2 core: the game's two periods, when the message gives them (below 0: not given)
+    pub upper: f32,
+    pub lower: f32,
 }
 impl Default for ShotRelax {
     fn default() -> ShotRelax {
-        ShotRelax { relax_period: 2.0 }
+        ShotRelax { relax_period: 2.0, upper: -1.0, lower: -1.0 }
     }
 }
 
@@ -1086,7 +1091,7 @@ pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg
         "leanToPosition" => { let p = &st.lean_to_position; a.lean_to(crate::nmdbm::LeanMode::Pos(p.pos), p.lean_amount, p.apply_as_force); }
         "leanTowardsObject" => { let p = &st.lean_towards_object; a.lean_to(crate::nmdbm::LeanMode::Object(p.offset, -1), p.lean_amount, p.apply_as_force); }
         "setStiffness" => { let p = &st.set_stiffness; a.set_stiffness_mask(p.body_stiffness, p.damping, &p.mask); }
-        "shotRelax" => a.shot_relax(st.shot_relax.relax_period),
+        "shotRelax" => a.shot_relax_rdr2(&st.shot_relax),
         "stopAllBehaviours" => a.stop_all_behaviours(),
         // RDR2 core: a message with RDR2's parameters, or a stop, is RDR2's; GTA IV's two alone stay GTA IV's stabiliser
         "stayUpright" if a.rdr2_core.is_some() && (start == Some(false) || params.iter().any(|(n, _)| !matches!(*n, "start" | "stiffness" | "dampingScale"))) => {
@@ -1618,6 +1623,8 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("shot", "flingWidth") => { let p = &mut st.shot; p.fling_width = v.f()?; }
         ("shot", "headLook") => { let p = &mut st.shot; p.head_look = v.v()?; }
         ("shotRelax", "relaxPeriod") => { let p = &mut st.shot_relax; p.relax_period = v.f()?; }
+        ("shotRelax", "relaxPeriodUpper") => { let p = &mut st.shot_relax; p.upper = v.f()?; }
+        ("shotRelax", "relaxPeriodLower") => { let p = &mut st.shot_relax; p.lower = v.f()?; }
         ("stayUpright", "stiffness") => { let p = &mut st.stay_upright; p.stiffness = v.f()?; }
         ("stayUpright", "dampingScale") => { let p = &mut st.stay_upright; p.damping_scale = v.f()?; }
         ("stayUpright", "side") => st.stay_upright.side = Some(v.i()?),
@@ -1963,6 +1970,8 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("shot", "flingWidth") => { let p = &st.shot; Value::Float(p.fling_width) }
         ("shot", "headLook") => { let p = &st.shot; Value::Vec3(p.head_look) }
         ("shotRelax", "relaxPeriod") => { let p = &st.shot_relax; Value::Float(p.relax_period) }
+        ("shotRelax", "relaxPeriodUpper") => { let p = &st.shot_relax; Value::Float(p.upper) }
+        ("shotRelax", "relaxPeriodLower") => { let p = &st.shot_relax; Value::Float(p.lower) }
         ("stayUpright", "stiffness") => { let p = &st.stay_upright; Value::Float(p.stiffness) }
         ("stayUpright", "dampingScale") => { let p = &st.stay_upright; Value::Float(p.damping_scale) }
         ("stayUpright", "side") => Value::Int(st.stay_upright.side.unwrap_or(-1)),

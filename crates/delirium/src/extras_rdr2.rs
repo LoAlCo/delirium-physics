@@ -205,6 +205,11 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "his stiffness (10)" },
     ] },
     Message { name: "reachForWound", params: &[
+        Param { name: "moveInjuredArm", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x80: a hit arm goes to a random place on the spine itself (false)" },
+        Param { name: "alwaysReach", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x165: no distance limit on a leg wound, and lying on a side doesn't keep a hand away (false)" },
+        Param { name: "movablegeneralscales", kind: Kind::Float, used: true, doc: "RDR2 core: +0x5c: with the next, how long a reach lasts on the ground; the name misleads (0.2)" },
+        Param { name: "recoveredinjuredreturnring", kind: Kind::Float, used: true, doc: "RDR2 core: +0x54: the same; the name misleads (2)" },
+        Param { name: "headzone", kind: Kind::Float, used: true, doc: "RDR2 core: +0xec: head and neck wounds: the angle round the head that keeps each hand out; below 0 mirrored for the back (0.5)" },
         Param { name: "allowLeftPistolRFW", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x7d: this hand may reach while holding a pistol; no weapon states here" },
         Param { name: "allowRightPistolRFW", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x7e: the same" },
         Param { name: "rfwWithPistol", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x7f: pointGun's hold on that hand; no weapon states here" },
@@ -266,6 +271,12 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "trunk stiffness (10)" },
     ] },
     Message { name: "shotInjuredLeg", params: &[
+        Param { name: "legliftmult", kind: Kind::Float, used: true, doc: "RDR2 core: +0x1b8: lifting, the leg's lift multiplier, the swing target's reach from the hip by its length (0.8)" },
+        Param { name: "legLiftStanceMult", kind: Kind::Float, used: true, doc: "RDR2 core: +0x1bc: not lifting, the same, if under 0.999 (1)" },
+        Param { name: "injuredbias", kind: Kind::Float, used: true, doc: "RDR2 core: +0x204: limping, the support centre away from the hurt leg (0.1)" },
+        Param { name: "limpwidth", kind: Kind::Float, used: true, doc: "RDR2 core: +0x1fc: limping, the healthy foot's step width scale (0.6)" },
+        Param { name: "limpwidthinjured", kind: Kind::Float, used: true, doc: "RDR2 core: +0x200: limping, the step width scale while stepping (1.3)" },
+        Param { name: "?4f715416", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x209: the healthy foot's width on both legs (true)" },
         Param { name: "timeBeforeCollapseWoundLeg", kind: Kind::Float, used: true, doc: "RDR2 core: s after the hit before the injury acts (0.3)" },
         Param { name: "legForceStep", kind: Kind::Bool, used: true, doc: "RDR2 core: the hurt foot steps at once (true)" },
         Param { name: "limpBendRate", kind: Kind::Float, used: true, doc: "RDR2 core: hip pitch rate (0.5)" },
@@ -364,6 +375,10 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "ftkAlwaysChangeFall", kind: Kind::Bool, used: true, doc: "RDR2 core: catchFall's kneel flag though the knees are uneven (false)" },
     ] },
     Message { name: "shotSpin", params: &[
+        Param { name: "spinelean1limit", kind: Kind::Float, used: true, doc: "RDR2 core: +0x3a0: the spine's lean1 limit raised to this, every joint, a while after a bullet (-0.5: none)" },
+        Param { name: "spinelean2limit", kind: Kind::Float, used: true, doc: "RDR2 core: +0x3a4: lean2 (-0.3)" },
+        Param { name: "spinetwistlimit", kind: Kind::Float, used: true, doc: "RDR2 core: +0x3a8: twist (-0.3)" },
+        Param { name: "torqueexaggeratejumplimit", kind: Kind::Float, used: true, doc: "RDR2 core: +0x3ac: s after a bullet they hold; the name misleads (-0.3: never)" },
         Param { name: "shotSpinTorqueTol", kind: Kind::Float, used: true, doc: "RDR2 core: (0.2)" },
         Param { name: "shotSpinTwistMom", kind: Kind::Float, used: true, doc: "RDR2 core: (100)" },
         Param { name: "spin", kind: Kind::Float, used: true, doc: "the hit's spin, m (none: from hitPoint and bulletDir: the lever arm about his centre across the bullet)" },
@@ -1167,7 +1182,7 @@ pub struct Spin {
     max_vel: f32, torque: f32, torque_max: f32, step_type: i32, step_wait: f32, step_time: f32, attacker: Vec3,
     t: f32, heading: Option<(Vec3, f32)>, turned: f32,
     /// RDR2's values (its defaults: twist mult 20, gates 9 rad / 20 rad/s / 100, torque 10 up to 20 outside 0.2 rad)
-    rdr2: SpinRdr2, lever: Option<f32>, spin_on: bool,
+    rdr2: SpinRdr2, lever: Option<f32>, spin_on: bool, spine: [f32; 4],
 }
 
 #[derive(Clone, Copy)]
@@ -1189,6 +1204,7 @@ impl Spin {
                 tol: p.f("shotSpinTorqueTol", 0.2)?, align: 0.9, step_offset: p.f("stepTurnOffset", 0.0)?,
             },
             lever: None, spin_on: p.b("shotSpin", true)?,
+            spine: [p.f("spinelean1limit", -0.5)?, p.f("spinelean2limit", -0.3)?, p.f("spinetwistlimit", -0.3)?, p.f("torqueexaggeratejumplimit", -0.3)?],
         })
     }
 
@@ -2013,7 +2029,7 @@ pub struct InjuredLeg {
 struct LegRdr2 {
     lift_pitch: f32, lift_spine: f32, lift_delay: f32, reunited: bool,
     force_step: bool, collapse: f32, bend_rate: f32, bend_rate_spine: f32, straighten: f32, straighten_rate: f32,
-    straighten_rate_spine: f32,
+    straighten_rate_spine: f32, lift_mult: f32, stance_mult: f32, limp_cfg: crate::nmdbm_rdr2::LimpCfg,
 }
 
 impl InjuredLeg {
@@ -2033,6 +2049,8 @@ impl InjuredLeg {
                 bend_rate: p.f("limpBendRate", 0.5)?, bend_rate_spine: p.f("limpBendRateSpine", 0.5)?,
                 straighten: p.f("limpStraightenMult", 0.2)?, straighten_rate: p.f("limpStraightenRate", 0.7)?,
                 straighten_rate_spine: p.f("limpStraightenRateSpine", 0.7)?,
+                lift_mult: p.f("legliftmult", 0.8)?, stance_mult: p.f("legLiftStanceMult", 1.0)?,
+                limp_cfg: crate::nmdbm_rdr2::LimpCfg { bias: p.f("injuredbias", 0.1)?, width: p.f("limpwidth", 0.6)?, width_injured: p.f("limpwidthinjured", 1.3)?, both: p.b("?4f715416", true)? },
             },
             spine: 0.0, forced: 0.0, left: 0.0, lift_left: 0.0, started: false,
         })
@@ -2096,6 +2114,7 @@ impl Extra for InjuredLeg {
             // RDR2's release: the hip pitch at once, the spine, the leg's looseness, the limp and the forced foot
             c.out.dbm_crouch.push(Crouch::ReleaseHip(f32::INFINITY));
             c.out.dbm_force_step = Some(None);
+            c.out.dbm_lift = Some((self.side, -1.0));
             for &j in SPINE().iter() {
                 c.ch.eff[j].desired[0] = 0.0;
             }
@@ -2144,6 +2163,7 @@ impl InjuredLeg {
                 (self.injury, self.hip_pitch, r.bend_rate, self.spine_bend, r.bend_rate_spine);
             if self.limp > 0.0 {
                 c.out.dbm_limp = Some((s, self.limp));
+                c.out.dbm_limp_cfg = Some(r.limp_cfg);
                 // while the hurt leg carries him (its foot down, the other's up) all of it, else the straighten share
                 let feet = [c.b.doll.collided(&[3]), c.b.doll.collided(&[6])];
                 if !(feet[s] && !feet[1 - s]) {
@@ -2178,6 +2198,13 @@ impl InjuredLeg {
                 c.ch.eff[j].injury = self.lift;
             }
             self.lift_left -= dt;
+            c.out.dbm_lift = Some((s, r.lift_mult));
+            crate::extras_core_rdr2::trace_once("injured leg: lift multiplier", || format!("{} on leg {s}", r.lift_mult));
+        } else {
+            c.out.dbm_lift = Some((s, if r.stance_mult < 0.999 { r.stance_mult } else { -1.0 }));
+            if r.stance_mult < 0.999 {
+                crate::extras_core_rdr2::trace_once("injured leg: stance multiplier", || format!("{} on leg {s}", r.stance_mult));
+            }
         }
         if !injured && !lifting {
             c.out.dbm_crouch.push(Crouch::ReleaseHip(f32::INFINITY));
@@ -2380,6 +2407,7 @@ pub struct ReachForWound {
 struct RfwRdr2 {
     falling: i32, floor: i32, falling_one: i32, new_hit_reset: bool, rate_up: [f32; 3], rate_down: [f32; 3],
     bend_before: f32, twist_time: f32, leg_stiffness: f32, arm_stiffness: f32,
+    move_arm: bool, always: bool, floor_delay: f32, floor_hold: f32, head_zone: f32,
 }
 
 impl ReachForWound {
@@ -2403,6 +2431,8 @@ impl ReachForWound {
                 rate_down: [p.f("legRateDown", 0.4)?, p.f("hipRateDown", 0.4)?, p.f("spineRateDown", 0.4)?],
                 bend_before: p.f("bendBeforeReach", 0.1)?, twist_time: p.f("spineTwistTime", 0.5)?,
                 leg_stiffness: p.f("legStiffness", 10.0)?, arm_stiffness: if arm_given { arm_stiffness } else { -10.0 },
+                move_arm: p.b("moveInjuredArm", false)?, always: p.b("alwaysReach", false)?,
+                floor_delay: p.f("movablegeneralscales", 0.2)?, floor_hold: p.f("recoveredinjuredreturnring", 2.0)?, head_zone: p.f("headzone", 0.5)?,
             },
             r2: None,
         })
@@ -2606,12 +2636,14 @@ struct Wound { on: OnPart, leg: Option<usize>, arm: bool, head: bool }
 struct ArmRec {
     wound: Option<Wound>, dist: f32, rate: f32, stuck: f32, clock: f32, demand: f32, hunch_t: f32, hunch: Limiter,
     late: bool, on: bool, fresh: bool, reached: bool, sign: f32, pose: Option<[f32; 6]>,
+    /// R+0x90, the clock that runs only on the ground; R+0xda, moving the hit arm itself
+    floor: f32, moving: bool,
 }
 
 impl Default for ArmRec {
     fn default() -> ArmRec {
         ArmRec { wound: None, dist: 1000.0, rate: 0.0, stuck: 0.0, clock: 0.0, demand: 0.0, hunch_t: 0.0, hunch: Limiter::default(),
-                 late: false, on: false, fresh: false, reached: false, sign: 1.0, pose: None }
+                 late: false, on: false, fresh: false, reached: false, sign: 1.0, pose: None, floor: 0.0, moving: false }
     }
 }
 
@@ -2624,6 +2656,8 @@ struct Rfw2 {
     act: [ArmRec; 2], pend: [Option<ArmRec>; 2], reaching: [bool; 2], hits: Vec<(Vec3, i32, Vec3)>,
     twist_t: f32, twist_left: bool, twist: Limiter, bend: Limiter, releasing: bool, toggle: bool, toggle_at: f32,
     hit_down: bool, len: f32, release: [bool; 2], since_stop: [f32; 2],
+    /// +0x533, both hands chosen: which goes when only one may reach
+    one_left: bool,
 }
 
 impl Rfw2 {
@@ -2633,6 +2667,27 @@ impl Rfw2 {
         !self.reaching.contains(&true) && self.pend.iter().all(Option::is_none) && !self.releasing && self.hits.is_empty()
             && self.act.iter().all(|a| !(a.fresh && a.clock <= window)) && self.since_stop.iter().all(|&t| t >= 0.4)
     }
+}
+
+fn floor_window(r: RfwRdr2) -> f32 {
+    r.floor_delay + r.floor_hold
+}
+
+/// 0x2a35fb8 and 0x2a33350: the COM frame `t` s on by its spin, and how he then lies against up: 0 or 1 on front or back by
+/// its second row, 4 or 5 on a side by its first, 2 or 3 by its third. [P: the frame turned by the angular velocity; the
+/// code turns its quaternion by the inverse inertia times the angular momentum.]
+fn rfw_lie_class(c: &Ctx, t: f32) -> u8 {
+    let q = bevy_math::Quat::from_scaled_axis(c.angvel * t);
+    let (a, b, cc) = (q * c.m.a, q * c.m.b, q * c.m.c);
+    let (f3, f4, f2) = (b.dot(c.up), -a.dot(c.up), -cc.dot(c.up));
+    let mut class = 2 + (f2 >= 0.25) as u8;
+    if f4.abs() - f2.abs() > 0.15 {
+        class = 4 + (f4 >= 0.0) as u8;
+    }
+    if f3.abs() > 0.8 || (f2.abs() < f3.abs() && f4.abs() < f3.abs() && f2.abs() < 0.75 && f4.abs() < 0.75 && f3.abs() > 0.75) {
+        class = (f3 <= 0.0) as u8;
+    }
+    class
 }
 
 /// RDR2's pull: strength 8 at the start of a reach falling to 4 over 0.3 s; the recoil (the hand first pushed away
@@ -2675,9 +2730,16 @@ impl ReachForWound {
             self.intake(c, &mut s, point, part);
         }
         let window = self.wait + self.hold;
+        // +0x52e: on the ground (riding isn't); the floor clock's window ends a reach there, whatever the other says. The
+        // floor window's other use, starting a reach, needs byte +0x7c, which no handler or default sets
+        let grounded = !c.upright && !c.sit_state.is_some_and(|s| s <= 2);
+        let floor_window = self.rdr2.floor_delay + self.rdr2.floor_hold;
         for a in s.act.iter_mut() {
             a.clock += dt;
             a.demand = 0.0;
+            if grounded {
+                a.floor += dt;
+            }
         }
         for t in s.since_stop.iter_mut() {
             *t += dt;
@@ -2685,7 +2747,10 @@ impl ReachForWound {
         for i in 0..2 {
             let free = !c.ch.busy[i];
             let a = s.act[i];
-            if s.reaching[i] && (a.fresh || a.clock > window || !free) {
+            if s.reaching[i] && (a.fresh || a.clock > window || a.floor > floor_window || !free) {
+                if a.floor > floor_window && !a.fresh {
+                    crate::extras_core_rdr2::trace_once("reach for wound: the floor clock ends a reach", || format!("{} s on the ground, of {floor_window}", a.floor));
+                }
                 self.stop_arm(c, &mut s, i);
             }
             let a = s.act[i];
@@ -2715,6 +2780,7 @@ impl ReachForWound {
         if self.rdr2.new_hit_reset {
             for a in s.act.iter_mut() {
                 a.clock = self.hold + 1e5 + self.wait;
+                a.floor = self.rdr2.floor_hold + 1e5 + self.rdr2.floor_delay;
             }
         }
         s.pend = [None; 2];
@@ -2765,23 +2831,64 @@ impl ReachForWound {
             let d = point - c.b.part(0).m.d;
             crate::extras_core_rdr2::trace(|| format!("reach for wound: part {part}, {:.3} his right, {:.3} up from the pelvis: hands {ok:?}", d.dot(-side), d.dot(up)));
         }
+        // a head or neck wound: the angle round the head from the local point keeps a hand out (headzone, 0x2a92bc8)
+        if c.ch.rdr2 && head {
+            let m = c.b.part(part).m;
+            let (lx, lz) = ((point - m.d).dot(m.a), (point - m.d).dot(m.c));
+            let pi = std::f32::consts::PI;
+            let a = lz.atan2(-lx);
+            let mut th = if a >= pi * 0.5 { a - 1.5 * pi } else { a + pi * 0.5 };
+            let mut zone = self.rdr2.head_zone;
+            if zone < 0.0 {
+                zone = (-zone).min(pi * 0.5);
+                if lz > 0.0 {
+                    th = if th >= 0.0 { pi - th } else { -pi - th };
+                }
+            }
+            ok = [ok[0] && th > -zone, ok[1] && zone > th];
+            crate::extras_core_rdr2::trace_once("reach for wound: headzone", || format!("angle {th:.2}, zone {zone:.2}: hands {ok:?}"));
+        }
         // (RDR2 registers 0: both hands, unless the message says)
         if self.one_hand && (self.one_given || !c.ch.rdr2) && ok == [true; 2] {
             let left = if leg { part_side(part as i32) == Some(0) } else { (point - c.com).dot(side) > 0.0 };
             ok = [left, !left];
         }
         let spread = ok == [true; 2] && !leg && !arm && !head;
+        if ok == [true; 2] {
+            s.one_left = c.ch.random_bits() & 1 != 0;
+        }
+        // the right hand's clocks start a tenth behind (+0x4bc, +0x4c0)
+        let clock = [0.0, -0.1];
         for i in (0..2).filter(|&i| ok[i]) {
             let at = if spread { point + side * (0.05 * s.len * if i == 0 { 1.0 } else { -1.0 }) } else { point };
             let w = Wound { on: OnPart::new(c, part, at, out), leg: if leg { part_side(part as i32) } else { None }, arm, head };
-            let rec = ArmRec { wound: Some(w), fresh: true, ..Default::default() };
+            let rec = ArmRec { wound: Some(w), fresh: true, clock: clock[i], floor: clock[i], ..Default::default() };
             if s.reaching[i] {
                 s.pend[i] = Some(rec);
             } else {
                 s.act[i] = rec;
             }
         }
-        if ok.contains(&true) {
+        // moveInjuredArm: the hit arm, not its clavicle, goes itself to a random place on one of the spine's parts (0x2a8bf10)
+        let moved = [self.rdr2.move_arm && matches!(part, 14..=16), self.rdr2.move_arm && matches!(part, 18..=20)];
+        for i in (0..2).filter(|&i| moved[i]) {
+            let k = SPINE()[(c.ch.random_bits() & 3) as usize] + 1;
+            let (r, half) = (c.b.build.parts[k].radius, c.b.build.parts[k].half);
+            let along = c.ch.random() * (0.3 * r + half) * if i == 0 { -1.0 } else { 1.0 };
+            let angle = c.ch.random() * std::f32::consts::TAU - std::f32::consts::PI;
+            let m = c.b.part(k).m;
+            let n = m.a * angle.cos() - m.c * angle.sin();
+            let at = m.d + n * r + m.b * along;
+            crate::extras_core_rdr2::trace_once("reach for wound: moving the injured arm", || format!("arm {i} to part {k}"));
+            let w = Wound { on: OnPart::new(c, k, at, n), leg: None, arm: false, head: false };
+            let rec = ArmRec { wound: Some(w), fresh: true, moving: true, clock: clock[i], floor: clock[i], ..Default::default() };
+            if s.reaching[i] {
+                s.pend[i] = Some(rec);
+            } else {
+                s.act[i] = rec;
+            }
+        }
+        if ok.contains(&true) || moved.contains(&true) {
             (s.toggle_at, s.toggle, s.twist_t, s.twist_left, s.twist) = (0.0, true, 0.0, ok[0], Limiter::default());
         }
     }
@@ -2824,9 +2931,26 @@ impl ReachForWound {
         } else {
             p1
         };
-        // on the ground: only as reachFalling (or, lying, reachOnFloor) allows; then catchFall and bodyRollUp leave
-        // this arm alone (RDR2's one-hand-by-orientation rule needs its predicted body orientation: both hands here)
+        // code 3: another arm's wound (R+0xd9): too far from this shoulder, or behind the top of the spine
+        if w.arm {
+            let top = c.b.part(SPINE()[3] + 1).m;
+            if (wp - c.b.joint_pos(l.e[1])).length() > 0.65 || (wp - top.d).dot(top.c) > 0.0 {
+                crate::extras_core_rdr2::trace_first("reach for wound: another arm's wound out of reach");
+                return;
+            }
+        }
+        // code 4 and the hold: the other hand moving its injured arm goes first
+        let o = s.act[1 - i];
+        let other_moving = s.reaching[1 - i] && o.reached && o.moving;
+        if other_moving && o.dist > 0.4 {
+            crate::extras_core_rdr2::trace_first("reach for wound: waits for the other hand's injured arm");
+            return;
+        }
+        let hold = other_moving && o.dist > s.act[i].dist;
+        // on the ground: only as reachFalling (or, lying, reachOnFloor) allows; then, both hands reaching, by
+        // reachFallingWithOneHand or by how he lies 0.2 s on; then catchFall and bodyRollUp leave this arm alone
         // (riding isn't on the ground: reachForWound's +0x52e, sit running with its state at most 2)
+        // [not ported: all of it is skipped while the shot's fall to knees has its record's +0x74]
         if !c.upright && !c.sit_state.is_some_and(|s| s <= 2) {
             let body: Vec<usize> = std::iter::once(0).chain(7..21).collect();
             let lying = c.b.doll.collided(&body);
@@ -2834,8 +2958,38 @@ impl ReachForWound {
             if !(allow == 1 || allow == 2 && !s.hit_down) {
                 return;
             }
-            if !lying && (r.falling_one == 1 && i == 1 || r.falling_one == 2 && i == 0) {
+            let both = s.reaching[0] && s.reaching[1];
+            if both && (r.falling_one == 1 && i == 1 || r.falling_one == 2 && i == 0) {
                 return;
+            }
+            // 0x2a35fb8, 0x2a33350: the COM frame 0.2 s on by its spin, and which way he lies then
+            let class = rfw_lie_class(c, 0.2);
+            let (mut keep_l, mut keep_r) = (false, false);
+            match class {
+                1 | 2 => (keep_l, keep_r) = (true, true),
+                4 => keep_r = !r.always,
+                5 => keep_l = !r.always,
+                _ => {}
+            }
+            crate::extras_core_rdr2::trace_once("reach for wound: how he lies", || format!("class {class}, always {}", r.always));
+            // the hand under him: code 7 (keep_r for the left record, keep_l for the right, as the code names them)
+            if lying && if i == 0 { keep_r } else { keep_l } {
+                if w.leg == Some(i) {
+                    s.bend.current = SPINE().iter().map(|&j| c.ch.actual(j, c.b.frames)[0]).sum::<f32>() * 0.25;
+                }
+                crate::extras_core_rdr2::trace_first("reach for wound: the hand is under him");
+                return;
+            }
+            if both && r.falling_one == 3 {
+                if !keep_l && !keep_r {
+                    if i == if s.one_left { 0 } else { 1 } {
+                        crate::extras_core_rdr2::trace_first("reach for wound: lying flat, one hand goes");
+                        return;
+                    }
+                } else if (i == 0 && !keep_l) || (i == 1 && !keep_r) {
+                    crate::extras_core_rdr2::trace_first("reach for wound: on a side, one hand goes");
+                    return;
+                }
             }
             c.ch.exclude_arms[i] = true;
         }
@@ -2857,6 +3011,11 @@ impl ReachForWound {
             if since < r.bend_before {
                 return;
             }
+            // codes 12, 13: past twice the upper arm, unless alwaysReach
+            if !r.always && (wp - c.b.joint_pos(l.e[1])).length() > 2.0 * (c.b.joint_pos(l.e[2]) - c.b.joint_pos(l.e[1])).length() {
+                crate::extras_core_rdr2::trace_first("reach for wound: a leg wound past twice the upper arm");
+                return;
+            }
             if c.upright {
                 radius = 0.1;
             }
@@ -2865,8 +3024,12 @@ impl ReachForWound {
         let near = if w.leg.is_some() { 0.3 } else { 0.1 };
         let mut share = if gap > near * len { 1.0 - (gap - near * len).min(0.2 * len) * 5.0 / len } else { 1.0 };
         // the hunch rhythm, once the hand is on the wound: the upper spine curls (-0.4) and lets go, then, alone or
-        // ahead, alternates slowly
-        if gap < 0.12 {
+        // ahead, alternates slowly. Under 0.2 m of the wound (the code's second test, 0.12, is on 0 there); beyond that only
+        // an arm moving itself, while gap over the hand's first axis's share of the way is under 0.3
+        let hand_a = c.b.part(l.p[delirium_data::kv!(0 int)]).m.a;
+        let share_a = hand_a.dot((wp - hand).normalize_or_zero());
+        let oblique = if share_a > 1e-4 { gap / share_a } else { 999.0 };
+        if gap < 0.2 || ((s.act[i].moving || s.act[1 - i].moving) && oblique < 0.3) {
             let t = s.act[i].hunch_t + dt;
             s.act[i].hunch_t = t;
             let mut h = s.act[i].hunch;
@@ -2915,6 +3078,11 @@ impl ReachForWound {
             t = hand + (wp - hand) * (-ra * (1.0 - since / rt));
             strength = rs;
         }
+        // the other hand's injured arm is further from its place: this one holds still (p5)
+        if hold {
+            t = hand;
+            crate::extras_core_rdr2::trace_first("reach for wound: holds still for the other hand");
+        }
         if !c.upright || r.arm_stiffness > 0.0 {
             c.ch.set_stiffness(r.arm_stiffness.abs(), 1.0, ["ul", "ur"][i], None);
         }
@@ -2940,7 +3108,11 @@ impl ReachForWound {
         a.dist = gap;
         a.stuck = if gap > 0.11 * len && a.rate > -0.3 && a.rate < 0.2 { a.stuck + dt } else { 0.0 };
         if a.stuck > 0.18 {
-            a.clock = self.wait + self.hold + 0.1;
+            if a.floor <= 0.0 || a.floor >= floor_window(r) {
+                a.clock = self.wait + self.hold + 0.1;
+            } else {
+                a.floor = floor_window(r) + 0.1;
+            }
         }
     }
 
@@ -5978,6 +6150,11 @@ impl Spin {
     fn tick_rdr2(&mut self, c: &mut Ctx, dt: f32) {
         let r = self.rdr2;
         self.t += dt;
+        // the block's limits are the shot's whether the module runs or not (0x2a55680 stores them, its tick reads them)
+        c.ch.core.cfg.shot_spine = self.spine;
+        if !self.spin_on {
+            return;
+        }
         let (up, b) = (c.up, c.m.b);
         let yaw_rate = c.angvel.dot(b);
         self.turned += yaw_rate * dt;

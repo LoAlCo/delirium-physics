@@ -502,7 +502,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
         crate::nmdbm_rdr2::Rdr2::pull_in(lf, rf, r.p.legs_apart_max + p.foot_width + r.p.extra_feet_apart,
                                          s.vel.mul_add(Vec3::splat(p.lead), s.com), up);
     }
-    f.centre = (f.pos[0] + f.pos[1]) * 0.5;
+    f.centre = p.rdr2.map_or_else(|| (f.pos[0] + f.pos[1]) * 0.5, |r| r.support(f.pos[0], f.pos[1]));
     f.dist = [0.0; 2];
     let pc = sat(s.hvel.mul_add(Vec3::splat(p.lead), s.com), up, sdot(f.centre, up, b"zyx"), b"yxz");
     // RDR2 core: braceForImpact's car box clips the prediction, else teeter's exclusion plane keeps it on its side
@@ -530,7 +530,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
         },
     }
     let (a, c, so) = (s.m.a, s.m.c, p.step_offset);
-    let [sa, sb] = p.rdr2.map_or([so; 2], |r| r.widths(p.foot_width, slen(s.hvel, b"zyx")));
+    let [sa, sb] = p.rdr2.map_or([so; 2], |r| r.widths(p.foot_width, slen(s.hvel, b"zyx"), f.stepping));
     let dir_b = vnorm(shz(pc - rpos, up, b"yxz"));
     let target_a = (c * sdot(c, dir_b, b"zyx") * sdot(a, dir_b, b"zyx")).mul_add(Vec3::splat(-sa), pc) - a * sa;
     let dir_a = vnorm(shz(pc - lpos, up, b"yxz"));
@@ -846,6 +846,8 @@ struct LegIk {
     lift: f32,
     swing: bool,
     free: bool,
+    /// RDR2's req+0x64: the target's greatest distance from the hip (0 off)
+    max_reach: f32,
 }
 
 fn lead(c: &LegIk, hip: &Eff3, pelvis: &Part, vel: Vec3) -> Vec3 {
@@ -881,7 +883,7 @@ pub(crate) fn limb_ik_w(b: &Body, ch: &mut Character, j3: usize, j1: usize, root
     } else {
         None
     };
-    let mut c = LegIk { target, lead, yaw, side, bend, w, reach, lift, swing: swing.is_some(), free, avoid };
+    let mut c = LegIk { target, lead, yaw, side, bend, w, reach, lift, swing: swing.is_some(), free, avoid, max_reach: 0.0 };
     leg_ik(&mut c, &b.limb(j3, j1), &mut knee, &mut hip, &b.part(end), &b.part(root), vel);
     ch.eff[j3].desired = hip.desired;
     ch.eff[j1].desired[0] = knee.desired;
@@ -910,6 +912,13 @@ fn leg_ik(c: &mut LegIk, limb: &M34, knee: &mut Eff1, hip: &mut Eff3, foot: &Par
         x = (vnorm(d) * m).mul_add(Vec3::splat(1.0 - f12), foot.m.d);
         f25 = 1.0 / (delirium_data::kv!(262) - f12);
         c.lead *= 1.0 - f12;
+    }
+    if c.max_reach > 0.0 {
+        let d = x - hip.m.d;
+        if d.length() > c.max_reach {
+            x = hip.m.d + d.normalize_or_zero() * c.max_reach;
+            crate::extras_core_rdr2::trace_once("balancer: lift multiplier's reach", || format!("{} m from the hip", c.max_reach));
+        }
     }
     let kv = world(limb, local(&knee.child, foot.m.d - knee.child.d));
     let (ld, lk) = (slen(limb.d, b"yxz"), slen(kv, b"zyx"));
@@ -1090,7 +1099,12 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             None => pv.yaw[i],
         };
         let mut c = LegIk { avoid: None, target: target[i], lead: 0.0, yaw, side: if i == 0 { 1.0 } else { -1.0 }, bend: -1.0,
-                            w: 1.0, reach: 0.0, lift: 0.0, swing: !planted, free: false };
+                            w: 1.0, reach: 0.0, lift: 0.0, swing: !planted, free: false, max_reach: 0.0 };
+        // RDR2 (the solve, 0x2ab0863): a lift multiplier over 0 caps the reach by the leg's length, under Leff less 0.05 of the probe's length
+        if let Some(r) = p.rdr2.filter(|r| r.lift_mult[i] > 0.0) {
+            let l = p.leg_scale();
+            c.max_reach = (r.lift_mult[i] * l).min(l * p.leg_length - 0.05).max(0.1);
+        }
         if !planted {
             // RDR2 (rdr2_balancer2.md §7.2) lifts each swing foot by its own velocity; GTA IV reads the left foot's for both
             let (fv, gv) = if p.rdr2.is_some() { (leg.foot.v, p.gvel[i]) } else { (lfoot_v, p.gvel[0]) };
@@ -1951,12 +1965,21 @@ impl Dbm {
             let up = self.p.up;
             let (hv, hc) = (s.vel - up * up.vd(s.vel), s.m.c - up * up.vd(s.m.c));
             let raise = if r.on_slope && (hv.vd(hc) > 0.0 || s.vel.length() < r.p.legs_apart_restep.max(0.7)) { 1.0 } else { 0.0 };
-            let raise = if r.crouching.is_some() { 1.4f32.max(raise) } else { raise };
+            // 0x2ab617c: the crouch's depth, from the pelvis over the feet
+            let height = (0..2).map(|i| up.vd(s.pelvis.m.d - s.legs[i].foot.m.d)).fold(f32::MIN, f32::max);
+            let raise = if r.crouching.is_some() && crate::nmdbm_rdr2::Rdr2::crouch_depth(height, self.p.leg_scale(), self.p.leg_length) > 0.0 { 1.4f32.max(raise) } else { raise };
             if raise > 0.0 {
                 for i in 0..2 {
                     ch.lim_raise((*ANKLE())[i], [raise, 0.0, 0.0]);
                 }
-                crate::extras_core_rdr2::trace_first("balancer: the ankles' limits raised");
+                crate::extras_core_rdr2::trace_once("balancer: the ankles' limits raised", || format!("lean1 {raise}, crouching {}", r.crouching.is_some()));
+            }
+            // turn mode (+0x319): lean2 at least 0.8
+            if r.turning {
+                for i in 0..2 {
+                    ch.lim_raise((*ANKLE())[i], [0.0, 0.8, 0.0]);
+                }
+                crate::extras_core_rdr2::trace_first("balancer: turn mode's ankle lean2 raised");
             }
         }
         for i in 0..2 {
