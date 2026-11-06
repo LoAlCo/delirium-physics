@@ -2731,7 +2731,7 @@ impl Agent {
             let legs = legs && self.rdr2_core.is_none();
             let (lf, rf) = match self.ch.as_ref() {
                 Some(ch) => {
-                    let side = |i: usize| [(*HIP())[i], (*KNEE())[i], (*ANKLE())[i]].map(|j| ch.joints[j].child);
+                    let side = |i: usize| [(*crate::nmrs::HIP())[i], (*crate::nmrs::KNEE())[i], (*crate::nmrs::ANKLE())[i]].map(|j| ch.joints[j].child);
                     (side(0), side(1))
                 }
                 None => ([0; 3], [0; 3]),
