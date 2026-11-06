@@ -608,6 +608,7 @@ pub mod param_audit {
         st.pedal_legs = crate::nmpd::rdr2_message();
         st.body_foetal = crate::nmbf::Foetal::rdr2();
         for m in crate::msg::MESSAGES.iter() {
+            crate::msg::audit_start(&mut st, m.name);
             for prm in m.params {
                 if let Some(v) = crate::msg::get(&st, m.name, prm.name) {
                     writeln!(f, "{{\"msg\":\"{}\",\"name\":\"{}\",\"default\":{},\"src\":\"msg\"}}", m.name, prm.name, show(&v)).unwrap();

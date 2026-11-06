@@ -1045,6 +1045,14 @@ fn rdr2_start_defaults(msg: &str) -> Vec<(&'static str, Value)> {
     }
 }
 
+/// The parameter audit: a start's RDR2 defaults on these values.
+#[cfg(feature = "param-audit")]
+pub fn audit_start(st: &mut State, msg: &str) {
+    for (n, v) in rdr2_start_defaults(msg) {
+        let _ = set(st, msg, n, &v);
+    }
+}
+
 fn reset(st: &mut State, msg: &str) {
     match msg {
         "activePose" => st.active_pose = Default::default(),
