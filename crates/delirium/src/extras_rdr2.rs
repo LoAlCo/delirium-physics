@@ -739,6 +739,44 @@ impl Default for DuckRdr2 {
     }
 }
 
+impl DuckRdr2 {
+    /// The new-bullet router's call (0x2ab626c): past duckTime, a bullet asks a duck, the side from where it hit: on the head by
+    /// the part's first axis, on the trunk by its second, on the left limbs right, else left. With duckexag (+0x92) the bend is
+    /// forward unless the hit on the upper trunk or head faces away, and then a hit there turns the side over as well.
+    fn on_bullet(&mut self, c: &Ctx, k: usize, at: Vec3, dir: Vec3) {
+        if self.timer <= self.time {
+            return;
+        }
+        let m = c.b.part(k).m;
+        let d = at - m.d;
+        let (head, trunk) = (matches!(k, 13 | 17), matches!(k, 0 | 7..=10 | 13 | 17));
+        let left_limbs = crate::nmshot::limb(0).p.contains(&k) || crate::nmshot::limb(2).p.contains(&k);
+        let (mut left, mut faces) = (true, false);
+        if head {
+            (left, faces) = (m.a.dot(d) > 0.0, dir.dot(m.c) < 0.0);
+        } else if trunk {
+            (left, faces) = (m.b.dot(d) < 0.0, dir.dot(m.c) < 0.0);
+        } else if left_limbs {
+            left = false;
+        }
+        self.new_hit = true;
+        if self.exag {
+            let upper = matches!(k, 9 | 10 | 13 | 17);
+            self.forward = true;
+            if faces {
+                self.forward = upper;
+            } else {
+                if upper {
+                    self.forward = false;
+                }
+                left = !left;
+            }
+        }
+        self.left = left;
+        crate::extras_core_rdr2::trace(|| format!("duck: a bullet on part {k}: left {left}, forward {}", self.forward));
+    }
+}
+
 /// RDR2's random three-way split of a budget: None when the demands fit (each channel gets its full room), else each
 /// channel's base less its demand plus its random share of the budget.
 fn duck_split(c: &mut Ctx, budget: f32, base: [f32; 3], demand: [f32; 3], weight: [f32; 3]) -> Option<[f32; 3]> {
@@ -852,6 +890,9 @@ impl DuckRdr2 {
         self.marks = None;
         if let Some((k, h)) = self.recover.take().filter(|_| self.owns) {
             c.out.dbm_crouch.extend([Crouch::Knee(9, k, self.leg_rate), Crouch::Hip(0, h, self.hip_rate)]);
+        }
+        if let Some((k, at, dir)) = c.ch.core.bullet_seen {
+            self.on_bullet(c, k, at, dir);
         }
         if self.new_hit {
             self.hit(c);
@@ -5182,6 +5223,7 @@ impl SitRdr2 {
             let h = s.rider_at + s.rows[0] * 0.2 + s.rows[1] * (0.1 * side) - s.rows[2] * 0.5;
             let l = crate::nmshot::limb(i);
             crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[delirium_data::kv!(0 int)], h, 0.0, 0.0, side, 1.0, Vec3::ZERO, None);
+            crate::nmpa::share(c.ch, c.b.frames, l.e[0], l.e[1]);
             let floor = crate::nmfl::noise01(2.0 * self.t, self.seeds[i], 0.0) * 0.32 + 0.28;
             let e = &mut c.ch.eff[l.e[2]];
             e.desired[0] = e.desired[0].max(floor);
@@ -6083,6 +6125,104 @@ impl BulletImpulse {
     }
 }
 
+/// The parts either side of `k` on its limb (the limbs' vtable +0xa8, 0x2a353e0).
+fn part_neighbours(k: usize) -> Vec<usize> {
+    let sp = crate::nmshot::spine_parts();
+    let chains: Vec<Vec<usize>> = (0..4).map(|i| crate::nmshot::limb(i).p.to_vec()).chain(std::iter::once(sp.to_vec())).collect();
+    for ch in chains {
+        if let Some(i) = ch.iter().position(|&p| p == k) {
+            let mut v = vec![];
+            if i > 0 {
+                v.push(ch[i - 1]);
+            }
+            if i + 1 < ch.len() {
+                v.push(ch[i + 1]);
+            }
+            return v;
+        }
+    }
+    vec![]
+}
+
+/// The rigid-body share of a bullet's impulse (0x2a197d8's middle, rbRatio and its family): the share `ratio` of it spreads
+/// over every part as if he were one rigid body, about the COM or with rbPivot about his planted feet (0x2a321ac, the whole
+/// body's inertia moved there), the moment's twist and broom arms each capped first; rbLowerShare moves the straight push
+/// between the lower and the upper half. Returns the ratio used.
+fn rb_spread(c: &mut Ctx, t: &crate::extras_core_rdr2::BulletCfg, k: usize, at: Vec3, imp: Vec3, state: usize, feet: (bool, bool), dt: f32) -> f32 {
+    let [ratio, moment, twist_arm, broom_arm] = t.rb[state];
+    if ratio <= 1e-8 {
+        return 0.0;
+    }
+    let ratio = ratio.min(1.0);
+    let n = c.b.frames.len();
+    let mass: Vec<f32> = (0..n).map(|q| c.b.doll.part_mass(q)).collect();
+    let (lo, up): (f32, f32) = (mass.iter().take(8).sum(), mass.iter().skip(8).sum());
+    let total = (lo + up).max(1e-3);
+    let centres: Vec<Vec3> = (0..n).map(|q| c.b.doll.centre(q)).collect();
+    let com = centres.iter().zip(&mass).fold(Vec3::ZERO, |a, (p, m)| a + *p * *m) / total;
+    let parallel = |d: Vec3, m: f32| {
+        let d = d.as_dvec3();
+        let e = bevy_math::DMat3::from_diagonal(bevy_math::DVec3::splat(d.length_squared()));
+        let o = bevy_math::DMat3::from_cols(d * d.x, d * d.y, d * d.z);
+        (e - o) * m as f64
+    };
+    let mut inertia = bevy_math::DMat3::ZERO;
+    for q in 0..n {
+        inertia += c.b.doll.tensor(q) + parallel(centres[q] - com, mass[q]);
+    }
+    let mut pivot = com;
+    if t.rb_pivot {
+        let (l, r) = (crate::nmshot::limb(2).p[3], crate::nmshot::limb(3).p[3]);
+        let at_feet = match feet {
+            (true, true) => Some((centres[l] + centres[r]) * 0.5),
+            (true, false) => Some(centres[l]),
+            (false, true) => Some(centres[r]),
+            _ => None,
+        };
+        if let Some(p) = at_feet {
+            pivot = p;
+            inertia += parallel(p - com, total);
+        }
+    }
+    let mag = imp.length();
+    let mut tau = (at - pivot).cross(imp);
+    if mag > 1e-10 {
+        let axis = if t.rb_twist_axis == 1 { c.m.b } else { c.up };
+        let along = axis.dot(tau);
+        let perp = tau - axis * along;
+        let tw = (along / mag).clamp(-twist_arm, twist_arm);
+        let br = (perp.length() / mag).clamp(-broom_arm, broom_arm);
+        tau = (perp.normalize_or_zero() * br + axis * tw) * mag;
+    }
+    let inv = inertia.inverse();
+    let omega = (inv * (tau * ratio).as_dvec3()).as_vec3();
+    // rbLowerShare other than a half moves the straight push between the halves; the hit part keeps the plain share
+    let s = t.rb_lower.clamp(0.0, 1.0);
+    let shared = lo.abs() >= 1e-4 && up.abs() >= 1e-4 && (s - 0.5).abs() >= 1e-6;
+    let (mut low_f, mut low_v, mut up_v) = (1.0, Vec3::ZERO, Vec3::ZERO);
+    if shared {
+        let rest = 1.0 - mass[k] / total;
+        let (l2, u2) = if k < 8 { (lo - mass[k], up) } else { (lo, up - mass[k]) };
+        let g = if t.rb_lower < 0.5 { l2 - (1.0 - 2.0 * s) * l2 } else { l2 + (2.0 * s - 1.0) * u2 };
+        low_f = g / (l2 + u2).max(1e-3);
+        low_v = imp * (low_f * ratio * rest / l2.max(1e-3));
+        up_v = imp * ((1.0 - low_f) * ratio * rest / u2.max(1e-3));
+    }
+    crate::extras_core_rdr2::trace_once("bullet rb", || format!("ratio {ratio}, omega {omega:?}, pivot {:?}", pivot - com));
+    for q in 0..n {
+        let turn = omega.cross(centres[q] - pivot) * moment;
+        let dv = if shared && q != k {
+            if q < 8 { turn * low_f + low_v } else { turn * (1.0 - low_f) + up_v }
+        } else {
+            turn + imp * (ratio / total)
+        };
+        c.out.impulse.push((q, centres[q], dv * mass[q]));
+        let ang = (c.b.doll.tensor(q) * omega.as_dvec3()).as_vec3() * moment;
+        c.out.torque(q, ang / dt.max(1e-4));
+    }
+    ratio
+}
+
 impl Extra for BulletImpulse {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
         let f = c.b.frames;
@@ -6122,6 +6262,7 @@ impl Extra for BulletImpulse {
             let one_leg = t.one_leg.map_or(1.0, |x| crate::extras_core_rdr2::curve(x, mag));
             self.recs.push(BulletRec { k, local, imp: imp_kept, left: t.period, wait: t.delay, t, air, one_leg, period: t.period, torque });
             c.ch.core.bullet = Some(imp);
+            c.ch.core.bullet_new = Some((k, at.unwrap_or(f[k].translation), imp));
         }
         let feet = (c.b.doll.collided(&[3]), c.b.doll.collided(&[6]));
         let on_feet = if feet.0 && feet.1 { 1.0 } else { 0.0 };
@@ -6160,7 +6301,49 @@ impl Extra for BulletImpulse {
             // his feet this tick (0x2a197d8): both off the air factor, one off the one-leg factor; no balancer its own
             let factor = if on_feet > 0.0 { 1.0 } else if !feet.0 && !feet.1 { r.air } else { r.one_leg };
             let factor = if upright || r.t.no_bal == 1.0 { factor } else { factor * r.t.no_bal };
-            c.out.impulse.push((r.k, at, r.imp * factor * (h / r.period)));
+            // the quality, the trunk's lean and his speed each take a share (0x2a472f0)
+            let ramp = |x: f32, a: [f32; 3]| if a[1] <= x { a[2] } else if a[0] < x && a[1] - a[0] > 1.2e-7 { (a[1] - x) * (1.0 - a[2]) / (a[1] - a[0]) + a[2] } else { 1.0 };
+            let stab = if upright { ramp(c.dbm.map_or(0.0, |d| d.quality), r.t.bal_stab) } else { 1.0 };
+            let lean = ramp(-c.up.dot(spine), [-r.t.spine_ang[0], -r.t.spine_ang[1], r.t.spine_ang[2]]);
+            let fast = ramp(c.vel.length(), r.t.vel);
+            let kept = stab * lean * fast;
+            if kept != 1.0 {
+                crate::extras_core_rdr2::trace_once("bullet factors", || format!("quality {stab:.2}, lean {lean:.2}, speed {fast:.2}"));
+            }
+            let mut now = r.imp * factor * (h / r.period) * kept;
+            // the rigid-body spread takes its share first, then the rest goes to the part
+            let state = if on_feet > 0.0 { 0 } else if !feet.0 && !feet.1 { 1 } else { 2 };
+            now *= 1.0 - rb_spread(c, &r.t, r.k, at, now, state, feet, dt);
+            // impulseSpreadOverParts: a quarter to each neighbour on the part's limb, at its centre (0x2a353e0)
+            if r.t.spread {
+                let mut given = 0.0;
+                for q in part_neighbours(r.k) {
+                    crate::extras_core_rdr2::trace_once("bullet spread", || format!("part {} to {q}", r.k));
+                    c.out.impulse.push((q, c.b.doll.centre(q), now * 0.25));
+                    if matches!(q, 0 | 7..=10) {
+                        let (cq, row) = (c.b.doll.centre(q), f[q].rotation * Vec3::X);
+                        let mut ang = (at - cq).cross(now * 0.25);
+                        if r.t.loose_fix {
+                            ang = row * row.dot(ang);
+                        }
+                        c.out.torque(q, ang * (r.t.torque_scale / dt.max(1e-4)));
+                    }
+                    given += 0.25;
+                }
+                now *= 1.0 - given;
+            }
+            if r.t.loose_fix {
+                // loosenessFix: at the part's centre, and on the trunk only the twist about its first axis (+0xdf)
+                let cq = c.b.doll.centre(r.k);
+                crate::extras_core_rdr2::trace_once("bullet loosenessFix", || format!("part {}", r.k));
+                c.out.impulse.push((r.k, cq, now));
+                if matches!(r.k, 0 | 7..=10) {
+                    let row = f[r.k].rotation * Vec3::X;
+                    c.out.torque(r.k, row * (row.dot((at - cq).cross(now)) * r.t.torque_scale / dt.max(1e-4)));
+                }
+            } else {
+                c.out.impulse.push((r.k, at, now));
+            }
             r.left -= h;
             if r.t.lift > 0.0 {
                 c.out.force(9, spine * (0.5 * r.t.lift));

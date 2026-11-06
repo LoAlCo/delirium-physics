@@ -212,6 +212,8 @@ pub struct Out {
     pub dbm_turn_margin: Option<bool>,
     /// RDR2 core: pedalLegs' one-tick reverse flags (left, right) for its next tick, as RDR2's yanked writes them
     pub pedal_reverse: Option<[bool; 2]>,
+    /// RDR2 core: staggerFall's live armsWindmillAdaptive fields, angSpeed and each arm's activity (+0x50, +0xc1, +0xc3)
+    pub aw_live: Option<(f32, [bool; 2])>,
     /// RDR2 core, fall to knees: the balancer's balanceAbortThreshold (bal+0x294), failMustCollide (+0x6d8), kneeling
     /// (+0x33a), from now on; and its fail now (0x2ab4b7c)
     pub dbm_abort: Option<f32>,
@@ -445,6 +447,10 @@ pub struct DbmView {
     pub lean_on: bool,
     /// his standing leg straightness and the leg scale (ctx+0x34d0, bal+0x210)
     pub straight: (f32, f32),
+    /// the fail test's ratios: horizontal distance over height at the contacts (bal+0x6c) and at the ankles (bal+0x70)
+    pub fail_ratio: (f32, f32),
+    /// the timed fail's ramp while it runs (bal+0x62c..+0x640): knees and ankles, each hip
+    pub fail_caps: Option<(f32, [f32; 2])>,
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {
@@ -852,6 +858,9 @@ impl Shot {
     /// off the shoulder, stiff until its relax time or the hand has stopped.
     fn fling2_rdr2(&mut self, c: &mut Ctx, dt: f32) {
         let r = self.p.rdr2;
+        c.ch.core.shot_brace = r.brace;
+        c.ch.core.fling_stagger = [self.fling2.is_some() && r.fling2_override_stagger && r.fling2_side[0],
+                                   self.fling2.is_some() && r.fling2_override_stagger && r.fling2_side[1]];
         if self.new_hit && r.fling2 && (r.fling2_side[0] || r.fling2_side[1]) {
             let g = |i: usize| {
                 let l = limb(i);

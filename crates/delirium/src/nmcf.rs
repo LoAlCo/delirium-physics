@@ -358,6 +358,18 @@ impl Arm {
     }
 }
 
+/// RDR2's IK clavicle mode 3 (request +0xa4, 0x2a3fdd0): the clavicle's leans are 0 and what the shoulder asks past its lean1
+/// limit goes to the clavicle's twist, negated (no overflow leaves the twist to lower requests).
+pub(crate) fn clav_overflow(ch: &mut Character, clav: usize, shoulder: usize) {
+    let sl = ch.limits(shoulder);
+    let l1 = ch.eff[shoulder].desired[0];
+    let over = if l1 - sl[1] > 0.0 { l1 - sl[1] } else if l1 - sl[0] < 0.0 { l1 - sl[0] } else { 0.0 };
+    if over != 0.0 {
+        ch.eff[clav].desired[2] = -over;
+    }
+    (ch.eff[clav].desired[0], ch.eff[clav].desired[1]) = (0.0, 0.0);
+}
+
 pub(crate) fn clav_follow(ch: &mut Character, clav: usize, shoulder: usize) {
     let (cl, sl) = (ch.limits(clav), ch.limits(shoulder));
     let [l1, l2, _] = ch.eff[shoulder].desired;
@@ -750,7 +762,11 @@ impl Rdr2Cf {
         let touching = c.b.doll.collided(&l.p);
         let clav = l.e[0];
         if f < 0.0 || !touching {
-            c.ch.eff[clav].desired = if twist.abs() >= 2.0 { [a.clav_lean1, a.clav_lean2, 0.3] } else { [0.0, 0.0, c.ch.eff[clav].desired[2]] };
+            if twist.abs() >= 2.0 {
+                c.ch.eff[clav].desired = [a.clav_lean1, a.clav_lean2, 0.3];
+            } else {
+                clav_overflow(c.ch, clav, l.e[1]);
+            }
         } else {
             c.ch.eff[clav].desired = [0.0, 0.0, c.ch.actual(clav, c.b.frames)[2]];
         }

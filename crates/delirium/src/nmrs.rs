@@ -598,6 +598,10 @@ pub struct CoreState {
     pub zmp: bool,
     /// the hands connected for the gravity opposition (ctx+0x2b4c / +0x2b4d): kept until set again
     pub hands: [bool; 2],
+    /// the shot's fling2 owns this arm over the stagger's (shot+0x783, +0x78f/+0x790, +0x2a3)
+    pub fling_stagger: [bool; 2],
+    /// the shot's brace switch (+0x288)
+    pub shot_brace: bool,
     /// hands the next gravity pass takes from contact (ctx+0x2b50 / +0x2b51), cleared by it
     pub hands_auto: [bool; 2],
     /// feet animPose set this step (their auto bytes cleared); None: from contact, as every step
@@ -606,6 +610,9 @@ pub struct CoreState {
     pub stay: [crate::nmdbm_rdr2::StayUpright; 2],
     /// the last bullet record's impulse (ctx+0x1150 + idx 0x160, +0x140), for turnTowardsBullets
     pub bullet: Option<bevy_math::Vec3>,
+    /// a new bullet record this step (part, world point, impulse) and last step's, seen by every extra once
+    pub bullet_new: Option<(usize, bevy_math::Vec3, bevy_math::Vec3)>,
+    pub bullet_seen: Option<(usize, bevy_math::Vec3, bevy_math::Vec3)>,
     /// the fall-to-knees record (ctx+0x2e20)
     pub ftk: crate::nmftk_rdr2::Ftk,
     /// what RDR2's core messages hold (extras_core_rdr2.rs)
@@ -638,7 +645,7 @@ impl CoreState {
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, hands: [false; 2], hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
+        CoreState { scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 

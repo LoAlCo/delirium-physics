@@ -53,8 +53,7 @@ const fn f(name: &'static str) -> Param {
 const fn i(name: &'static str) -> Param {
     Param { name, kind: Kind::Int, used: true, doc: "" }
 }
-/// What's used by the record's tick; the rb family (a rigid-body spread of the impulse over the body) and the stability
-/// and velocity factors are taken and left, see `rdr2_params.md`.
+/// What the record's tick doesn't read: the counter impulse (doCounterImpulse: no set sends it true, `rdr2_core4.md`).
 const fn left(name: &'static str, kind: Kind) -> Param {
     Param { name, kind, used: false, doc: "RDR2's; taken and not used here yet" }
 }
@@ -66,16 +65,16 @@ static BULLET_PARAMS: &[Param] = &[
     b("impulseOneLegOn"), f("impulseOneLegMult"), f("impulseOneLegMultStart"), f("impulseOneLegMax"), f("impulseOneLegApplyAbove"),
     f("impulseNoBalMult"), f("liftGain"),
     i("torqueMode"), i("torqueSpinMode"), i("torqueFilterMode"), b("torqueAlwaysSpine3"), f("torqueDelay"), f("torquePeriod"), f("torqueGain"), f("torqueCutoff"), f("torqueReductionPerTick"),
-    left("impulseTorqueScale", Kind::Float), left("impulseSpreadOverParts", Kind::Bool), left("loosenessFix", Kind::Bool),
-    left("impulseBalStabStart", Kind::Float), left("impulseBalStabEnd", Kind::Float), left("impulseBalStabMult", Kind::Float),
-    left("impulseSpineAngStart", Kind::Float), left("impulseSpineAngEnd", Kind::Float), left("impulseSpineAngMult", Kind::Float),
-    left("impulseVelStart", Kind::Float), left("impulseVelEnd", Kind::Float), left("impulseVelMult", Kind::Float),
+    f("impulseTorqueScale"), b("impulseSpreadOverParts"), b("loosenessFix"),
+    f("impulseBalStabStart"), f("impulseBalStabEnd"), f("impulseBalStabMult"),
+    f("impulseSpineAngStart"), f("impulseSpineAngEnd"), f("impulseSpineAngMult"),
+    f("impulseVelStart"), f("impulseVelEnd"), f("impulseVelMult"),
     left("counterImpulseDelay", Kind::Float), left("counterImpulseMag", Kind::Float), left("counterAfterMagReached", Kind::Bool),
     left("doCounterImpulse", Kind::Bool), left("counterImpulse2Hips", Kind::Float),
-    left("rbRatio", Kind::Float), left("rbLowerShare", Kind::Float), left("rbMoment", Kind::Float), left("rbMaxTwistMomentArm", Kind::Float), left("rbMaxBroomMomentArm", Kind::Float),
-    left("rbRatioAirborne", Kind::Float), left("rbMomentAirborne", Kind::Float), left("rbMaxTwistMomentArmAirborne", Kind::Float), left("rbMaxBroomMomentArmAirborne", Kind::Float),
-    left("rbRatioOneLeg", Kind::Float), left("rbMomentOneLeg", Kind::Float), left("rbMaxTwistMomentArmOneLeg", Kind::Float), left("rbMaxBroomMomentArmOneLeg", Kind::Float),
-    left("rbPivot", Kind::Bool), left("rbTwistAxis", Kind::Int),
+    f("rbRatio"), f("rbLowerShare"), f("rbMoment"), f("rbMaxTwistMomentArm"), f("rbMaxBroomMomentArm"),
+    f("rbRatioAirborne"), f("rbMomentAirborne"), f("rbMaxTwistMomentArmAirborne"), f("rbMaxBroomMomentArmAirborne"),
+    f("rbRatioOneLeg"), f("rbMomentOneLeg"), f("rbMaxTwistMomentArmOneLeg"), f("rbMaxBroomMomentArmOneLeg"),
+    b("rbPivot"), i("rbTwistAxis"),
 ];
 
 /// One soft limit record (ctx+0x4810, 0x30 B each).
@@ -109,12 +108,27 @@ pub struct BulletCfg {
     pub torque_gain: f32,
     pub torque_cutoff: f32,
     pub torque_decay: f32,
+    /// the impulse's factors, each (start, end, mult) off the balance quality, the trunk's lean and his speed (+0x54..+0x74)
+    pub bal_stab: [f32; 3],
+    pub spine_ang: [f32; 3],
+    pub vel: [f32; 3],
+    /// the angular part's scale (+0x38), a share to the hit part's neighbours (+0xdd), loosenessFix (+0xdf)
+    pub torque_scale: f32,
+    pub spread: bool,
+    pub loose_fix: bool,
+    /// the rigid-body spread: on both feet, in the air, on one leg, each (ratio, moment, twist arm, broom arm) (+0x98..+0xc8)
+    pub rb: [[f32; 4]; 3],
+    pub rb_lower: f32,
+    pub rb_pivot: bool,
+    pub rb_twist_axis: i32,
 }
 
 impl Default for BulletCfg {
     fn default() -> BulletCfg {
         BulletCfg { period: 0.1, delay: 0.0, air: None, one_leg: None, no_bal: 1.0, lift: 0.0, torque_mode: 0, spin_mode: 0, filter_mode: 0, always_spine3: false,
-                    torque_delay: 0.0, torque_period: 0.12, torque_gain: 4.0, torque_cutoff: 0.5, torque_decay: 0.9 }
+                    torque_delay: 0.0, torque_period: 0.12, torque_gain: 4.0, torque_cutoff: 0.5, torque_decay: 0.9,
+                    bal_stab: [3.0, 10.0, 1.0], spine_ang: [0.7, 0.2, 1.0], vel: [1.0, 4.0, 1.0], torque_scale: 1.0, spread: false, loose_fix: false,
+                    rb: [[0.0, 1.0, 0.5, 1.0]; 3], rb_lower: 0.5, rb_pivot: false, rb_twist_axis: 0 }
     }
 }
 
@@ -253,6 +267,7 @@ fn joint_mask(mask: &str) -> [bool; 32] {
 
 /// Each tick with the core on: what the core messages hold (0x2a5d400, 0x2a5c4a0, the muscle record).
 pub fn core_tick(c: &mut Ctx) {
+    c.ch.core.bullet_seen = c.ch.core.bullet_new.take();
     let cfg = c.ch.core.cfg;
     if cfg.fric_used {
         for (k, x) in c.out.part_friction.iter_mut() {
@@ -428,9 +443,17 @@ fn bullets(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     let leg_v = [o("impulseOneLegMult")?, o("impulseOneLegMultStart")?, o("impulseOneLegMax")?, o("impulseOneLegApplyAbove")?];
     let (nobal, lift) = (o("impulseNoBalMult")?, o("liftGain")?);
     let tq = [o("torqueDelay")?, o("torquePeriod")?, o("torqueGain")?, o("torqueCutoff")?, o("torqueReductionPerTick")?];
+    let fac = [o("impulseBalStabStart")?, o("impulseBalStabEnd")?, o("impulseBalStabMult")?, o("impulseSpineAngStart")?, o("impulseSpineAngEnd")?, o("impulseSpineAngMult")?,
+               o("impulseVelStart")?, o("impulseVelEnd")?, o("impulseVelMult")?, o("impulseTorqueScale")?];
+    let rbs = [[o("rbRatio")?, o("rbMoment")?, o("rbMaxTwistMomentArm")?, o("rbMaxBroomMomentArm")?],
+               [o("rbRatioAirborne")?, o("rbMomentAirborne")?, o("rbMaxTwistMomentArmAirborne")?, o("rbMaxBroomMomentArmAirborne")?],
+               [o("rbRatioOneLeg")?, o("rbMomentOneLeg")?, o("rbMaxTwistMomentArmOneLeg")?, o("rbMaxBroomMomentArmOneLeg")?]];
+    let rb_lower = o("rbLowerShare")?;
     let mut q = |n: &str| p.b(n, false);
     let (air_on, leg_on, scaled, spine3) = (q("impulseAirOn")?, q("impulseOneLegOn")?, q("impulseLeakageStrengthScaled")?, q("torqueAlwaysSpine3")?);
+    let (spread, loose_fix, rb_pivot) = (q("impulseSpreadOverParts")?, q("loosenessFix")?, q("rbPivot")?);
     let (mode, spin, filter) = (p.i("torqueMode", -1)?, p.i("torqueSpinMode", -1)?, p.i("torqueFilterMode", -1)?);
+    let rb_axis = p.i("rbTwistAxis", -1)?;
     for x in BULLET_PARAMS.iter().filter(|x| !x.used) {
         match x.kind {
             Kind::Float => drop(p.f(x.name, 0.0)?),
@@ -462,6 +485,27 @@ fn bullets(p: &mut P) -> Result<Box<dyn Extra>, Error> {
         t.air = air_on.then(|| curve(air_v, t.air));
         t.one_leg = leg_on.then(|| curve(leg_v, t.one_leg));
         t.always_spine3 = spine3;
+        for (n, x) in [t.bal_stab[0], t.bal_stab[1], t.bal_stab[2], t.spine_ang[0], t.spine_ang[1], t.spine_ang[2], t.vel[0], t.vel[1], t.vel[2], t.torque_scale].into_iter().enumerate() {
+            let v = fac[n].unwrap_or(x);
+            match n {
+                0..=2 => t.bal_stab[n] = v,
+                3..=5 => t.spine_ang[n - 3] = v,
+                6..=8 => t.vel[n - 6] = v,
+                _ => t.torque_scale = v,
+            }
+        }
+        for s in 0..3 {
+            for n in 0..4 {
+                if let Some(v) = rbs[s][n] {
+                    t.rb[s][n] = v;
+                }
+            }
+        }
+        set(&mut t.rb_lower, rb_lower);
+        (t.spread, t.loose_fix, t.rb_pivot) = (spread, loose_fix, rb_pivot);
+        if rb_axis >= 0 {
+            t.rb_twist_axis = rb_axis;
+        }
         if mode >= 0 {
             t.torque_mode = mode;
         }

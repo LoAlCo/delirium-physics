@@ -1364,6 +1364,7 @@ impl YankedRdr2 {
             let to = c.b.joint_pos(limb(i).e[1]) + (ax * th.cos() + bx * (s * th.sin())) * r;
             arm_ik(c, i, to, a[5], Vec3::ZERO);
             let l = limb(i);
+            crate::nmcf::clav_overflow(c.ch, l.e[0], l.e[1]);
             set_k(c, &[l.e[0], l.e[1], l.e[2]], k, 0.5, None);
             self.ran(33, "the reach: the arm's IK");
         }
@@ -1763,6 +1764,8 @@ impl Swim {
                 let k = if e.length() > 0.0 { (s.speed * s.timer / e.length()).clamp(0.0, 1.0) } else { 1.0 };
                 let to = q + e * k;
                 arm_ik_drag(c, i, to, self.twist, 1.0, c.vel);
+                crate::nmpa::share(c.ch, c.b.frames, limb(i).e[0], limb(i).e[1]);
+                crate::extras_core_rdr2::trace_once("swim clavicle mode 2", || format!("arm {i}"));
                 let ed = e.normalize_or_zero();
                 let off = to - hand;
                 let along = off.dot(ed).max(0.0);
@@ -1773,6 +1776,7 @@ impl Swim {
             }
             2 => {
                 arm_ik_drag(c, i, q, self.twist, 1.0, c.vel);
+                crate::nmpa::share(c.ch, c.b.frames, limb(i).e[0], limb(i).e[1]);
                 // the request's hand normal: against the stroke's direction
                 crate::nmshot::Shot::wrist(c, limb(i), q, -s.dir, 1.0 - 2.0 * i as f32);
                 if (q - hand).length() < 0.1 {
