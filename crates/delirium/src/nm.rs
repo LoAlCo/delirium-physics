@@ -341,6 +341,8 @@ pub struct Agent {
     pub rdr2_core: Option<crate::nmdbm_rdr2::Params>,
     /// RDR2 core: what configureBalance has set of the balancer's parameters, over the room's each tick
     pub core_cb: Vec<(&'static str, f32)>,
+    /// the room's balancer parameters before any message, for configureBalance's start=true
+    core_base: Option<crate::nmdbm_rdr2::Params>,
     /// RDR2 core's limb requests this frame (limbreq.rs), while it's on
     limb_reqs: Option<crate::limbreq::Requests>,
     pub(crate) lean: Option<(crate::nmdbm::LeanMode, f32, f32, bool)>,
@@ -460,7 +462,7 @@ impl Agent {
             .map(|(i, p)| p.parent.map_or(frames[i].rotation, |j| frames[j].rotation.inverse() * frames[i].rotation)).collect();
         let roles = Roles::new(build);
         let pelvis_up = facing.inverse() * frames[roles.pelvis].rotation;
-        let mut a = Agent { core_cb: vec![], locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
+        let mut a = Agent { core_cb: vec![], core_base: None, locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
                 stiffness: (delirium_data::kv!(31), 1.0), relax: None, config: ConfigureBalance::default(), feedback: vec![], balance: None, lean: None,
                 shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, fow_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
                 brace: None, head_look: vec![], shot_look: false, eff_override: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(200), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0 * build.parts[0].grown, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
@@ -633,8 +635,13 @@ impl Agent {
     /// RDR2 core: configureBalance's reset, RDR2's defaults again.
     pub fn configure_balance_rdr2_reset(&mut self) {
         self.core_cb.clear();
+        // the balancer a later message starts takes these too
+        if self.core_base.is_some() {
+            self.rdr2_core = self.core_base;
+        }
+        let base = self.core_base.unwrap_or_default();
         if let Some(r) = self.balance.as_mut().and_then(|b| b.dbm.as_mut()).and_then(|d| d.p.rdr2.as_mut()) {
-            r.p = Default::default();
+            r.p = base;
         }
     }
 
@@ -1613,6 +1620,7 @@ impl Agent {
             self.doll.rigid = crate::nmdbm::own_rage(&self.doll);
         }
         let nm_tick = awake;
+        self.core_base = self.rdr2_core;
         if let Some(p) = self.rdr2_core.as_mut() {
             for (n, v) in &self.core_cb {
                 p.set_message(n, *v);
