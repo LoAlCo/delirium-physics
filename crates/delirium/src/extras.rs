@@ -156,6 +156,7 @@ pub trait Extra: Send + Sync {
 
 #[derive(Default)]
 pub struct Extras {
+    stop_soft: bool,
     pub on: Vec<(&'static str, Box<dyn Extra>)>,
     pub outbox: Vec<String>,
     pub hard: Option<HardConstraint>,
@@ -261,6 +262,9 @@ impl Extras {
                 c.ch.eff[j].injury = amount;
             }
         }
+        if std::mem::take(&mut self.stop_soft) {
+            c.ch.core.cfg.soft.iter_mut().for_each(|r| r.on = false);
+        }
         c.extras_on = self.on.iter().map(|(n, _)| *n).collect();
         self.sit_state = self.on.iter().find_map(|(_, e)| e.sit_state());
         for mut e in self.stopping.drain(..) {
@@ -335,10 +339,12 @@ impl Extras {
     pub fn stop_all(&mut self) {
         let held: Vec<usize> = self.wanted.iter().copied().chain(self.hard.iter().flat_map(HardConstraint::parts)).collect();
         // RDR2's bullet records live in NM's core, not in a behaviour: stopping the behaviours leaves them running
-        let bullets: Vec<_> = std::mem::take(&mut self.on).into_iter().filter(|(n, _)| *n == "applyBulletImpulse").collect();
+        let bullets: Vec<_> = std::mem::take(&mut self.on).into_iter().filter(|(n, _)| matches!(*n, "applyBulletImpulse" | "configureBullets" | "setCharacterStrength" | "configureSoftLimit" | "setFrictionScale" | "setMuscleStiffness")).collect();
         *self = Default::default();
         self.release = held;
         self.on = bullets;
+        // RDR2's stopAllBehaviours (0x2a5bd60) also turns the soft limit records off
+        self.stop_soft = true;
     }
 
     pub fn hard_step(&mut self, doll: &mut crate::ragdoll::Ragdoll, incoming: &[Transform], dt: f32) {
