@@ -5863,11 +5863,32 @@ impl Spin {
 /// NM's own shot modifier, which drops 0.15 after each main record (floor 0.2). Its recovery between bullets, 0.38/s,
 /// is read off the recording, not the code. A new bullet while this runs adds its records to the ones still going.
 pub struct BulletImpulse {
-    /// part, hit point in the part's frame (None: its centre), the record's whole impulse, s left
-    recs: Vec<(usize, Option<Vec3>, Vec3, f32)>,
-    /// new records not yet placed in their part's frame (world hit points)
-    new: Vec<(usize, Option<Vec3>, Vec3, f32)>,
+    recs: Vec<BulletRec>,
+    /// new records not yet placed in their part's frame: part, world hit point, impulse before the modifier, equalize,
+    /// the trunk's extra share
+    new: Vec<(usize, Option<Vec3>, Vec3, f32, bool)>,
     modifier: f32,
+}
+
+/// One running record (ctx+0x1150): part, hit point in the part's frame (None: its centre), the whole impulse, s left,
+/// s before it starts; the template; the factors off his feet; the torque's own clock (0x2a1e0b0).
+struct BulletRec {
+    k: usize,
+    local: Option<Vec3>,
+    imp: Vec3,
+    left: f32,
+    wait: f32,
+    t: crate::extras_core_rdr2::BulletCfg,
+    air: f32,
+    one_leg: f32,
+    period: f32,
+    torque: Option<BulletTorque>,
+}
+
+struct BulletTorque {
+    tau: f32,
+    now: Vec3,
+    clock: f32,
 }
 
 /// RDR2's record period (+0x34), s.
@@ -5984,11 +6005,10 @@ impl BulletImpulse {
         let s = p.f("extraShare", 0.0)?;
         let (extra, main) = if s < 0.0 { (-s, 1.0) } else if s <= 1.0 { (s, 1.0 - s) } else { (0.0, 1.0) };
         if extra.abs() >= 1e-4 {
-            self.new.push((BULLET_TRUNK, None, imp * extra * self.modifier, equalize));
+            self.new.push((BULLET_TRUNK, None, imp * extra, equalize, true));
         }
         if main.abs() >= 1e-4 {
-            self.new.push((part, at, imp * main * self.modifier, equalize));
-            self.modifier = (self.modifier - 0.15).clamp(0.2, 1.0);
+            self.new.push((part, at, imp * main, equalize, false));
         }
         Ok(())
     }
@@ -5997,9 +6017,17 @@ impl BulletImpulse {
 impl Extra for BulletImpulse {
     fn tick(&mut self, c: &mut Ctx, dt: f32) {
         let f = c.b.frames;
-        for (k, at, imp, equalize) in std::mem::take(&mut self.new) {
+        for (k, at, imp, equalize, extra) in std::mem::take(&mut self.new) {
             if k >= f.len() {
                 continue;
+            }
+            let cfg = &mut c.ch.core.cfg;
+            let t = cfg.bullets[extra as usize];
+            let imp = imp * self.modifier;
+            // a main record lowers the modifier for the next bullet, by the strength when the message says so
+            if !extra {
+                let by = if cfg.leak_scaled { cfg.strength } else { 1.0 };
+                self.modifier = (self.modifier - by * cfg.reduction).clamp(cfg.min_leak, 1.0);
             }
             let imp = if equalize != 0.0 {
                 let mean = (0..f.len()).map(|q| c.b.doll.part_mass(q)).sum::<f32>() / f.len() as f32;
@@ -6008,20 +6036,79 @@ impl Extra for BulletImpulse {
                 imp
             };
             let local = at.map(|p| f[k].rotation.inverse() * (p - f[k].translation));
-            self.recs.push((k, local, imp, BULLET_PERIOD));
+            // the torque set-up takes its share first (0x2a2ccc8), on the parts of mask 0x103f09
+            let (mut imp_kept, mut torque) = (imp, None);
+            if t.torque_mode != 0 && matches!(k, 0 | 7..=13 | 17) {
+                let axis = (f[10].translation - f[7].translation).normalize_or_zero();
+                let r = at.map_or(Vec3::ZERO, |p| p - f[k].translation);
+                let bit = c.ch.random_bits() & 1 != 0;
+                if let Some((tau, kept)) = crate::extras_core_rdr2::bullet_torque(&mut c.ch.core.cfg, &t, r, imp, axis, bit) {
+                    imp_kept = imp * kept;
+                    torque = Some(BulletTorque { tau, now: axis * tau, clock: 0.0 });
+                }
+            }
+            let mag = imp_kept.length();
+            let air = t.air.map_or(1.0, |x| crate::extras_core_rdr2::curve(x, mag));
+            let one_leg = t.one_leg.map_or(1.0, |x| crate::extras_core_rdr2::curve(x, mag));
+            self.recs.push(BulletRec { k, local, imp: imp_kept, left: t.period, wait: t.delay, t, air, one_leg, period: t.period, torque });
             c.ch.core.bullet = Some(imp);
         }
-        for (k, local, imp, left) in &mut self.recs {
-            let h = dt.min(*left);
+        let feet = (c.b.doll.collided(&[3]), c.b.doll.collided(&[6]));
+        let on_feet = if feet.0 && feet.1 { 1.0 } else { 0.0 };
+        let spine = (f[10].translation - f[7].translation).normalize_or_zero();
+        let upright = c.upright;
+        let mut torques_done = 0;
+        for r in &mut self.recs {
+            if let Some(q) = &mut r.torque {
+                if q.clock >= r.t.torque_delay && q.clock <= r.t.torque_delay + r.t.torque_period {
+                    let next = spine * (q.tau * 0.25);
+                    c.out.torque(r.k, q.now);
+                    if r.t.always_spine3 {
+                        c.out.torque(9, next * 0.5);
+                    }
+                    for s in [10, 8, 7] {
+                        c.out.torque(s, q.now);
+                    }
+                    q.tau *= r.t.torque_decay;
+                    q.now = next;
+                }
+                q.clock += dt;
+                if q.clock > r.t.torque_delay + r.t.torque_period {
+                    torques_done += 1;
+                    r.torque = None;
+                }
+            }
+            if r.wait > 0.0 {
+                r.wait -= dt;
+                continue;
+            }
+            let h = dt.min(r.left);
             if h <= 0.0 {
                 continue;
             }
-            let at = f[*k].translation + local.map_or(Vec3::ZERO, |l| f[*k].rotation * l);
-            c.out.impulse.push((*k, at, *imp * (h / BULLET_PERIOD)));
-            *left -= h;
+            let at = f[r.k].translation + r.local.map_or(Vec3::ZERO, |l| f[r.k].rotation * l);
+            // his feet this tick (0x2a197d8): both off the air factor, one off the one-leg factor; no balancer its own
+            let factor = if on_feet > 0.0 { 1.0 } else if !feet.0 && !feet.1 { r.air } else { r.one_leg };
+            let factor = if upright || r.t.no_bal == 1.0 { factor } else { factor * r.t.no_bal };
+            c.out.impulse.push((r.k, at, r.imp * factor * (h / r.period)));
+            r.left -= h;
+            if r.t.lift > 0.0 {
+                c.out.force(9, spine * (0.5 * r.t.lift));
+                c.out.force(10, spine * (0.25 * r.t.lift));
+                c.out.force(8, spine * (0.25 * r.t.lift));
+            }
         }
-        self.recs.retain(|r| r.3 > 1e-6);
-        self.modifier = (self.modifier + 0.38 * dt).min(1.0);
+        c.ch.core.cfg.torques = (c.ch.core.cfg.torques - torques_done).max(0);
+        self.recs.retain(|r| r.left > 1e-6 || r.torque.is_some());
+        let cfg = &c.ch.core.cfg;
+        self.modifier = match cfg.recovery {
+            // a blend towards 1 (0x2a215d0)
+            Some(rate) => {
+                let rate = if cfg.leak_scaled { rate / cfg.strength.max(1e-3) } else { rate };
+                self.modifier + (1.0 - self.modifier) * (rate * dt).min(1.0)
+            }
+            None => (self.modifier + 0.38 * dt).min(1.0),
+        };
     }
 
     fn done(&self) -> bool {

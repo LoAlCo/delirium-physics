@@ -1804,6 +1804,7 @@ impl Agent {
         let mut hf_balance = None;
         let mut bb_req = (false, None, None);
         let mut part_scales: (Vec<(usize, f32)>, Vec<(usize, [f32; 3])>) = (vec![], vec![]);
+        let mut fric_clamp = None;
         let mut part_radii: Vec<(usize, f32)> = vec![];
         let mut dbm_aside = false;
         let mut incoming_root = None;
@@ -2174,6 +2175,7 @@ impl Agent {
             if c.ch.rdr2 {
                 let held = c.ch.core.ftk.friction();
                 c.out.part_friction.extend(held);
+                crate::extras_core_rdr2::core_tick(&mut c);
             }
             // RDR2 core: yanked's pedalLegs reverse flags for this tick
             if let Some(r) = c.out.pedal_reverse.take() {
@@ -2285,6 +2287,7 @@ impl Agent {
             // RDR2 core: an extra (onFire) stops or starts bodyBalance and sets the balancer's leg stiffness
             bb_req = (out.bb_stop, out.bb_start.take(), out.dbm_leg_stiffness);
             part_scales = (std::mem::take(&mut out.part_friction), std::mem::take(&mut out.lim_floor));
+            fric_clamp = out.fric_clamp.take();
             part_radii = std::mem::take(&mut out.part_radius);
             dbm_aside = std::mem::take(&mut out.dbm_aside);
             if let Some((force, dir)) = out.rds_live.take() {
@@ -2428,6 +2431,7 @@ impl Agent {
         }
         if self.rdr2_core.is_some() {
             self.doll.set_part_scales(&part_scales.0, &part_scales.1);
+            self.doll.fric_clamp = fric_clamp;
             self.doll.set_part_radii(&part_radii);
             if dbm_aside {
                 match self.balance.as_mut() {

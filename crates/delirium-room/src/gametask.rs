@@ -48,6 +48,11 @@ pub fn parse_xml(s: &str) -> Option<Node> {
             stack.last_mut()?.text.push_str(text);
         }
         rest = &rest[lt + 1..];
+        // a hand-edited file's comments can hold anything
+        if rest.starts_with("!--") {
+            rest = &rest[rest.find("-->")? + 3..];
+            continue;
+        }
         let gt = rest.find('>')?;
         let tag = &rest[..gt];
         rest = &rest[gt + 1..];
@@ -80,6 +85,7 @@ pub fn parse_xml(s: &str) -> Option<Node> {
     top.kids.pop()
 }
 
+#[derive(Clone)]
 pub enum Val {
     Bool(bool),
     Float(f32),
@@ -101,6 +107,10 @@ pub struct SentMessage {
     pub label: String,
     pub params: Vec<SentParam>,
     pub task_side: bool,
+    /// a new message in the merged list instead of one more say in the one already there (ForceNewMessage)
+    pub force: bool,
+    /// the message's parameters so far are dropped first (CNmParameterResetMessage)
+    pub reset: bool,
     /// parameters the file holds but nothing in NM takes from it (priority, blend, a reset of the message)
     pub other: Vec<String>,
 }
@@ -109,6 +119,8 @@ pub struct Set {
     /// owner, path, the set's Id: each a name or 0x hash
     pub path: Vec<String>,
     pub enabled: bool,
+    /// the order of the merge: lowest first
+    pub priority: i32,
     pub messages: Vec<SentMessage>,
 }
 
@@ -123,7 +135,8 @@ fn name_hash(s: &str) -> u32 {
 
 fn message(m: &Node) -> SentMessage {
     let raw = m.kid("Name").map_or("", |n| n.text.as_str());
-    let mut out = SentMessage { hash: name_hash(raw), label: raw.to_string(), params: vec![], other: vec![],
+    let mut out = SentMessage { hash: name_hash(raw), label: raw.to_string(), params: vec![], other: vec![], reset: false,
+                                force: m.kid("ForceNewMessage").and_then(Node::value) == Some("true"),
                                 task_side: m.kid("TaskMessage").and_then(Node::value) == Some("true") };
     for p in m.kid("Params").map_or(&[][..], |p| &p.kids) {
         let ty = p.attr("type").unwrap_or("");
@@ -154,8 +167,8 @@ fn message(m: &Node) -> SentMessage {
         } else if let Some(pr) = p.kid("Blend").and_then(Node::value) {
             out.other.push(format!("Blend={pr}"));
         } else if ty == "CNmParameterResetMessage" {
-            out.other.push("reset of the message".into());
-        } else if let Some(n) = p.kids.iter().find(|k| k.tag == "UNK_MEMBER_0xFE9CFFBA") {
+            out.reset = true;
+        } else if let Some(n) = p.kids.iter().find(|k| k.tag == "UNK_MEMBER_0xFE9CFFBA" || k.tag == "Mask") {
             out.params.push(SentParam { hash: joaat("mask"), label: "mask".into(), val: Val::Name(n.text.clone()) });
         } else if let Some(name) = name {
             let val = val.unwrap_or_else(|| Val::Name(v.map_or(String::new(), |n| n.text.clone())));
@@ -174,6 +187,7 @@ fn walk(n: &Node, trail: &mut Vec<String>, out: &mut Vec<Set>) {
             path.push(id.text.clone());
         }
         out.push(Set { path, enabled: n.kid("Enabled").and_then(Node::value) != Some("false"),
+                       priority: n.kid("Priority").and_then(Node::value).and_then(|x| x.parse().ok()).unwrap_or(0),
                        messages: ms.kids.iter().filter(|m| m.attr("type") == Some("CNmMessage")).map(message).collect() });
     }
     for k in n.kids.iter().filter(|k| k.tag != "Messages" && !k.kids.is_empty()) {
@@ -216,9 +230,82 @@ pub fn selects(sel: &str, path: &[String]) -> bool {
     })
 }
 
+/// The game's poster (0x1c2b154): the sets sorted by priority, lowest first (a stable sort, as they were named), each
+/// message merged into the one of its name (a later value wins), or a new one when it says so. A set disabled in the
+/// file is not added (0x1c3f7a0).
+pub fn merge<'a>(sets: impl IntoIterator<Item = &'a Set>) -> Vec<SentMessage> {
+    let mut on: Vec<&Set> = sets.into_iter().filter(|s| s.enabled && !s.messages.is_empty()).collect();
+    on.sort_by_key(|s| s.priority);
+    let mut out: Vec<SentMessage> = vec![];
+    for m in on.iter().flat_map(|s| &s.messages) {
+        let here = if m.force { None } else { out.iter_mut().rev().find(|x| x.hash == m.hash) };
+        let x = match here {
+            Some(x) => x,
+            None => {
+                out.push(SentMessage { hash: m.hash, label: m.label.clone(), params: vec![], task_side: m.task_side, force: m.force, reset: false, other: vec![] });
+                out.last_mut().unwrap()
+            }
+        };
+        if m.reset {
+            x.params.clear();
+        }
+        for p in &m.params {
+            let new = SentParam { hash: p.hash, label: p.label.clone(), val: p.val.clone() };
+            match x.params.iter_mut().find(|q| q.hash == p.hash) {
+                Some(q) => *q = new,
+                None => x.params.push(new),
+            }
+        }
+        x.other.extend(m.other.iter().cloned());
+    }
+    out
+}
+
+/// The sets the shot task queues for one bullet on a standing, unhurt body hit by this weapon (rdr2_tasks.md 2): Base,
+/// the weapon's, then by what was hit. `weapon` is the file's id of the weapon's set: the weapon file names it and
+/// isn't exported, so it is the caller's choice.
+pub fn shot_sets(weapon: &str, hit: ShotHit) -> Vec<String> {
+    let mut v = vec!["Base".to_string(), weapon.to_string()];
+    match hit {
+        ShotHit::Front => {}
+        // the weapon's +0x568, ctor default 3a2fb9af: the trunk from behind
+        ShotHit::Back => v.push("3a2fb9af".into()),
+        // the weapon's +0x570, ctor default cd34be4d, and the stagger path's set
+        ShotHit::Leg => v.extend(["cd34be4d".to_string(), "staggerfall".to_string()]),
+    }
+    v
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ShotHit {
+    Front,
+    Back,
+    Leg,
+}
+
+/// A set of the shot's by its id: a name or the hash in hex, of any case.
+pub fn shot_set<'a>(all: &'a [Set], id: &str) -> Option<&'a Set> {
+    let want = u32::from_str_radix(id, 16).ok().filter(|_| id.len() == 8).unwrap_or_else(|| joaat(id));
+    all.iter().find(|s| {
+        s.path.first().is_some_and(|o| hash_of(o) == Some(joaat("CTaskNMShot")) || o.eq_ignore_ascii_case("CTaskNMShot") || hash_of(o) == Some(0xC9CD39F1))
+            && s.path.last().is_some_and(|l| name_hash(l) == want)
+    })
+}
+
+/// The messages that are a block of the shot's, and go to the running shot by value: their own start only opens the block.
+fn shot_block(hash: u32) -> bool {
+    ["shotconfigurearms", "shotshockspin", "shotheadlook"].iter().any(|n| joaat(n) == hash)
+}
+
+/// The core messages: an extra here, so each carries start=true, and the game's start in on and fresh.
+fn core_message(hash: u32) -> bool {
+    ["configuresoftlimit", "setfrictionscale", "setmusclestiffness", "setcharacterstrength", "configurebullets", "configurebulletsextra"].iter().any(|n| joaat(n) == hash)
+}
+
 /// The port's own message for the game's. The same name by hash, or one of the port's own names for it.
 pub fn port_message(hash: u32) -> Option<&'static Message> {
-    let alias = [("sit", "rdr2Sit"), ("configurebolas", "rdr2Bolas"), ("configureshotinjuredleg", "shotInjuredLeg"), ("configureshotinjuredarm", "shotInjuredArm")];
+    let alias = [("sit", "rdr2Sit"), ("configurebolas", "rdr2Bolas"), ("configureshotinjuredleg", "shotInjuredLeg"), ("configureshotinjuredarm", "shotInjuredArm"),
+                 ("shotconfigurearms", "shot"), ("shotshockspin", "shot"), ("shotheadlook", "shot"), ("configurebulletsextra", "configureBullets"), ("setopposegravity", "setOppGrav")];
     let name = alias.iter().find(|a| joaat(a.0) == hash).map(|a| a.1);
     let all = || delirium::msg::MESSAGES.iter().chain(delirium::extras::messages());
     match name {
@@ -231,14 +318,32 @@ pub fn port_message(hash: u32) -> Option<&'static Message> {
 pub fn line(m: &SentMessage, port: &Message) -> (String, Vec<String>) {
     let mut s = port.name.to_string();
     let mut left = m.other.clone();
+    let (block, core) = (shot_block(m.hash), core_message(m.hash));
+    // the game's start on a core message: start=true (the registered defaults, then the values), or stop this record
+    if core {
+        s += " start=true";
+        let start = m.params.iter().find(|p| p.hash == joaat("start")).and_then(|p| if let Val::Bool(b) = p.val { Some(b) } else { None });
+        if start == Some(false) && port.params.iter().any(|x| x.name == "on") {
+            s += " on=false";
+        }
+        if start == Some(true) && port.params.iter().any(|x| x.name == "fresh") {
+            s += " fresh=true";
+        }
+        if m.hash == joaat("configurebulletsextra") {
+            s += " extra=true";
+        }
+    }
     for p in &m.params {
         if p.hash == joaat("start") {
-            if let Val::Bool(b) = p.val {
+            if let (Val::Bool(b), false, false) = (&p.val, block, core) {
                 s += &format!(" start={b}");
             }
             continue;
         }
-        let Some(prm) = port.params.iter().find(|x| joaat(x.name) == p.hash) else {
+        // uncracked in the code's table, named by the port (setFrictionScale's global clamp switch)
+        let own = [(0xa7180f98u32, "clamp")];
+        let wanted = own.iter().find(|o| o.0 == p.hash).map_or(p.hash, |o| joaat(o.1));
+        let Some(prm) = port.params.iter().find(|x| joaat(x.name) == wanted) else {
             left.push(format!("{} (no such parameter)", p.label));
             continue;
         };
