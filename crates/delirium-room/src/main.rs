@@ -5208,7 +5208,9 @@ impl Sim {
     fn send(&mut self, line: &str) {
         // the game's sets' values for the shot go in its start: a running shot takes values a hit too late
         if line.starts_with("shot start=true") && !self.game_shot.is_empty() {
-            let l = format!("{line}{}", std::mem::take(&mut self.game_shot));
+            // the hit from ShotTask's line; its other values are the room's, and the game's start is on the defaults
+            let hit: Vec<&str> = line.split(' ').filter(|w| ["bodyPart=", "hitPoint=", "bulletVel=", "normal="].iter().any(|k| w.starts_with(k))).collect();
+            let l = format!("shot start=true {}{}", hit.join(" "), std::mem::take(&mut self.game_shot));
             return self.send(&l);
         }
         self.send_to(0, line);
