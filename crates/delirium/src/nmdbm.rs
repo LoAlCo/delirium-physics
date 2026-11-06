@@ -413,6 +413,7 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
             let (back, ahead) = if forward { (r.p.run_back_fwd, r.p.run_ahead_fwd) } else { (r.p.run_back, r.p.run_ahead) };
             let (fl, fr) = (d.dot(s.legs[0].foot.m.d - s.com), d.dot(s.legs[1].foot.m.d - s.com));
             if (f.stepping == 2 && fl < -back && fr > ahead) || (f.stepping == 1 && fr < -back && fl > ahead) {
+                crate::extras_core_rdr2::trace_once("running anti-crossing", || format!("{fl:.2} {fr:.2} past {back} {ahead}"));
                 f.stepping = 0;
             }
         }
@@ -512,6 +513,9 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
             let ahead = |i: usize| horizontal(-s.legs[i].foot.m.c, up).normalize_or_zero() * 0.15;
             let (cl, cr) = (rpos + ahead(1) - n * w, lpos + ahead(0) + n * w);
             let (mut ta, mut tb) = (target_a, target_b);
+            if (ta - cl).dot(n) > 0.0 || (tb - cr).dot(n) < 0.0 {
+                crate::extras_core_rdr2::trace_once("avoidLeg", || format!("{:.3} {:.3}, half width {w}", (ta - cl).dot(n), (tb - cr).dot(n)));
+            }
             ta -= n * (ta - cl).dot(n).max(0.0);
             tb -= n * (tb - cr).dot(n).min(0.0);
             let e = (cl - cr).dot(n);
@@ -661,7 +665,10 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
     let w = if pv.fixed_vel { pv.vel } else { s.hvel };
     // RDR2: slower than useComDirTurnVelThresh the twist takes the way he faces, not the velocity
     let w = match p.rdr2 {
-        Some(r) if !pv.fixed_vel && s.vel.length() < r.p.use_com_dir_turn_vel_thresh => horizontal(-s.m.c, up).normalize_or_zero(),
+        Some(r) if !pv.fixed_vel && s.vel.length() < r.p.use_com_dir_turn_vel_thresh => {
+            crate::extras_core_rdr2::trace_once("useComDirTurnVelThresh", || format!("{:.2} m/s under {}", s.vel.length(), r.p.use_com_dir_turn_vel_thresh));
+            horizontal(-s.m.c, up).normalize_or_zero()
+        }
         _ => w,
     };
     let toward = !pv.fixed_vel;
@@ -889,6 +896,9 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         }
         _ => [false; 2],
     };
+    if lost[0] || lost[1] {
+        crate::extras_core_rdr2::trace_once("airborne step", || format!("{lost:?}, running {}", p.rdr2.is_some_and(|r| r.running)));
+    }
     let (lp, rp) = (lp && !lost[0], rp && !lost[1]);
     let r = p.pelvis_height;
     let drop = |x: Vec3| {
@@ -974,6 +984,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             let (arc, angle) = (bevy_math::Quat::from_rotation_arc(pel.a.normalize_or_zero(), pd[0].normalize_or_zero()), 1.0);
             let (axis, th) = arc.to_axis_angle();
             let scaled = (th * r.hip_error() * (2.0 - 60.0 * p.dt.clamp(1.0 / 60.0, 1.0 / 30.0)) * angle).min(r.p.hip_error_max);
+            crate::extras_core_rdr2::trace_once("hipError", || format!("{th:.3} rad to {scaled:.3}, max {}", r.p.hip_error_max));
             let turn = bevy_math::Quat::from_axis_angle(axis, scaled);
             let pe = pd.map(|e| turn * e);
             let row = |k: usize| pel.c.mul_add(Vec3::splat(pe[2][k]), pel.b.mul_add(Vec3::splat(pe[1][k]), pel.a * pe[0][k]));
@@ -1032,6 +1043,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         let side = if i == 0 { 1.0 } else { -1.0 };
         let leg = &mut s.legs[i];
         let a = if let Some(rd) = p.rdr2.filter(|r| !planted && r.flat_swing(i)) {
+            crate::extras_core_rdr2::trace_once("flat swing ankle", || format!("down {:?} sideways {} running {}", rd.down_swing, rd.sideways, rd.running));
             // RDR2 (0x2aae0b4): a flat swing foot aims from the actual knee and foot; moving sideways 0.9 more
             let a = asin(sdot(leg.knee.m.c, vnorm(leg.knee.m.d - leg.foot.m.d).vx(normal[i]), b"xyz"));
             if rd.sideways { a + 0.9 } else { a }
@@ -1736,6 +1748,7 @@ impl Dbm {
             // useComDirTurnVelThresh) times sidewaysCheatForce, along the stance foot to the spine's top; on the left
             // foot only moving backward, on the right only not. Both or neither: 1 N up.
             if r.sideways && !r.turning && r.p.sideways_cheat_force >= 0.01 {
+                crate::extras_core_rdr2::trace_once("sideways force", || format!("{} on {:?}", r.p.sideways_cheat_force, self.pv.planted));
                 let up = self.p.up;
                 let dir = if s.vel.length() < r.p.use_com_dir_turn_vel_thresh { horizontal(-s.m.c, up) } else { s.vel };
                 let back = sdot(v.normalize_or_zero(), horizontal(-s.m.c, up).normalize_or_zero(), b"zyx") < 0.0;
@@ -1836,6 +1849,7 @@ impl Dbm {
                 (knee.strength, knee.muscle_stiffness) = (k * k, 2.0);
                 // RDR2: the swing hip's damping 2 x left/rightLegSwingDamping x k
                 if let Some(r) = self.p.rdr2 {
+                    crate::extras_core_rdr2::trace_once("swing damping and gravity", || format!("{} {}, gravity {} {}", r.p.swing_damping_l, r.p.swing_damping_r, r.p.oppose_gravity_legs, r.p.oppose_gravity_ankles));
                     ch.eff[(*HIP())[i]].damping = 2.0 * [r.p.swing_damping_l, r.p.swing_damping_r][i] * each[i];
                 }
             }

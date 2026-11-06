@@ -1937,6 +1937,7 @@ impl Shot {
         let (k, kn) = (s.k, s.kn);
         let stagger = c.extras_on.contains(&"staggerFall");
         if self.failed() {
+            crate::extras_core_rdr2::trace_once("floor weakness", || format!("{t:.2} s: {} for {} s, joints {} for {} s", r.floor_strength, r.floor_weakness_time, r.floor_joint_strength, r.floor_joint_time, t = self.since_hit));
             // falling: while it lasts all but the arms take floorStrength, and the joints next to the hit part
             // floorJointStrength, over whatever the behaviours ask (0x2a7f650 step 6)
             let t = self.since_hit;
@@ -2002,6 +2003,7 @@ impl Shot {
         // cStr modulation: U and W scaled by the character's strength (0x2a7f650's ramps)
         if p.rdr2.use_cstr {
             let (s, r) = (c.ch.core.cfg.strength, p.rdr2);
+            crate::extras_core_rdr2::trace_once("cStr modulation", || format!("strength {s}, U x {}", r.cstr_upper_min + (r.cstr_upper_max - r.cstr_upper_min) * s));
             self.fall[0] *= r.cstr_upper_min + (r.cstr_upper_max - r.cstr_upper_min) * s;
             self.fall[1] *= r.cstr_lower_min + (r.cstr_lower_max - r.cstr_lower_min) * s;
         }
@@ -2075,6 +2077,7 @@ impl Shot {
                 }
             }
             let weight = (1.0 - b) * (1.0 - v) + b;
+            crate::extras_core_rdr2::trace_once("spine blend", || format!("weight {weight:.2}, b {b:.2}, v {v:.2}"));
             for &j in SPINE().iter() {
                 c.ch.eff[j].blend_to_zero(weight);
             }

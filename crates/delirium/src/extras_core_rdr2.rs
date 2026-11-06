@@ -213,6 +213,19 @@ pub fn trace(s: impl FnOnce() -> String) {
     }
 }
 
+/// A trace line the first time a path acts, by its name: proof that it runs, without a line every tick.
+pub fn trace_once(what: &'static str, s: impl FnOnce() -> String) {
+    static SEEN: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(vec![]);
+    static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *T.get_or_init(|| std::env::var_os("RDR2_TRACE").is_some()) {
+        let mut seen = SEEN.lock().unwrap();
+        if !seen.contains(&what) {
+            seen.push(what);
+            eprintln!("core: first {what}: {}", s());
+        }
+    }
+}
+
 /// The joint's parts: a joint's child is part joint+1; the pelvis goes with any mask that holds both legs.
 fn part_mask(mask: &str) -> [bool; 32] {
     let mut out = [false; 32];
