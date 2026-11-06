@@ -1630,6 +1630,8 @@ pub struct Ragdoll {
     pub fric: Vec<f32>,
     /// RDR2 core: per-part joint limit half-range floors (lean1, lean2, twist), empty: none
     pub lim_floor: Vec<[f32; 3]>,
+    /// RDR2 core: per-part collision radius scales (empty: none; sit's pelvis and thighs)
+    pub radius_scale: Vec<f32>,
     pub contact: crate::bump::ContactRecord<i32>,
     pub ob_hits: Vec<(i32, Vec3, Vec3)>,
     pub ob_hit_left: Vec<f32>,
@@ -1764,7 +1766,7 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { nm: build.nm, links: build.links.clone(), pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+        Ragdoll { nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
                   sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
@@ -1839,6 +1841,14 @@ impl Ragdoll {
     }
 
     /// RDR2 core: this step's per-part friction scales and joint limit floors (what isn't named is back to none).
+    pub fn set_part_radii(&mut self, radii: &[(usize, f32)]) {
+        self.radius_scale.clear();
+        if !radii.is_empty() {
+            self.radius_scale.resize(self.touch.len(), 1.0);
+            radii.iter().for_each(|&(k, x)| self.radius_scale[k] = x);
+        }
+    }
+
     pub fn set_part_scales(&mut self, fric: &[(usize, f32)], floor: &[(usize, [f32; 3])]) {
         let n = self.touch.len();
         self.fric.clear();
@@ -2520,7 +2530,7 @@ impl Ragdoll {
             let touch = if self.contact_off >> i & 1 == 0 { delirium_data::kv!(7 int) } else { 0 };
             let shape = match p.boxed {
                 Some(e) => gjk::Shape::Box(e - Vec3::splat(BOX_MARGIN()), BOX_MARGIN()),
-                None => gjk::Shape::Capsule(p.half, p.radius),
+                None => gjk::Shape::Capsule(p.half, p.radius * self.radius_scale.get(i).copied().unwrap_or(1.0)),
             };
             if !first {
                 world_meet(world, o, shape, bound_half(p), tm, x, xw, self.seen.get(i), self.seen_w.get(i), self.seen_r.get(i), held, true);
@@ -3231,6 +3241,10 @@ impl Ragdoll {
             let mut j = Joint::new(p, j, drive.rigid.get(i));
             if let (Some(f), Kind::Ball { lean, twist }) = (self.lim_floor.get(i), &mut j.kind) {
                 (lean[0], lean[1], *twist) = (lean[0].max(f[0]), lean[1].max(f[1]), twist.max(f[2]));
+            }
+            // (a hinge: its larger end at least the first floor, RDR2's knee minimum, 0x2a4ea78)
+            if let (Some(f), Kind::Hinge { lo, hi }) = (self.lim_floor.get(i), &mut j.kind) {
+                if lo.abs() > hi.abs() { *lo = lo.min(-f[0]); } else { *hi = hi.max(f[0]); }
             }
             Joint { jc: self.jconst(build, i, &j, drive.rigid.get(i)), ..j }
         })).collect();

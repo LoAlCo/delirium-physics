@@ -134,6 +134,9 @@ pub struct BodyBalance {
 /// RDR2's further state (with the RDR2 core).
 #[derive(Clone, Copy, Debug, Default)]
 struct Rdr2Bb {
+    /// the clock of sit's noisy elbows (+0x304)
+    noise_t: f32,
+    noisy_said: bool,
     /// each arm's arms-out on/off timer (off below 0) and its off time
     arm_on: [f32; 2],
     arm_off: [f32; 2],
@@ -211,7 +214,13 @@ impl BodyBalance {
     #[allow(clippy::too_many_arguments)]
     pub fn tick(&mut self, ch: &mut Character, b: &Body, obstacles: &[crate::ragdoll::Obstacle], stepping: u32, failed: bool, catching: bool, dt: f32) -> Out {
         if ch.rdr2 {
-            return self.tick_rdr2(ch, b, obstacles, stepping, failed, catching, dt);
+            // sit narrows its mask (+0x14): what it would write on those joints doesn't happen
+            let keep: Vec<_> = ch.bb_off.iter().map(|&j| (j, ch.eff[j].clone())).collect();
+            let out = self.tick_rdr2(ch, b, obstacles, stepping, failed, catching, dt);
+            for (j, e) in keep {
+                ch.eff[j] = e;
+            }
+            return out;
         }
         let p = self.p;
         let mut out = Out::default();
@@ -545,7 +554,7 @@ impl BodyBalance {
             (ch.eff[i].strength, ch.eff[i].damping) = (k * k, 2.0 * k * 0.8 * p.damping);
         }
         let f = (b.doll.kinetic() * 2.0).sqrt().clamp(0.001, 1.0);
-        let (target, target_vel) = look_at(&p, b, obstacles);
+        let (target, target_vel) = ch.bb_target.take().map_or_else(|| look_at(&p, b, obstacles), |t| (t, Vec3::ZERO));
         // the head look (headLook's priority 0xc); along the velocity for a while on some steps
         if p.use_head_look {
             out.head_look_stiffness = 1.0 + p.spine_stiffness;
@@ -740,12 +749,25 @@ impl BodyBalance {
         // toward rest, more the slower he goes: clavicles and wrists 0, elbows 0.4, shoulders lean2 0.5; spine, neck
         // and head 0
         let w = 0.2 + 0.8 * (1.0 - f);
+        // sit's noisy elbows (+0x150, set by a riding sit, cleared here)
+        self.rd.noise_t += dt;
+        let noisy = std::mem::take(&mut ch.bb_noisy);
+        if noisy && !self.rd.noisy_said && crate::extras_ysk_rdr2::trace() {
+            self.rd.noisy_said = true;
+            eprintln!("bodyBalance: sit's noisy elbows, {} joints out of its mask", ch.bb_off.len());
+        }
         for s in 0..2 {
+            let te = if noisy {
+                let (a, b) = (2.0 * self.rd.noise_t, 0.0);
+                0.4 + if s == 0 { crate::nmfl::noise01(a, b, 0.0) } else { crate::nmfl::noise01(b, a, 0.0) }
+            } else {
+                0.4
+            };
             blend(&mut ch.eff[(*CLAVICLE())[s]].desired, [0.0; 3], w);
             blend(&mut ch.eff[(*WRIST())[s]].desired, [0.0; 3], w);
             blend(&mut ch.eff[(*SHOULDER())[s]].desired, [0.0, 0.5, 0.0], w);
             let e = &mut ch.eff[(*ELBOW())[s]].desired[0];
-            *e += (0.4 - *e) * w;
+            *e += (te - *e) * w;
         }
         for i in Character::mask("ub") {
             blend(&mut ch.eff[i].desired, [0.0; 3], w);

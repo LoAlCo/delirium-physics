@@ -10317,7 +10317,7 @@ fn headless(mut sim: Sim, n: usize) {
             }
         }
         match &fires {
-            None if i == 60 => sim.button("shot"),
+            None if i == 60 && std::env::var_os("RDR2_NO_SHOT").is_none() => sim.button("shot"),
             Some(f) => for (_, b) in f.iter().filter(|(at, _)| *at == i) {
                 match &pose {
                     // the recording's hit point and direction (the shooter's aim there), not the button's

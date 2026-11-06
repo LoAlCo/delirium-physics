@@ -185,6 +185,14 @@ pub struct Out {
     /// RDR2 core: per-joint limit half-range floors this step, child part and (lean1, lean2, twist) in rad
     /// (the 3-DOF joint's +0x11c..+0x124, 0x2a4eaa0)
     pub lim_floor: Vec<(usize, [f32; 3])>,
+    /// RDR2 core: per-part collision radius scales this step, part and scale (sit's pelvis and thighs)
+    pub part_radius: Vec<(usize, f32)>,
+    /// RDR2 core: the balancer off (bal+0xbe7), a running bodyBalance left alone (sit's riding)
+    pub dbm_aside: bool,
+    /// RDR2 core: sit's rollDownStairs, written while it runs: its force and the way he rolls
+    pub rds_live: Option<(f32, Vec3)>,
+    /// RDR2 core: sit's stateridingtarget: where the incoming animation's root goes, the rest with it
+    pub incoming_root: Option<bevy_transform::components::Transform>,
     /// RDR2 core: the default arms' releaseWound, telling reachForWound to let that hand go this step
     pub rfw_release: [bool; 2],
     /// RDR2 core: an extra (onFire) stops bodyBalance, then starts it with these (RDR2's children)
@@ -375,6 +383,8 @@ pub struct Ctx<'a, 'b> {
     pub rfw: Option<RfwView>,
     /// RDR2 core: bodyBalance is running (the default arm pose leaves the arms to it)
     pub bb_on: bool,
+    /// RDR2 core: a running sit's state (slot 0x108's +0x580)
+    pub sit_state: Option<usize>,
     /// the extras running this step, by message name (RDR2's behaviours read whether staggerFall runs)
     pub extras_on: Vec<&'static str>,
     /// RDR2 core: the incoming animation's part frames (empty: none), which animPose drives the limbs to
@@ -424,7 +434,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
         Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed, head_look_on: false,
-              dbm: None, shot_on: false, rfw: None, bb_on: false, extras_on: vec![], incoming: &[], shot_scale: 1.0 }
+              dbm: None, shot_on: false, rfw: None, bb_on: false, sit_state: None, extras_on: vec![], incoming: &[], shot_scale: 1.0 }
     }
 
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.
@@ -537,7 +547,7 @@ impl Shot {
         if c.ch.rdr2 {
             crate::nmftk_rdr2::init(c);
         }
-        if !s.no_balance {
+        if !s.no_balance && !(c.ch.rdr2 && c.sit_state.is_some()) {
             c.out.dbm = Some(true);
             if !p.chicken_arms {
                 c.out.dbm_leg_offset = Some(-delirium_data::kv!(131));
@@ -1522,6 +1532,8 @@ impl Default for ShotRdr2 {
 /// bullet's lean and twist, the three spine ramps {target, current, rate, diff} and when they last wrote.
 #[derive(Clone, Copy, Debug, Default)]
 struct ShotRdr2State {
+    /// subordinate to sit (+0x78c): set once a sit is running, till the shot stops
+    subordinate: bool,
     started: bool,
     k: f32,
     kn: f32,
@@ -1762,11 +1774,25 @@ impl Shot {
             c.out.send(delirium_data::kv!(55 int), "shot", 0.0);
             self.flags |= 1;
         }
-        if c.dbm_failed {
-            self.flags |= 1;
+        // subordinate to sit (+0x78c, 0x2a824c4): he falls only if the balancer failed and he's off the saddle, or with sit
+        // gone by the tilt of his COM's up row, and the shot doesn't own the balancer (rdr2_shot_core.md §4.7)
+        if c.sit_state.is_some() && !self.rd.subordinate && crate::extras_ysk_rdr2::trace() {
+            eprintln!("shot: subordinate to sit (state {:?}): it doesn't own the balancer", c.sit_state);
         }
-        if self.failed() || self.no_balance {
-            c.out.dbm = Some(false);
+        self.rd.subordinate |= c.sit_state.is_some();
+        if self.rd.subordinate {
+            let tilt = c.m.b.dot(bevy_math::Vec3::Z).clamp(-1.0, 1.0).acos();
+            let off = c.sit_state.is_none_or(|s| matches!(s, 3 | 6 | 7));
+            if (c.dbm_failed && off) || (c.sit_state.is_none() && tilt > 0.7) {
+                self.flags |= 1;
+            }
+        } else {
+            if c.dbm_failed {
+                self.flags |= 1;
+            }
+            if self.failed() || self.no_balance {
+                c.out.dbm = Some(false);
+            }
         }
         self.run(c, HIT(), Some(|s, _| s.new_hit), Some(Shot::hit_enter), Some(Shot::hit_tick), Some(|s, _| !s.new_hit), None, dt);
         self.wound = world(&c.b.part(p.body_part).m, self.hit_local);

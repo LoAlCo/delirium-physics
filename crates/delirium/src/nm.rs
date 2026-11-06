@@ -995,6 +995,7 @@ impl Agent {
             let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
             let mut out = crate::nmshot::Out::default();
             let mut c = crate::nmshot::Ctx::new(ch, &body, &mut out, false);
+            c.sit_state = self.extras.sit_state;
             start_catch_fall(&mut self.nm_cf, p, &mut c, &mut self.nm_head, &mut self.nm_twist);
         }
     }
@@ -1054,6 +1055,7 @@ impl Agent {
                 let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
                 let mut out = crate::nmshot::Out::default();
                 let mut c = crate::nmshot::Ctx::new(ch, &body, &mut out, false);
+                c.sit_state = self.extras.sit_state;
                 start_flinch(f, &mut self.nm_fl, &mut c, &mut self.nm_head, &mut self.nm_twist);
             }
             None => self.nm_fl_msg = Some(f),
@@ -1111,6 +1113,7 @@ impl Agent {
         let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
         let mut out = crate::nmshot::Out::default();
         let mut c = crate::nmshot::Ctx::new(ch, &body, &mut out, false);
+        c.sit_state = self.extras.sit_state;
         let dbm = self.balance.as_mut().and_then(|b| b.dbm.as_mut());
         match p {
             Some(p) => {
@@ -1152,6 +1155,7 @@ impl Agent {
         let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
         let mut out = crate::nmshot::Out::default();
         let mut c = crate::nmshot::Ctx::new(ch, &body, &mut out, false);
+        c.sit_state = self.extras.sit_state;
         let mut k = crate::nmbr::Kids { head: &mut self.nm_head, twist: &mut self.nm_twist, pedal: &mut self.nm_pd,
                                         rds: &mut self.nm_rds, ru: &mut self.nm_ru, grab: &mut self.nm_gr,
                                         dbm: self.balance.as_mut().and_then(|b| b.dbm.as_mut()), fallen: self.fallen };
@@ -1267,6 +1271,7 @@ impl Agent {
         let bb_on = ch.rdr2 && (self.balance.as_ref().is_some_and(|b| b.bb.is_some()) || self.extras.on.iter().any(|(n, _)| *n == "rdr2Balance"));
         let mut c = crate::nmshot::Ctx::new(ch, &body, &mut out, dbm_lost);
         (c.rfw, c.bb_on) = (rfw, bb_on);
+        c.sit_state = self.extras.sit_state;
         if tick {
             c.cf = Some((&mut self.nm_cf, &mut self.nm_head, &mut self.nm_twist));
         }
@@ -1730,7 +1735,8 @@ impl Agent {
                 let snap = ch.clone();
                 let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
                 // RDR2: with the balancer gone bodyBalance does nothing but its falling reaction, and that waits for the shot
-                let (failed, catching) = (ch.rdr2, self.catch_fall.is_some() || (ch.rdr2 && self.nm_shot.is_some()));
+                // (a riding sit's balancer is only disabled, bal+0xbe7: no failure for bodyBalance to read)
+                let (failed, catching) = (ch.rdr2 && !self.extras.sit_state.is_some_and(|s| s <= 2), self.catch_fall.is_some() || (ch.rdr2 && self.nm_shot.is_some()));
                 let out = bb.tick(ch, &body, obstacles, b.stepping, failed, catching, dt);
                 if let Some(k) = out.step_clamp {
                     self.config.step_clamp_scale = k;
@@ -1771,6 +1777,9 @@ impl Agent {
         let mut hf_balance = None;
         let mut bb_req = (false, None, None);
         let mut part_scales: (Vec<(usize, f32)>, Vec<(usize, [f32; 3])>) = (vec![], vec![]);
+        let mut part_radii: Vec<(usize, f32)> = vec![];
+        let mut dbm_aside = false;
+        let mut incoming_root = None;
         if let Some(ch) = self.ch.as_mut().filter(|_| nm_tick) {
             let snap = ch.clone();
             let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
@@ -1856,6 +1865,8 @@ impl Agent {
             }
             let mut out = crate::nmshot::Out::default();
             let mut c = crate::nmshot::Ctx::new(&mut *ch, &body, &mut out, dbm_lost);
+            c.sit_state = self.extras.sit_state;
+            c.bb_on = c.ch.rdr2 && (self.balance.as_ref().is_some_and(|b| b.bb.is_some()) || self.extras.on.iter().any(|(n, _)| *n == "rdr2Balance"));
             c.incoming = &self.incoming;
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             c.shot_on = self.nm_shot.is_some();
@@ -2247,6 +2258,12 @@ impl Agent {
             // RDR2 core: an extra (onFire) stops or starts bodyBalance and sets the balancer's leg stiffness
             bb_req = (out.bb_stop, out.bb_start.take(), out.dbm_leg_stiffness);
             part_scales = (std::mem::take(&mut out.part_friction), std::mem::take(&mut out.lim_floor));
+            part_radii = std::mem::take(&mut out.part_radius);
+            dbm_aside = std::mem::take(&mut out.dbm_aside);
+            if let Some((force, dir)) = out.rds_live.take() {
+                self.nm_rds.live(force, dir);
+            }
+            incoming_root = out.incoming_root.take();
             // RDR2 core: pointGun's look at its priority
             if let Some((prio, pos)) = out.head_look_prio {
                 self.nm_head.look(prio, pos, Vec3::ZERO, true);
@@ -2384,6 +2401,31 @@ impl Agent {
         }
         if self.rdr2_core.is_some() {
             self.doll.set_part_scales(&part_scales.0, &part_scales.1);
+            self.doll.set_part_radii(&part_radii);
+            if dbm_aside {
+                match self.balance.as_mut() {
+                    Some(b) if b.bb.is_some() => {
+                        b.idle = false;
+                        if let Some(d) = b.dbm.take() {
+                            b.stepping = d.f.stepping;
+                            self.doll.unpin();
+                        }
+                    }
+                    Some(_) => {
+                        self.balance = None;
+                        self.doll.unpin();
+                    }
+                    None => {}
+                }
+            }
+            // sit's stateridingtarget: the animation carried by the seat (0x2aaccec)
+            if let (Some(to), Some(&root)) = (incoming_root, self.incoming.first()) {
+                let inv = root.rotation.inverse();
+                for t in &mut self.incoming {
+                    t.translation = to.translation + to.rotation * (inv * (t.translation - root.translation));
+                    t.rotation = to.rotation * inv * t.rotation;
+                }
+            }
         }
         for (v, add) in [(&mut torque, &shot_out.torque), (&mut force, &shot_out.force)] {
             if v.len() < add.len() {
