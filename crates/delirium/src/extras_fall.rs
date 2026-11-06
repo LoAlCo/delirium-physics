@@ -955,7 +955,10 @@ impl StgRdr2 {
         let fall_time = self.t > p.time_to_fall && c.out.dbm_force_balance;
         for i in 0..2 {
             let o = 1 - i;
-            if !(fall_time || (bal.stepping as usize == o + 1 && !bal.planted[o])) {
+            // the stepping foot off the ground, this tick or the last (bal+0x550 & 3, & 0xc)
+            let both: u8 = delirium_data::kv!(7 int) | delirium_data::kv!(1 int);
+            let lifted = c.b.doll.touch[Self::foot(c, o)] & both != both;
+            if !(fall_time || (bal.stepping as usize == o + 1 && lifted)) {
                 continue;
             }
             let touch = Self::touching(c, i);
