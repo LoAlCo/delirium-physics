@@ -1716,7 +1716,7 @@ impl Agent {
                         // RDR2 core: the balancer sets the foot yaw hold's gains every step it runs (they stay after),
                         // and its fall assist runs on this tick
                         if let Some(r) = dbm.p.rdr2 {
-                            let k = if r.running { r.p.foot_slip_stiffness_run } else { r.p.foot_slip_stiffness };
+                            let k = if r.run_fast { r.p.foot_slip_stiffness_run } else { r.p.foot_slip_stiffness };
                             ch.core.foot_slip = (k, 2.0 * k.sqrt());
                             let rec = crate::nmdbm_rdr2::stay_live(&ch.core.stay, s.vel);
                             fall_assist = rec.fall_assist(r.time, s.vel, self.doll.mass());
@@ -2277,6 +2277,7 @@ impl Agent {
                     r.kneeling = out.dbm_kneeling.unwrap_or(r.kneeling);
                     r.force_fail |= out.dbm_force_fail;
                     (r.stagger, r.lead) = (out.dbm_stagger, out.dbm_lead);
+                    (r.push_off, r.falling) = (out.dbm_push_off, out.dbm_falling);
                     // teeter's prediction boost and exclusion plane (this step), and taperKneeStrength (until changed)
                     (r.lead_add, r.plane) = (out.dbm_lead_add, out.dbm_plane);
                     if let Some(t) = out.dbm_taper {

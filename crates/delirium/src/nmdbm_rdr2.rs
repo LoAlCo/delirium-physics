@@ -489,8 +489,15 @@ const TURN_FACING: f32 = 0.9;
 const TURN_PAUSE: (f32, f32) = (-0.2, 0.8);
 /// The pelvis never sinks below this over the feet on a slope.
 const SLOPE_FLOOR: f32 = 0.2;
-/// Running: the swing leg's stiffness share.
-pub const RUN_SWING: f32 = 0.5;
+/// Running, with the planted foot off the ground: the stepping leg's hip and knee stiffness, damping and muscle (0x2abc4ec).
+pub const RUN_SWING: (f32, f32, f32) = (15.0, 0.5, 6.0);
+/// How long a foot made to give way waits (bal+0x1f4, 1, times 0.1 s), how far its target drops (0.4 of the probe's
+/// 1 m) and how the other leg's hip and ankle are held up while it does, per second left (0x2aaeed8).
+pub const GIVE_WAY: (f32, f32, f32, f32) = (0.1, 0.4, 24.0, -30.0);
+/// Staggering, the thighs' meeting only counts while going less than this along the pelvis.
+pub const GIVE_WAY_ALONG: f32 = 0.4;
+/// Running above this speed, staggering included, the legs meeting doesn't count.
+pub const GIVE_WAY_SPEED: f32 = 2.1;
 /// The balancer's own owner id for its crouch request when failing, and the hip pitch it asks for (rad, ours: RDR2's
 /// -0.4 with its knee bend's sign, negative bending more) and how fast.
 const FAIL_OWNER: u32 = 14;
@@ -612,7 +619,18 @@ pub struct Rdr2 {
     pub since_step: f32,
     pub step_age: f32,
     pub speed: f32,
+    /// bal+0x339: staggering, or at runVel or faster (0x2aba1cc). The foot rules go by this.
     pub running: bool,
+    /// At runVel or faster: only then the run values (legStiffnessRun, hipErrorRun, ...) replace the walking ones.
+    pub run_fast: bool,
+    /// bal+0x324, +0x328: since a foot was made to give way in the air, for how long it's kept down and the other held up.
+    pub wait: [f32; 2],
+    /// bal+0x334: the legs met, and the step gives way (0x2aba1cc, 0x2ab32bc).
+    pub give_way: bool,
+    /// bal+0x349: a staggering leg is pushing off (state 3 or 4).
+    pub push_off: bool,
+    /// bal+0x338: staggerFall's fall has begun; no running anti-crossing.
+    pub falling: bool,
     /// the injured leg (0 left, 1 right) and how badly (0..1), from shotInjuredLeg
     pub limp: (usize, f32),
     /// RDR2's forced step: this foot (0 left, 1 right) steps next, for one step from the step count it was asked at;
@@ -684,7 +702,7 @@ pub struct Rdr2 {
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
         Rdr2 { p, turn_margin: false, time: 0.0, still: 0.0, straight: (0.99, 1.0), steps: 0, extra_steps: 0, down_swing: [false; 2], up_now: bevy_math::Vec3::Z, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
-               since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
+               since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, run_fast: false, wait: [0.0; 2], give_way: false, push_off: false, falling: false, limp: (0, 0.0), forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: 0, turning: false, heading_only: false,
                leg_twist: RESET_LEG_TWIST, turn_lift: p.turn_lift_feet, turn_facing: None, force_balance: false, quality: 0.0, abort: None, must_collide: false, kneeling: false, force_fail: false, pause: 0.0, aligned: false, landed: false, crouching: None,
@@ -734,12 +752,12 @@ impl Rdr2 {
 
     /// hipError or its running value.
     pub fn hip_error(&self) -> f32 {
-        if self.running { self.p.hip_error_run } else { self.p.hip_error }
+        if self.run_fast { self.p.hip_error_run } else { self.p.hip_error }
     }
 
     /// Do this leg's swing ankle aim flat (0x2aae0b4)? Moving sideways, flatterSwingFeet or a foot moving down.
     pub fn flat_swing(&self, i: usize) -> bool {
-        self.sideways || self.down_swing[i] || if self.running { self.p.flatter_swing_feet_run } else { self.p.flatter_swing_feet }
+        self.sideways || self.down_swing[i] || self.wait[1 - i] > 0.0 || if self.run_fast { self.p.flatter_swing_feet_run } else { self.p.flatter_swing_feet }
     }
 
     /// Timers and the timed fail; `stepped` when a step was committed this tick.
