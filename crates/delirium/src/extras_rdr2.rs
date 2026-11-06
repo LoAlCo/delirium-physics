@@ -3023,9 +3023,10 @@ impl ReachForWound {
             if since < r.bend_before {
                 return;
             }
-            // codes 12, 13: past twice the upper arm, unless alwaysReach
-            if !r.always && (wp - c.b.joint_pos(l.e[1])).length() > 2.0 * (c.b.joint_pos(l.e[2]) - c.b.joint_pos(l.e[1])).length() {
-                crate::extras_core_rdr2::trace_first("reach for wound: a leg wound past twice the upper arm");
+            // codes 12, 13: past twice the arm (limb +0x3a8, its length to the hand: recorded 0.626), unless alwaysReach
+            let arm = (c.b.joint_pos(l.e[2]) - c.b.joint_pos(l.e[1])).length() + (c.b.joint_pos(l.e[3]) - c.b.joint_pos(l.e[2])).length() + (hand - c.b.joint_pos(l.e[3])).length();
+            if !r.always && (wp - c.b.joint_pos(l.e[1])).length() > 2.0 * arm {
+                crate::extras_core_rdr2::trace_first("reach for wound: a leg wound past twice the arm");
                 return;
             }
             if c.upright {
