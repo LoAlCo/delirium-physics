@@ -375,6 +375,7 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "ftkAlwaysChangeFall", kind: Kind::Bool, used: true, doc: "RDR2 core: catchFall's kneel flag though the knees are uneven (false)" },
     ] },
     Message { name: "shotSpin", params: &[
+        Param { name: "shotSpin", kind: Kind::Bool, used: true, doc: "RDR2 core: the module's switch (true); off, the block's spine limits still reach the shot" },
         Param { name: "spinelean1limit", kind: Kind::Float, used: true, doc: "RDR2 core: +0x3a0: the spine's lean1 limit raised to this, every joint, a while after a bullet (-0.5: none)" },
         Param { name: "spinelean2limit", kind: Kind::Float, used: true, doc: "RDR2 core: +0x3a4: lean2 (-0.3)" },
         Param { name: "spinetwistlimit", kind: Kind::Float, used: true, doc: "RDR2 core: +0x3a8: twist (-0.3)" },

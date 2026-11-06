@@ -639,7 +639,7 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "floorJointStrength", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "angVelScale", kind: Kind::Float, used: true, doc: "RDR2 core: +0xc8: at the shot's start the parts in the mask have their angular velocity times this (1)" },
         Param { name: "angVelScaleMask", kind: Kind::Str, used: true, doc: "RDR2 core: +0xcc: those parts, a mask by name (fb)" },
-        Param { name: "looseness4Fall", kind: Kind::Float, used: false, doc: "RDR2's: no reader in its core functions" },
+        Param { name: "looseness4Fall", kind: Kind::Float, used: true, doc: "RDR2 core: +0x128: over 0, the shot's strength scale times this while it falls (0x2a8c4b8) (0)" },
         Param { name: "flingTime", kind: Kind::Float, used: false, doc: "RDR2's fling: its start needs a field only its own enter fills, so it doesn't start" },
         Param { name: "deathTime", kind: Kind::Float, used: false, doc: "RDR2's: gated on two dying flags Delirium doesn't have" },
         Param { name: "spineBlendPose", kind: Kind::Int, used: false, doc: "RDR2's 9de396e2: a pose index for the spine blend, not here" },
@@ -1568,6 +1568,7 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("shot", "angVelScale") => { let p = &mut st.shot; p.rdr2.ang_vel_scale = v.f()?; }
         ("shot", "angVelScaleMask") => { let p = &mut st.shot; p.rdr2.ang_vel_mask = v.s()?.as_bytes().first().copied().zip(v.s()?.as_bytes().get(1).copied()).map_or(*b"fb", |(a, b)| [a, b]); }
         ("shot", "useCStrModulation") => { let p = &mut st.shot; p.rdr2.use_cstr = v.b()?; }
+        ("shot", "looseness4Fall") => { let p = &mut st.shot; p.rdr2.looseness4_fall = v.f()?; }
         ("shot", "PointGun") => { let p = &mut st.shot; p.rdr2.point_gun = v.b()?; }
         ("shot", "cStrUpperMin") => { let p = &mut st.shot; p.rdr2.cstr_upper_min = v.f()?; }
         ("shot", "cStrUpperMax") => { let p = &mut st.shot; p.rdr2.cstr_upper_max = v.f()?; }

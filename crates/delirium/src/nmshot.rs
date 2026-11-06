@@ -648,6 +648,24 @@ impl Shot {
         self.flags & 1 != 0
     }
 
+    /// RDR2 core: 0x2a8c4b8 whole: the shot's strength scale, with looseness4Fall while falling, else looseness4Stagger while
+    /// staggerFall runs.
+    pub(crate) fn rdr2_scale_read(&self, stagger: bool) -> f32 {
+        let k = self.rdr2_scale();
+        if !self.rd.started {
+            return k;
+        }
+        let r = self.p.rdr2;
+        if self.failed() && r.looseness4_fall > 0.01 {
+            crate::extras_core_rdr2::trace_first("shot: looseness4Fall on the scale other behaviours read");
+            k * r.looseness4_fall
+        } else if stagger && r.looseness4_stagger > 0.01 {
+            k * r.looseness4_stagger
+        } else {
+            k
+        }
+    }
+
     /// RDR2 core: the shot's strength scale as other behaviours read it (0x2a8c4b8): the weakness ramp once its core
     /// strength module runs, else 1. RDR2 also multiplies in looseness4Fall while falling and looseness4Stagger
     /// while staggerFall runs; Delirium's shot has neither parameter, so those factors are 1 here.
@@ -1734,6 +1752,7 @@ pub struct ShotRdr2 {
     pub ang_vel_mask: [u8; 2],
     /// configureArms' PointGun (+0x289): the hand-over module
     pub point_gun: bool,
+    pub looseness4_fall: f32,
     pub cstr_upper_min: f32,
     pub cstr_upper_max: f32,
     pub cstr_lower_min: f32,
@@ -1760,7 +1779,7 @@ impl Default for ShotRdr2 {
                    braced_side_spin_mult: 1.0, shock_spin_max_twist_vel: -1.0, shock_spin_air_mult: 1.0, shock_spin_one_foot_mult: 1.0, shock_spin_scale_by_lever_arm: true,
                    fling2: false, fling2_side: [true; 2], fling2_override_stagger: false, fling2_before: 0.1, fling2_time: 0.5, fling2_mstiff: [0.95, -1.0],
                    fling2_stiff: [12.0; 2], fling2_damp: [0.7; 2], fling2_relax: [0.5; 2], fling2_angle: [[-1.5, 1.0]; 2], fling2_length: [[0.35, 0.6]; 2],
-                   looseness4_stagger: 0.0, use_cstr: false, ang_vel_mask: *b"fb", point_gun: false, cstr_upper_min: 0.1, cstr_upper_max: 1.0, cstr_lower_min: 0.1, cstr_lower_max: 1.0, bullet_proof_vest: false, always_reset_looseness: true, always_reset_neck: true, spine_blend_exag_cpain: false, floor_weakness_time: 0.1, floor_strength: 0.1, floor_joint_time: 0.1, floor_joint_strength: 0.01, ang_vel_scale: 1.0,
+                   looseness4_stagger: 0.0, use_cstr: false, ang_vel_mask: *b"fb", point_gun: false, looseness4_fall: 0.0, cstr_upper_min: 0.1, cstr_upper_max: 1.0, cstr_lower_min: 0.1, cstr_lower_max: 1.0, bullet_proof_vest: false, always_reset_looseness: true, always_reset_neck: true, spine_blend_exag_cpain: false, floor_weakness_time: 0.1, floor_strength: 0.1, floor_joint_time: 0.1, floor_joint_strength: 0.01, ang_vel_scale: 1.0,
                    always_reach_time: 0.3, aw_speed_mult: 1.0, aw_radius_mult: 1.0, aw_stiffness_add: 4.0, release_wound: 1 }
     }
 }

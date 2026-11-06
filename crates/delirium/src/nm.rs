@@ -1969,7 +1969,8 @@ impl Agent {
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             c.shot_on = self.nm_shot.is_some();
             c.fall_on = self.nm_cf.as_ref().is_some_and(|f| f.active) || self.nm_ru.active;
-            c.shot_scale = self.nm_shot.as_ref().map_or(1.0, |s| s.rdr2_scale());
+            let stagger = self.extras.on.iter().any(|(n, _)| *n == "staggerFall");
+            c.shot_scale = self.nm_shot.as_ref().map_or(1.0, |s| s.rdr2_scale_read(stagger));
             // RDR2 core: fall to knees caps it once kneeling (the shot's +0x6e4)
             if c.ch.rdr2 && c.ch.core.ftk.module_on && c.ch.core.ftk.kneeling {
                 c.shot_scale = c.shot_scale.min(0.35);
