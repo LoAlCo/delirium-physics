@@ -1197,7 +1197,7 @@ fn elastic(e: f64) -> DVec3 {
 fn BOX_MARGIN() -> f32 { delirium_data::kv!(51) }
 
 #[derive(Clone, Copy)]
-struct Held { local: Vec3, ground: Vec3, gap: f32, age: u16, m: u8, fl: u8, imp: Vec3, pimp: Vec3, n: Vec3, inst: u32, off: bool, world: Vec3, wc: Vec3 }
+struct Held { local: Vec3, ground: Vec3, gap: f32, age: u16, m: u8, fl: u8, imp: Vec3, pimp: Vec3, n: Vec3, inst: u32, off: bool, world: Vec3, wc: Vec3, tri: (u32, u32) }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Touch {
@@ -1260,7 +1260,7 @@ impl std::fmt::Debug for MapPoints {
 impl MapPoints {
     pub fn update(&mut self, map: &Collision, shape: gjk::Shape, half: Vec3, rot: Mat3, centre: Vec3) {
         let st = &mut self.0;
-        world_meet(map, Vec3::ZERO, shape, half, rot, centre, centre, st.seen.as_ref(), st.seen_w.as_ref(), st.seen_r.as_ref(), &mut st.held, false);
+        world_meet(map, Vec3::ZERO, shape, half, rot, centre, centre, st.seen.as_ref(), st.seen_w.as_ref(), st.seen_r.as_ref(), &mut st.held, false, None);
         (st.seen, st.seen_w, st.seen_r) = (Some((centre, rot)), Some(centre), Some([rot.x_axis, rot.y_axis, rot.z_axis]));
     }
 
@@ -1304,8 +1304,12 @@ pub fn ped_parts() -> &'static [ObPart] {
 
 #[allow(clippy::too_many_arguments)]
 fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat3, x: Vec3, xw: Vec3, seen: Option<&(Vec3, Mat3)>,
-              seen_w: Option<&Vec3>, seen_r: Option<&[Vec3; 3]>, held: &mut Vec<Held>, careful: bool) {
+              seen_w: Option<&Vec3>, seen_r: Option<&[Vec3; 3]>, held: &mut Vec<Held>, careful: bool, rage: Option<RageMeet>) {
     let bw = xw;
+    if rage.is_some() {
+        rage_refresh(held, tm, bw);
+    }
+    let met = std::cell::RefCell::new(Vec::<u32>::new());
         let last = seen.map_or(x, |s| s.0);
         let fast = (tm.transpose() * seen_w.map_or(x - last, |&w| xw - w)).abs().cmpgt(half).any();
         let leaving = |local: Vec3, face: Vec3| seen.is_some_and(|&(lx, lm)| { let lw = seen_w.map_or(lx + o, |&w| w); crate::vm4(tm.x_axis - lm.x_axis, tm.y_axis - lm.y_axis, tm.z_axis - lm.z_axis, xw - lw, local).vd(face) > delirium_data::kv!(134) });
@@ -1319,11 +1323,14 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                 let (back, world) = (t0 - o, q.a + t0);
                 let local = tm.transpose() * (q.a + back - at);
                 let ground = q.b + back - q.n * WORLD_MARGIN() + o;
-                Held { local, ground, gap: q.dist, age: 0, m: 0, fl: 0, imp: Vec3::ZERO, pimp: Vec3::ZERO, n: q.n, inst: 0, off: false, world, wc: Vec3::ZERO }
+                Held { local, ground, gap: q.dist, age: 0, m: 0, fl: 0, imp: Vec3::ZERO, pimp: Vec3::ZERO, n: q.n, inst: 0, off: false, world, wc: Vec3::ZERO, tri: (0, 0) }
             };
             let frame = |m: Mat3, at: Vec3| crate::bvh::Frame { rows: [m.x_axis, m.y_axis, m.z_axis], t: at + o };
-            let mut found: Vec<(Held, crate::collision::Poly)> = world.tris_in_part(x.min(last) + o - reach, x.max(last) + o + reach,
+            let mut found: Vec<(Held, crate::collision::Poly, Option<(Vec3, gjk::Shape, Mat3, [Vec3; 4])>)> = world.tris_in_part(x.min(last) + o - reach, x.max(last) + o + reach,
                 &frame(tm, x), &frame(last_m, last), -half, half).into_iter().filter_map(|(t, m, dirs, mask, inst, poly)| {
+                if rage.is_some() {
+                    met.borrow_mut().push(inst);
+                }
                 let meets = match poly.frame {
                     Some(f) => box_meets_tri(f.turn.transpose() * (wc - f.at), f.turn.transpose() * sm, wh, f.tri),
                     None => box_meets_tri(wc, sm, wh, t),
@@ -1374,7 +1381,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                 if careful && (leaving(h.local, dirs[0]) || !across_ok(h.ground + h.n * WORLD_MARGIN(), h.n)) {
                     return None;
                 }
-                Some((Held { m, fl: world.poly_flags(poly.first), inst, ..h }, poly))
+                Some((Held { m, fl: world.poly_flags(poly.first), inst, tri: poly.first, ..h }, poly, rage.map(|_| (t0, tri, turn, pen))))
             }).collect();
             found
         };
@@ -1389,18 +1396,27 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                 None => groups.push((r.inst, vec![r])),
             }
         }
-        let mut found: Vec<Option<(Held, crate::collision::Poly)>> = found.into_iter().map(Some).collect();
+        let mut found: Vec<Option<(Held, crate::collision::Poly, Option<(Vec3, gjk::Shape, Mat3, [Vec3; 4])>)>> = found.into_iter().map(Some).collect();
+        if rage.is_some() {
+            let met = met.borrow();
+            groups.retain(|g| met.contains(&g.0));
+        }
         for k in 0..found.len() {
             let Some(poly) = found[k].as_ref().map(|f| f.1) else { continue };
             let mut kept = vec![];
             for j in k..found.len() {
                 if found[j].as_ref().is_some_and(|f| f.1.first == poly.first) {
-                    let (new, _) = found[j].take().unwrap();
+                    let (new, _, tc) = found[j].take().unwrap();
                     let g = match groups.iter().position(|g| g.0 == new.inst) {
                         Some(g) => g,
                         None => { groups.push((new.inst, vec![])); groups.len() - 1 }
                     };
-                    if let Some(i) = hold(&mut groups[g].1, new) {
+                    if let (Some(rm), Some(tc)) = (rage, tc) {
+                        if let Some(i) = rage_hold(&mut groups[g].1, new) {
+                            kept.push((g, i));
+                        }
+                        rage_perturb(rm, &shape, tm, xw, o, tc, new, &mut groups[g].1, &mut kept, g);
+                    } else if let Some(i) = hold(&mut groups[g].1, new) {
                         kept.push((g, i));
                     }
                 }
@@ -1413,7 +1429,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
             }
         }
         groups.sort_by_key(|g| world.level_index(g.0));
-        for (_, held) in groups.iter_mut() {
+        for (_, held) in groups.iter_mut().filter(|_| rage.is_none()) {
             for r in held.iter_mut() {
                 if r.age != 0 {
                     r.gap = (crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) - (r.ground + r.n * WORLD_MARGIN())).vd(r.n);
@@ -1442,6 +1458,160 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
             }
         }
         *held = groups.into_iter().flat_map(|g| g.1).collect();
+}
+
+/// What Rage's collide does that GTA IV's didn't: `nm_first` only. iterations of 0x284038c's perturbation, and whether the part moves enough for one.
+#[derive(Clone, Copy)]
+struct RageMeet { iters: u32, moving: bool }
+
+/// 0x2842988, a manifold's refresh, at the head of the collide: every contact's depth from the new pose, age + 1. Past age 4 it drops at most
+/// one contact a step: the one slid furthest if that's over 2 cm along the surface, else the most separated if that's over 4 cm. So a corner that
+/// lifts stays held, its row inactive, which GTA IV's (all past the margin go, at once) didn't. Whole manifolds go with their pair, by `met`.
+/// 0x285b248, which can spare a slid contact sitting on its triangle, isn't followed [P].
+fn rage_refresh(held: &mut Vec<Held>, tm: Mat3, bw: Vec3) {
+    let mut insts: Vec<u32> = vec![];
+    for r in held.iter_mut() {
+        r.gap = (crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) - (r.ground + r.n * WORLD_MARGIN())).vd(r.n);
+        r.age = r.age.saturating_add(1);
+        if !insts.contains(&r.inst) {
+            insts.push(r.inst);
+        }
+    }
+    for inst in insts {
+        let (mut slid, mut far): ((Option<usize>, f32), (Option<usize>, f32)) = ((None, 0.0), (None, 0.0));
+        for (k, r) in held.iter().enumerate().filter(|(_, r)| r.inst == inst && r.age > 4) {
+            let a = crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local);
+            let d = (r.ground + r.n * WORLD_MARGIN()) - (a - r.n * r.gap);
+            let d = d.vd(d);
+            if d > slid.1 {
+                slid = (Some(k), d);
+            }
+            if r.gap > far.1 {
+                far = (Some(k), r.gap);
+            }
+        }
+        if let (Some(k), true) = (slid.0, slid.1 > 0.0004) {
+            held.swap_remove(k);
+            crate::extras_core_rdr2::trace_once("rage slid", || format!("rage manifold: a contact slid {:.3} m goes", slid.1.sqrt()));
+        } else if let (Some(k), true) = (far.0, far.1 > 0.04) {
+            held.swap_remove(k);
+            crate::extras_core_rdr2::trace_once("rage far", || format!("rage manifold: a contact {:.3} m off goes", far.1));
+        }
+    }
+}
+
+/// 0x2822930 with 0x282fc10 and 0x28236e4: a new contact takes the place of one on the same triangle within 1 mm, on either body, keeping its
+/// impulses and refreshed depth. One from this very collide wins. Otherwise a free slot of six; a full manifold gives up the oldest contact sharing
+/// the new one's normal, within .985 (0x28480e4). If nothing there is older, 0x28480e4 goes on to area rules: `replaced` is the same as its branch for lone normals.
+/// The capsule's form 0x282fd0c, turning the new point by the body's step first, isn't here [P].
+fn rage_hold(held: &mut Vec<Held>, new: Held) -> Option<usize> {
+    let mut near = (None, 1e-6_f32);
+    for (k, r) in held.iter().enumerate().filter(|(_, r)| r.tri == new.tri) {
+        let d = r.local.distance_squared(new.local).min(r.ground.distance_squared(new.ground));
+        if d < near.1 {
+            near = (Some(k), d);
+        }
+    }
+    if let Some(k) = near.0 {
+        if held[k].age == 0 {
+            return None;
+        }
+        held[k] = Held { imp: held[k].imp, pimp: held[k].pimp, gap: held[k].gap, ..new };
+        return Some(k);
+    }
+    if held.len() < 6 {
+        held.push(new);
+        return Some(held.len() - 1);
+    }
+    let mut out = (None, 0);
+    for (k, r) in held.iter().enumerate().filter(|(_, r)| r.n.vd(new.n) > 0.985) {
+        if r.age > out.1 {
+            out = (Some(k), r.age);
+        }
+    }
+    if let Some(k) = out.0 {
+        crate::extras_core_rdr2::trace_once("rage oldest", || "rage manifold: full, the oldest of a normal gives way".to_string());
+        held[k] = new;
+        return Some(k);
+    }
+    replaced(held, new.local).map(|k| { held[k] = new; k })
+}
+
+/// 0x282bf0c's axis, from this collide's contacts on the manifold, `dir` into the ground. One: the centre goes down past it. Two: about the line
+/// between them (0x282b7dc, its sign by their order). Three or more (0x282c124): by angle round the centre, the two either side of a gap of half a turn
+/// or more; none if they ring the centre.
+fn rage_axis(age0: &[Vec3], centre: Vec3, dir: Vec3) -> Option<Vec3> {
+    let proj = |p: Vec3| p - dir * p.vd(dir);
+    let axis = match age0.len() {
+        0 => return None,
+        1 => (centre - age0[0]).vx(dir),
+        2 => proj(age0[0]) - proj(age0[1]),
+        n => {
+            let e1 = if dir.x.abs() <= dir.y.abs() { Vec3::new(0.0, dir.z, -dir.y) } else { Vec3::new(-dir.z, 0.0, dir.x) }.normalize();
+            let e2 = dir.vx(e1);
+            let mut a: Vec<(f32, f32, f32, f32)> = vec![];
+            for p in age0 {
+                let v = *p - centre;
+                let (x, y) = (v.vd(e1), v.vd(e2));
+                let r2 = x * x + y * y;
+                if r2 <= 1e-6 {
+                    return None;
+                }
+                let r = r2.sqrt();
+                let (x, y) = (x / r, y / r);
+                a.push(if x.abs() >= 1e-6 { (x, y, x, y / x) } else { (x, y, f32::MAX.copysign(y), f32::MAX) });
+            }
+            a.sort_by(|p, q| (p.2 >= 0.0).cmp(&(q.2 >= 0.0)).then(p.3.total_cmp(&q.3)));
+            let mut found = None;
+            let mut i = 0;
+            for j in (0..n).rev() {
+                if (a[i].3 < a[j].3) == (a[j].2 * a[i].2 >= 0.0) {
+                    found = Some(proj(e1 * a[j].0 + e2 * a[j].1) - proj(e1 * a[i].0 + e2 * a[i].1));
+                    break;
+                }
+                i = j;
+            }
+            found?
+        }
+    };
+    (axis.vd(axis) > 1e-9).then_some(axis)
+}
+
+/// 0x284038c's perturbation, with 0x282b864: a single GJK gives a box one point, so Rage turns the part about the new contacts, just past where its far
+/// side would touch (2 to 15 degrees), and asks again. The point found is a real one of the part's, kept on the unturned body with the first contact's
+/// normal; its depth is as found until the next refresh. So a flat foot gets both toe corners. Only when the part moves over 1 cm/s, or just woke.
+#[allow(clippy::too_many_arguments)]
+fn rage_perturb(rm: RageMeet, shape: &gjk::Shape, tm: Mat3, xw: Vec3, o: Vec3, (t0, tri, turn, pen): (Vec3, gjk::Shape, Mat3, [Vec3; 4]), base: Held, held: &mut Vec<Held>, kept: &mut Vec<(usize, usize)>, g: usize) {
+    if !rm.moving && rm.iters <= 1 {
+        return;
+    }
+    let (n, dir) = (base.n, -base.n);
+    let margin = match *shape {
+        gjk::Shape::Box(_, m) | gjk::Shape::Capsule(_, m) | gjk::Shape::Tri(_, m) | gjk::Shape::Hull(_, m) | gjk::Shape::Curved(_, m) | gjk::Shape::Tapered(_, _, m) => m,
+    };
+    let nl = Vec3::new(n.vd(tm.x_axis), n.vd(tm.y_axis), n.vd(tm.z_axis));
+    let c = base.local;
+    let back = nl * (2.0 * nl.vd(c)) - c;
+    let far = shape.support(back) + back.normalize_or_zero() * margin - nl * margin - c;
+    let tilt = (std::f32::consts::FRAC_PI_2 - far.normalize_or(Vec3::X).vd(nl).abs().min(1.0).acos() + 1f32.to_radians()).clamp(2f32.to_radians(), 15f32.to_radians());
+    for _ in 0..rm.iters {
+        let age0: Vec<Vec3> = held.iter().filter(|r| r.age == 0).map(|r| crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, xw, r.local)).collect();
+        let Some(axis) = rage_axis(&age0, xw, dir) else { break };
+        let turned = Mat3::from_axis_angle(axis.normalize(), tilt) * tm;
+        let Some(q) = gjk::closest(shape, turned, xw - t0, &tri, turn, Vec3::ZERO, n, f32::INFINITY, Some(gjk::Pen::Tri(pen))) else { break };
+        let reach = delirium_data::kv!(118) + (far.length() * tilt.sin()).max(0.0);
+        if q.dist >= reach {
+            break;
+        }
+        let world = q.a + t0;
+        let local = turned.transpose() * (world - xw);
+        let ground = q.b + t0 - q.n * WORLD_MARGIN();
+        let new = Held { local, ground, gap: q.dist, age: 0, n, world: crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, xw, local), imp: Vec3::ZERO, pimp: Vec3::ZERO, ..base };
+        if let Some(i) = rage_hold(held, new) {
+            kept.push((g, i));
+            crate::extras_core_rdr2::trace_once("rage perturb", || format!("rage perturbation: {} new, a further point at gap {:.4}, turned {:.1} deg, world {:.3?}", age0.len(), new.gap, tilt.to_degrees(), new.world - o));
+        }
+    }
 }
 
 fn hold(held: &mut Vec<Held>, new: Held) -> Option<usize> {
@@ -2763,7 +2933,8 @@ impl Ragdoll {
                 None => gjk::Shape::Capsule(p.half, p.radius * self.radius_scale.get(i).copied().unwrap_or(1.0)),
             };
             if !first {
-                world_meet(world, o, shape, bound_half(p), tm, x, xw, self.seen.get(i), self.seen_w.get(i), self.seen_r.get(i), held, true);
+                let rage = self.nm_first.then(|| RageMeet { iters: if self.age < 0.04 { 3 } else { 1 }, moving: b.v.vd(b.v) >= 1e-4 });
+                world_meet(world, o, shape, bound_half(p), tm, x, xw, self.seen.get(i), self.seen_w.get(i), self.seen_r.get(i), held, true, rage);
             }
             let last = self.seen.get(i).map_or(x, |s| s.0);
             for (k, r) in held.iter().enumerate() {
@@ -3112,7 +3283,7 @@ impl Ragdoll {
                 if c == 1 {
                     st.held.clear();
                 }
-                world_meet(map, o, cp.shape, (cp.hi - cp.lo) * 0.5, cq, cx - o, cx, Some(&(lx - o, lq)), Some(&lx), Some(&[lq.x_axis, lq.y_axis, lq.z_axis]), &mut st.held, false);
+                world_meet(map, o, cp.shape, (cp.hi - cp.lo) * 0.5, cq, cx - o, cx, Some(&(lx - o, lq)), Some(&lx), Some(&[lq.x_axis, lq.y_axis, lq.z_axis]), &mut st.held, false, None);
                 if c == 1 {
                     c1.extend(st.held.iter().map(|r| (ob.id, map.level_index(r.inst))));
                     continue;
@@ -3275,7 +3446,7 @@ impl Ragdoll {
         };
         if let Some((at_a, at_c, n, gap)) = found {
             let into = |q: Mat3, v: Vec3| Vec3::new(v.vd(q.x_axis), v.vd(q.y_axis), v.vd(q.z_axis));
-            let new = Held { local: into(qa, at_a - xa), ground: into(qc, at_c - xc), gap, age: 0, m: 0, fl: 0, imp: Vec3::ZERO, pimp: Vec3::ZERO, n, inst: 0, off: false, world: at_a, wc: at_c };
+            let new = Held { local: into(qa, at_a - xa), ground: into(qc, at_c - xc), gap, age: 0, m: 0, fl: 0, imp: Vec3::ZERO, pimp: Vec3::ZERO, n, inst: 0, off: false, world: at_a, wc: at_c, tri: (0, 0) };
             let swap = |h: &mut Vec<Held>| if flip { h.iter_mut().for_each(|r| std::mem::swap(&mut r.local, &mut r.ground)) };
             swap(held);
             hold(held, if flip { Held { local: new.ground, ground: new.local, ..new } } else { new });
