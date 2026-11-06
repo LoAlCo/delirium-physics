@@ -1235,6 +1235,11 @@ impl Agent {
         self.balance.as_ref().and_then(|b| b.dbm.as_ref()).map(|d| [d.f.pos[0], d.f.pos[1], d.f.centre])
     }
 
+    /// NMX_DUMP: the balancer's step-decision state.
+    pub fn nmx_decision(&self) -> Option<(u8, [f32; 2], f32)> {
+        self.balance.as_ref().and_then(|b| b.dbm.as_ref()).map(|d| (d.f.flags, d.f.dist, d.p.lead))
+    }
+
     pub fn balance_steps(&self) -> Option<(u32, u32)> {
         self.balance.as_ref().filter(|b| b.on()).map(|b| (b.steps, b.dbm.as_ref().map_or(0, |d| d.f.stepping)))
     }

@@ -10266,7 +10266,7 @@ mod nmx {
         pub fn new(p: &str) -> Dump {
             let mut frames = std::io::BufWriter::new(std::fs::File::create(format!("{p}.frames.csv")).unwrap());
             let mut joints = std::io::BufWriter::new(std::fs::File::create(format!("{p}.joints.csv")).unwrap());
-            let _ = writeln!(frames, "frame,t,com_x,com_y,com_z,comv_x,comv_y,comv_z,com_speed,fwd_x,fwd_y,fwd_z,up_x,up_y,up_z,tilt_deg,lowest_part_z,head_z,mass,bal_steps,bal_foot,health,active,tl_x,tl_y,tl_z,tr_x,tr_y,tr_z,cx,cy,cz");
+            let _ = writeln!(frames, "frame,t,com_x,com_y,com_z,comv_x,comv_y,comv_z,com_speed,fwd_x,fwd_y,fwd_z,up_x,up_y,up_z,tilt_deg,lowest_part_z,head_z,mass,bal_steps,bal_foot,health,active,tl_x,tl_y,tl_z,tr_x,tr_y,tr_z,cx,cy,cz,dflags,dl,dr,dlead");
             let _ = writeln!(joints, "frame,t,joint,des0,des1,des2,act0,act1,act2,muscle_stiffness,strength,damping,oppose_gravity,injury");
             let mut parts = std::io::BufWriter::new(std::fs::File::create(format!("{p}.parts.csv")).unwrap());
             let _ = writeln!(parts, "frame,part,mass,cx,cy,cz,qx,qy,qz,qw,vx,vy,vz,wx,wy,wz,touch,contacts,lx,ly,lz");
@@ -10295,7 +10295,7 @@ mod nmx {
             let t = (i + 1) as f32 / 60.0;
             let _ = writeln!(self.frames, "{i},{t},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{m},{steps},{foot},{},{}",
                 c.x, c.y, c.z, v.x, v.y, v.z, v.length(), s.fwd.x, s.fwd.y, s.fwd.z, up.x, up.y, up.z, up.z.clamp(-1.0, 1.0).acos().to_degrees(),
-                low, fr.get(12).map_or(0.0, |f| f.translation.z), sim.health, format!("{},{}", sim.agent.nmx_active().join(";"), sim.agent.nmx_targets().map_or(String::from("0,0,0,0,0,0,0,0,0"), |t| format!("{},{},{},{},{},{},{},{},{}", t[0].x, t[0].y, t[0].z, t[1].x, t[1].y, t[1].z, t[2].x, t[2].y, t[2].z))));
+                low, fr.get(12).map_or(0.0, |f| f.translation.z), sim.health, format!("{},{},{}", sim.agent.nmx_active().join(";"), sim.agent.nmx_targets().map_or(String::from("0,0,0,0,0,0,0,0,0"), |t| format!("{},{},{},{},{},{},{},{},{}", t[0].x, t[0].y, t[0].z, t[1].x, t[1].y, t[1].z, t[2].x, t[2].y, t[2].z)), sim.agent.nmx_decision().map_or(String::from("0,0,0,0"), |d| format!("{},{},{},{}", d.0, d.1[0], d.1[1], d.2))));
             if let Some(ch) = sim.agent.character() {
                 for (j, e) in ch.eff.iter().enumerate() {
                     let a = ch.read.get(j).copied().unwrap_or([f32::NAN; 3]);
