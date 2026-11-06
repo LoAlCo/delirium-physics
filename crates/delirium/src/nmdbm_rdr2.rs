@@ -707,8 +707,14 @@ impl Rdr2 {
     /// configureBalance's extraSteps and extraTime (0x2a63cbc): they give back steps and time, never below none used.
     pub fn extra(&mut self, name: &str, v: f32) {
         match name {
-            "extraSteps" if v > 0.0 => self.extra_steps = (self.extra_steps + v as u32).min(self.steps),
-            "extraTime" if v >= 0.0 => self.time = (self.time - v).max(0.0),
+            "extraSteps" if v > 0.0 => {
+                crate::extras_core_rdr2::trace(|| format!("balancer: {v} extra steps at {} steps", self.steps));
+                self.extra_steps = (self.extra_steps + v as u32).min(self.steps);
+            }
+            "extraTime" if v >= 0.0 => {
+                crate::extras_core_rdr2::trace(|| format!("balancer: {v} s extra at {:.2} s", self.time));
+                self.time = (self.time - v).max(0.0);
+            }
             _ => {}
         }
     }
@@ -1047,6 +1053,7 @@ impl Rdr2 {
     pub fn may_step(&self) -> bool {
         // a turn step waits for stepTurnWait (0x2ab32bc)
         if self.turning && self.p.step_turn_wait > 0.0 && self.since_step <= self.p.step_turn_wait {
+            crate::extras_core_rdr2::trace_once("stepTurnWait", || format!("{:.2} of {}", self.since_step, self.p.step_turn_wait));
             return false;
         }
         let wait = if self.speed < STEP_WAIT_SPEED { self.p.step_wait } else { FAST_STEP_WAIT };
