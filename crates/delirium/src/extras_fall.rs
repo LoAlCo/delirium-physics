@@ -67,6 +67,7 @@ pub static MESSAGES: [Message; 7] = [
         Param { name: "strikeReduction", kind: Kind::Float, used: true, doc: "RDR2 core: a released stance leg's hip takes this off and its knee twice it, going forward (1)" },
         Param { name: "strikereductionb", kind: Kind::Float, used: true, doc: "RDR2 core: the same going back (1)" },
         Param { name: "lowerbodystiffnessb", kind: Kind::Float, used: true, doc: "RDR2 core: all the leg stiffness times this going back (1)" },
+        Param { name: "?86f98004", kind: Kind::Float, used: true, doc: "RDR2 core: +0x8c, the hips' and knees' muscle stiffness (0.7)" },
         Param { name: "lowerBodyStiffnessEnd", kind: Kind::Float, used: true, doc: "leg stiffness at the end of the wind-down (3)" },
         Param { name: "staggerStepProb", kind: Kind::Float, used: true, doc: "chance a step is a stagger, pushed off (0.5)" },
         Param { name: "stepsTillStartEnd", kind: Kind::Int, used: true, doc: "steps before the wind-down (6)" },
@@ -745,6 +746,7 @@ impl Extra for StaggerFall {
 /// staggerFall message, used with the RDR2 core.
 #[derive(Clone, Copy, Debug)]
 struct StgParams {
+    leg_muscle: f32,
     /// arm and spine (stiffness, damping) once ramped, and at the start
     arm: [f32; 2],
     spine: [f32; 2],
@@ -792,6 +794,7 @@ impl StgParams {
         let (hold, ramp) = (p.f("timeAtStartValues", 0.0)?, p.f("rampTimeFromStartValues", 0.0)?);
         p.f("staggerStepProb", 0.0)?;
         let steps_end = p.i("stepsTillStartEnd", 100)?;
+        let leg_muscle = p.f("?86f98004", STG_LEG_MUSCLE)?;
         let legs = p.f("lowerBodyStiffness", 17.0)?;
         let legs_end = [p.f("lowerBodyStiffnessEnd", 8.0)?, p.f("timeStartEnd", 100.0)?, p.f("rampTimeToEndValues", 0.0)?];
         let strike = [p.f("strikeReduction", 1.0)?, p.f("strikereductionb", 1.0)?];
@@ -812,7 +815,7 @@ impl StgParams {
         let firing = p.b("firingInputOutput", false)?;
         let upper_body = p.b("upperBodyReaction", true)?;
         let fall_red = p.f("fallreduction", 0.0)?;
-        Ok(StgParams { arm, spine, arm_start, spine_start, hold, ramp, steps_end, legs, legs_end, strike, per_step, legs_back, prediction, lean_rate, com, hip,
+        Ok(StgParams { leg_muscle, arm, spine, arm_start, spine_start, hold, ramp, steps_end, legs, legs_end, strike, per_step, legs_back, prediction, lean_rate, com, hip,
                        total: STG_TOTAL, bonus: STG_BONUS, push_dist, push_knee, push_vel, force_thresh, head_vel_prob, head, head_pos,
                        time_to_fall, fall_type, firing, upper_body, fall_red })
     }
@@ -1069,9 +1072,9 @@ impl StgRdr2 {
             if w < 1.0 && bal.stepping as usize != i + 1 {
                 (hip, knee) = (hip * w, knee * w);
             }
-            c.ch.eff[(*KNEE())[i]].set_stiffness(knee, 0.9, Some(STG_LEG_MUSCLE));
+            c.ch.eff[(*KNEE())[i]].set_stiffness(knee, 0.9, Some(p.leg_muscle));
             c.ch.eff[(*ANKLE())[i]].set_stiffness(ankle, 1.0, Some(STG_ANKLE_MUSCLE));
-            c.ch.eff[(*HIP())[i]].set_stiffness(hip, 1.0, Some(STG_LEG_MUSCLE));
+            c.ch.eff[(*HIP())[i]].set_stiffness(hip, 1.0, Some(p.leg_muscle));
         }
         c.ch.set_stiffness(spine[0], spine[1], "us", None);
         c.ch.set_stiffness(spine[0], spine[1], "un", None);
