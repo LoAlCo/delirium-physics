@@ -2459,7 +2459,7 @@ impl Ragdoll {
         }
     }
 
-    fn limit_rows(&mut self, artic: &Artic, joints: &[Option<Joint>], h: f32, qd0: &[f64]) -> (Vec<Row>, Vec<Row>) {
+    fn limit_rows(&mut self, artic: &Artic, joints: &[Option<Joint>], h: f32, qd0: &[f64], dvw: &[(Vec3, Vec3)]) -> (Vec<Row>, Vec<Row>) {
         self.prep_twist = vec![None; joints.len()];
         let mut touched: Vec<bool> = self.held.iter().map(|h| !h.is_empty()).collect();
         touched.resize(joints.len(), false);
@@ -2510,17 +2510,28 @@ impl Ragdoll {
                     jr[delirium_data::kv!(6 int) * j.parent + delirium_data::kv!(0 int) + i] += u[i] as f64;
                 }
                 let b0 = -jr.iter().zip(qd0).map(|(x, y)| x * y).sum::<f64>();
-                let to = (c as f64 - 1.0) * b0 - ((LIMIT_MARGIN() - o).max(0.0) / h) as f64 + bs.map_or(0.0, |w| b0 - w as f64);
+                // RDR2 core: the stop is the margin's limit itself, GTA IV's rows go a margin past it. Recorded, a stance knee stops at
+                // -0.033 with no speed left; the Rage code for it isn't read
+                let lm = if self.nm_first { 0.0 } else { LIMIT_MARGIN() };
+                let to = (c as f64 - 1.0) * b0 - ((lm - o).max(0.0) / h) as f64 + bs.map_or(0.0, |w| b0 - w as f64);
                 let bv = match order {
                     Some(order) => sdot(cl.w, u, order) - sdot(pl.w, u, order),
                     None => bs.unwrap_or(0.0),
                 };
-                let m = LIMIT_MARGIN() - o;
+                let m = lm - o;
                 let m = if -m >= 0.0 { 0.0 } else { m };
                 let t = fneg(m.mul_add(1.0 / h, -(bv * c)));
+                // RDR2 core: this step's forces count against the stop. Recorded, a knee at its stop has no speed left (0.00 rad/s
+                // against 2 to 3 here with GTA IV's rows, where the drive's push over the step stays in the velocity)
+                let (to, t) = if self.nm_first {
+                    let d = u.dot(dvw[k].1 - dvw[j.parent].1) * c;
+                    (to + d as f64, t + d)
+                } else {
+                    (to, t)
+                };
                 let q = sdot(u, artic.answer(k, u), b"yzx") * c;
                 let r = crate::estimate::vrefp(q);
-                found.push((jr, to, o, c, G11 { c: k, p: j.parent, u, t, k: 0.0 - r.mul_add(fneg(r.mul_add(q, -1.0)), r) }));
+                found.push((jr, to, if self.nm_first { o + LIMIT_MARGIN() } else { o }, c, G11 { c: k, p: j.parent, u, t, k: 0.0 - r.mul_add(fneg(r.mul_add(q, -1.0)), r) }));
             }
         }
         for g in found.chunks(delirium_data::kv!(1 int)) {
@@ -3446,7 +3457,7 @@ impl Ragdoll {
         let (mut rows, blocks, push_blocks, order, ghosts, turned) = self.contacts(build, world, &artic, h, &pose, obstacles, others, &free, &artic.forces(&lt, h), &joints, first);
         let quiet = resquared && turned.is_none() && rows.is_empty() && blocks.is_empty() && push_blocks.is_empty();
         let artic = turned.unwrap_or(artic);
-        let (mut lr, mut push) = self.limit_rows(&artic, &joints, h, &qd0);
+        let (mut lr, mut push) = self.limit_rows(&artic, &joints, h, &qd0, &dvw);
         let (artic, lt, free_vel, free) = if quiet && lr.is_empty() && push.is_empty() {
             self.ped_inst = self.held_inst;
             let artic = self.artic(&joints);
@@ -3457,7 +3468,7 @@ impl Ragdoll {
             let dvw: Vec<(Vec3, Vec3)> = self.velocities(&artic, &lt, h, true).iter().zip(&self.bodies).map(|(&(v, w), b)| (v - b.v, w - b.w)).collect();
             self.armature = artic.arm.clone();
             let free_vel = self.bodies.iter().zip(&dvw).map(|(b, d)| (b.v + d.0, b.w + d.1)).collect();
-            (lr, push) = self.limit_rows(&artic, &joints, h, &qd0);
+            (lr, push) = self.limit_rows(&artic, &joints, h, &qd0, &dvw);
             (artic, lt, free_vel, spatial_of(&dvw, &self.bodies, x0))
         } else {
             (artic, lt, free_vel, free)
