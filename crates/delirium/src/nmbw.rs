@@ -119,8 +119,10 @@ impl Writhe {
             for j in Character::mask(self.mask) {
                 ch.eff[j].reset(&ch.joints[j]);
             }
-            // (the back's muscle 0.75 in the pooled request, priority -10, doesn't reach the joint: recorded on all three shots,
-            // the spine's muscle on that tick is the rig's 1.5, under the writhe's strengths. Why isn't read, [P])
+            // (the back's muscle 0.75 in the pooled request, priority -10, doesn't reach the joint: recorded on all three shots, the
+            // spine's muscle on that tick is the rig's 1.5. The shot's activation queues its reset of the body off the legs at the
+            // same priority -10 (rdr2_shot_core.md 5) and a later write wins a tie; that the shot's comes after the writhe's in the
+            // task's sends isn't read, [P])
             self.stiffness_rdr2(ch, None);
         }
     }
