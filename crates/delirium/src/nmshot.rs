@@ -159,6 +159,8 @@ pub struct Out {
     pub head_look_target: Option<Vec3>,
     pub head_look_activate: bool,
     pub head_look_stop: bool,
+    /// RDR2 core: a look at this priority (pointGun's 0x12, 0xb)
+    pub head_look_prio: Option<(u8, Vec3)>,
     pub catch_fall: Option<[f32; 3]>,
     pub roll_up: Option<f32>,
     pub fall_stop: bool,

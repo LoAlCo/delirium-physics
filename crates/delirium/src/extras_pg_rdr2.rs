@@ -6,8 +6,8 @@
 //! held weapon; the gun's axis in the hand is the hand's -row 1, which is what RDR2's own facing test for a pistol
 //! compares it with (the game's registerWeapon matrix has no source here); weapon attachment constraints, gun mass and
 //! the rifle grip's re-aim on the muzzle (no such things) aren't run, though their parameters are read. The reach request
-//! (type 9) goes to Delirium's limb IK with RDR2's clavicle and wrist passes: RDR2's solver bodies 0x2a44338 and 0x2a43794
-//! (usePistolIK's) belong to the core and aren't ported. The hand-to-hand and rifle constraints are Delirium's grip ropes.
+//! (type 9) runs RDR2's two solvers, 0x2a430f4 with its chain 0x2a44338, and 0x2a43794 (usePistolIK's); pointGun is their
+//! only user in the game. The hand-to-hand and rifle constraints are Delirium's grip ropes.
 use crate::extras::{Extra, P};
 use crate::extras_ysk_rdr2::{note, parts, rp};
 use crate::msg::{Error, Kind, Message, Param};
@@ -87,7 +87,7 @@ const PARAMS: &[Param] = &[
     p!("twistoffsetrifle", Float, "the spine twist's offset for a rifle (-0.6)"),
     p!("twistoffsetpistol", Float, "for a pistol (-0.6)"),
     p!("probelength", Float, "> 0: a ray this long along the aim; a hit takes the arm neutral (-1)"),
-    p!("usePistolIK", Bool, "RDR2's pistol solver, not ported: read only (true)"),
+    p!("usePistolIK", Bool, "a one-handed arm uses RDR2's pistol solver (true)"),
     p!("pistolfromhip", Bool, "the pistol arm's clavicle as a rifle's (false)"),
     p!("useSpineTwist", Bool, "(true)"),
     p!("useTurnToTarget", Bool, "the balancer turns him to the target (false)"),
@@ -118,7 +118,7 @@ const PARAMS: &[Param] = &[
     p!("animSource", Int, "RDR2's incoming buffer; Delirium has one: read only (2)"),
     p!("measurecontinuous", Bool, "the parent offsets and distances each step too (false)"),
     p!("measureAlongHand", Bool, "RDR2's uncracked a5fe6796: the parent offset along the hand's line instead of its height (false)"),
-    p!("pistolIkArg", Float, "RDR2's uncracked 08b1dc5b, for its pistol solver: read only (0.05)"),
+    p!("pistolIkArg", Float, "RDR2's uncracked 08b1dc5b: the pistol solver bends the upper arm this far off the line to the target, rad (0.05)"),
     p!("constraintStrength", Float, "the support pull (2)"),
     p!("pullRadius", Float, "RDR2's uncracked fb1749eb: the pull starts at 3 x this, m (0.1)"),
     p!("timeWarpActive", Bool, "(false)"),
@@ -153,14 +153,15 @@ const GRIP: [([Vec3; 3], Vec3); 2] = [
     ([Vec3::new(-0.4808, -0.8607, -0.1676), Vec3::new(-0.7854, 0.5077, -0.3542), Vec3::new(0.3900, -0.0387, -0.9200)], Vec3::new(-0.0703, 0.0198, -0.0676)),
 ];
 
-/// The rows of a frame; the gun's rows from a hand's: muzzle (-row 1), then the other two keeping it right-handed.
+/// The gun's rows from a hand's (ours, RDR2's weapon matrix has no source): muzzle -row 1, RDR2's own facing test; the roll is
+/// the one a hanging hand has with its thumb up the gun, the aim frame's row 2: on this rig the thumb is -row 2 on both hands.
 fn gun_rows(h: &M34) -> [Vec3; 3] {
-    [-h.b, h.a, h.c]
+    [-h.b, -h.a, -h.c]
 }
 
 /// A hand's frame whose gun has these rows.
 fn hand_for(gun: [Vec3; 3], d: Vec3) -> M34 {
-    M34 { a: gun[1], b: -gun[0], c: gun[2], d }
+    M34 { a: -gun[1], b: -gun[0], c: -gun[2], d }
 }
 
 fn mul(g: &[Vec3; 3], r: &[Vec3; 3]) -> [Vec3; 3] {
@@ -234,6 +235,7 @@ struct Params {
     error_threshold: f32,
     twist_offset: (f32, f32),
     probe: f32,
+    pistol_ik: (bool, f32),
     from_hip: bool,
     use_twist: bool,
     use_turn: bool,
@@ -272,7 +274,7 @@ impl Params {
     fn new(p: &mut P) -> Result<Params, Error> {
         // read only: nothing here to give them to
         let _ = (p.f("massMultDetachedSupport", 0.1)?, p.f("weaponStrengthDetached", 0.3)?, p.f("weaponStrengthAway", 0.5)?);
-        let _ = (p.b("usePistolIK", true)?, p.i("animSource", 2)?, p.f("pistolIkArg", 0.05)?);
+        let _ = p.i("animSource", 2)?;
         Ok(Params {
             weapon: [p.i("leftWeapon", -1)?, p.i("weapon", -1)?],
             target: [p.v("leftHandTarget", Vec3::ZERO)?, p.v("rightHandTarget", Vec3::ZERO)?],
@@ -301,7 +303,7 @@ impl Params {
             limits: [p.f("acrossLimit", 90.0)?, p.f("awayLimit", 90.0)?, p.f("upLimit", 90.0)?, p.f("downLimit", 45.0)?],
             error_threshold: p.f("errorThreshold", 0.3926)?,
             twist_offset: (p.f("twistoffsetrifle", -0.6)?, p.f("twistoffsetpistol", -0.6)?),
-            probe: p.f("probelength", -1.0)?, from_hip: p.b("pistolfromhip", false)?,
+            probe: p.f("probelength", -1.0)?, pistol_ik: (p.b("usePistolIK", true)?, p.f("pistolIkArg", 0.05)?), from_hip: p.b("pistolfromhip", false)?,
             use_twist: p.b("useSpineTwist", true)?, use_turn: p.b("useTurnToTarget", false)?,
             step_wait: p.f("stepturnwait", 0.5)?, step_facing: p.f("stepTurnFacing", 0.9)?, step_turn: p.b("stepTurn", false)?,
             use_look: p.b("useHeadLook", true)?,
@@ -427,6 +429,8 @@ pub struct PointGun {
     /// +0xb4 a new target; lassoed by the chest: yanked's coupling
     new_target: bool,
     yanked: bool,
+    /// the pistol solver's limit factor, with its hysteresis (RDR2's global at 0x3cc7ca8, 1.15 to start)
+    pik_limit: f32,
     looking: bool,
     dt: f32,
     ws: [i32; 2],
@@ -447,7 +451,7 @@ impl PointGun {
             side_t: 0.0, broken_t: 0.0, conn_t: 0.0, conn_for: 0.0, extra: 0.0, turn_t: 0.0, look_t: 0.0, side_pose: 1, fed: 0, g: 1, s: 0,
             probe_hit: [false; 2], fall_rifle: false, fall_support: false, support_on: true, duck_neutral: false, two: false, below: false,
             support_mode: false, look_r: [false, true], connected: false, exists: false, allowed: true, connected_kept: true,
-            new_target: true, yanked: false, looking: false, dt: 1.0 / 60.0, ws: [0; 2], ropes: vec![], pair_off: vec![], block: [false; 2],
+            new_target: true, yanked: false, pik_limit: 1.15, looking: false, dt: 1.0 / 60.0, ws: [0; 2], ropes: vec![], pair_off: vec![], block: [false; 2],
             said: 0, out: vec![], fallback: None,
         };
         if fire {
@@ -565,7 +569,9 @@ impl PointGun {
         self.ws = self.states(c);
         (self.g, self.s) = Self::hands(self.ws);
         let l = limb(0);
-        self.arm_len = (c.b.joint_pos(l.e[2]) - c.b.joint_pos(l.e[1])).length() + (c.b.joint_pos(l.e[3]) - c.b.joint_pos(l.e[2])).length() + 0.023;
+        // limb +0x3a8 is the arm's length to the hand, not the wrist (rdr2_core3.md: recorded 0.626, +0x3ac 0.558 to the wrist)
+        self.arm_len = (c.b.joint_pos(l.e[2]) - c.b.joint_pos(l.e[1])).length() + (c.b.joint_pos(l.e[3]) - c.b.joint_pos(l.e[2])).length()
+            + (c.b.at(l.p[3]) - c.b.joint_pos(l.e[3])).length() + 0.023;
         self.allowed = c.ch.random() < self.p.support_prob;
         for i in 0..2 {
             self.anchor(c, i);
@@ -579,6 +585,14 @@ impl PointGun {
         note(format_args!("pointGun: start: gun axis against the hand's line {:.3}, weapon states {:?}, arm length {:.3}", (-h.b).dot(along), self.ws, self.arm_len));
         let chest = c.b.pmat(chest_part()).m;
         let (ls, rs) = (c.b.joint_pos(limb(0).e[1]), c.b.joint_pos(limb(1).e[1]));
+        for i in 0..2 {
+            let (h, fore) = (c.b.part(limb(i).p[3]).m, c.b.part(limb(i).p[2]).m);
+            let f = |v: Vec3| [v.dot(chest.a), v.dot(chest.b), v.dot(chest.c)];
+            let fingers = unit(h.d - c.b.joint_pos(limb(i).e[3]));
+            let (w, d) = (c.b.eff3(limb(i).e[3]), &c.ch.joints[limb(i).e[3]]);
+            note(format_args!("pointGun: start: hand {i} in the chest's rows: a {:.2?} b {:.2?} c {:.2?} line {:.2?}; forearm b {:.2?}; wrist half limits {:.2} {:.2} {:.2} mid {:.2?}",
+                f(h.a), f(h.b), f(h.c), f(fingers), f(fore.b), w.half_lean1, w.half_lean2, w.half_twist, d.limits));
+        }
         note(format_args!("pointGun: start: the chest's row 0 up {:.2}, row 1 toward his left {:.2}, row 2 forward {:.2}; COM rows up {:.2} {:.2} {:.2}",
             chest.a.dot(c.up), chest.b.dot(unit(ls - rs)), chest.c.dot(unit((ls - rs).cross(c.up))), c.m.a.dot(c.up), c.m.b.dot(c.up), c.m.c.dot(c.up)));
         self.started = true;
@@ -791,75 +805,173 @@ impl PointGun {
         self.arms[i] = a;
     }
 
-    /// The type-9 reach request (0x2a430f4): the clavicle, the arm by Delirium's IK, the wrist turned to the target frame by `w`.
+    /// 0x2a42ca8 (at the point, within 0.9 of the limits) or 0x2a42ebc (following the aim, from the incoming pose's, 0.99): raw (tw, l1, l2).
+    fn clavicle_raw(&mut self, c: &Ctx, i: usize, x: Vec3, follow: bool, src: Option<&[M34]>) -> [f32; 3] {
+        let l = limb(i);
+        let e = c.b.eff3(l.e[0]);
+        if !follow {
+            self.ran(9, "the clavicle's reach (0x2a42ca8)");
+            let to = unit(x - c.b.joint_pos(l.e[0]));
+            let h = Vec3::new(e.m.a.dot(to), e.m.b.dot(to), e.m.c.dot(to));
+            let raw = crate::nmrs::angles(Quat::from_rotation_arc(Vec3::Z, h.try_normalize().unwrap_or(Vec3::Z)));
+            return limit(&e, raw, 0.9).0;
+        }
+        self.ran(10, "the rifle's clavicle (0x2a42ebc)");
+        let to = unit(x - c.b.joint_pos(l.e[1]));
+        let (fx, fy) = (e.m.a.dot(to), -e.m.b.dot(to));
+        let [mut tw, mut l1, mut l2] = src.map_or([0.0; 3], |m| crate::nmrs::angles(rest(c, l.e[0], Some(m))));
+        if fy < -0.01 {
+            l1 = fy * -1.04;
+        }
+        if fx > 0.0 {
+            if fy > 0.7 {
+                l2 += 2.0 * fx * (fy - 0.7) * -2.0;
+            }
+            tw = fx * -0.35;
+        }
+        limit(&e, [tw, l1, l2], 0.99).0
+    }
+
+    /// The clavicle written (blended toward the incoming pose by `blend`, a lean of `most` of its limits after it), and the
+    /// shoulder's frame it leaves (0x2a2fcac).
+    fn set_clavicle(&mut self, c: &mut Ctx, i: usize, mut raw: [f32; 3], blend: f32, most: f32, src: Option<&[M34]>) -> Fr {
+        let l = limb(i);
+        if let (true, Some(m)) = (blend > 0.0, src) {
+            self.ran(11, "the clavicle blended toward the incoming pose");
+            let t = crate::nmrs::angles(rest(c, l.e[0], Some(m)));
+            raw = std::array::from_fn(|k| raw[k] + (t[k] - raw[k]) * blend.min(1.0));
+            raw = limit(&c.b.eff3(l.e[0]), raw, most).0;
+        }
+        write3(c, l.e[0], raw);
+        let e = c.b.eff1(l.e[0]);
+        let on_it = fr(&e.m).then(Fr { q: crate::nmrs::rotation(raw), d: Vec3::ZERO });
+        on_it.then(fr(&e.child).inv().then(fr(&c.b.eff1(l.e[1]).m)))
+    }
+
+    /// The chain 0x2a44338: the elbow from the triangle in its hinge's frame, the shoulder from the source pose turned so the
+    /// wrist lies on the target, then by the elbow attitude about that line. Returns the shoulder's rotation and the elbow's angle.
+    fn chain(&mut self, c: &mut Ctx, i: usize, x: Vec3, attitude: f32, p: Fr, src: Option<&[M34]>) -> (Quat, f32) {
+        self.ran(45, "the chain solver (0x2a44338)");
+        let l = limb(i);
+        let e = c.b.limb(l.e[1], l.e[2]);
+        let (row, el) = ([e.a, e.b, e.c], c.b.eff1(l.e[2]));
+        let d = c.b.joint_pos(l.e[3]) - el.pos;
+        let v = Vec3::new(el.child.a.dot(d), el.child.b.dot(d), el.child.c.dot(d));
+        let u = Vec3::new(e.a.dot(-e.d), e.b.dot(-e.d), e.c.dot(-e.d));
+        let t = p.q.inverse() * (x - p.d);
+        let most = on(&row, e.d, v).length();
+        let mut len = t.length();
+        if most < len {
+            len = most - 0.001;
+        }
+        let aa = -2.0 * v.x * u.x - 2.0 * v.y * u.y;
+        let bb = 2.0 * u.x * v.y - 2.0 * v.x * u.y;
+        let cc = len * len - u.length_squared() - v.length_squared() + 2.0 * v.z * u.z;
+        let root = (bb * bb + aa * aa - cc * cc).clamp(0.0, 10.0).sqrt();
+        let (top, under) = (-bb - root, -aa - cc);
+        let half = if top == 0.0 && under == 0.0 { 0.0 } else { (top / under).atan() };
+        let bend = half + half;
+        let w = on(&row, e.d, Quat::from_rotation_z(bend) * v);
+        let start = rest(c, l.e[1], src);
+        let wa = start * w;
+        let (dt, turn) = (t.try_normalize().unwrap_or(Vec3::Z), Quat::from_rotation_arc(wa.try_normalize().unwrap_or(Vec3::Z), t.try_normalize().unwrap_or(Vec3::Z)));
+        (Quat::from_axis_angle(dt, -attitude) * turn * start, bend)
+    }
+
+    /// The type-9 request's first solver (0x2a430f4): clavicle, the pistol's pull-in past the shoulder's range, the chain, the
+    /// wrist on the frame the chain leaves, times its weight.
     #[allow(clippy::too_many_arguments)]
     fn reach(&mut self, c: &mut Ctx, i: usize, goal: M34, elbow: f32, blend: f32, w: f32, support: bool, hip: bool) {
         let l = limb(i);
-        let side = if i == 0 { 1.0 } else { -1.0 };
-        let shoulder = c.b.joint_pos(l.e[1]);
-        let mut x = goal.d;
-        let e = c.b.eff3(l.e[0]);
-        let to = unit(x - shoulder);
-        let (limits, flip) = (c.ch.joints[l.e[0]].limits, c.ch.joints[l.e[0]].flip);
-        let raw = if !hip || support {
-            // 0x2a42ca8: the clavicle turned at the point, within 0.9 of its limits
-            self.ran(9, "the clavicle's reach (0x2a42ca8)");
-            let h = Vec3::new(e.m.a.dot(to), e.m.b.dot(to), e.m.c.dot(to));
-            let [tw, l1, l2] = crate::nmrs::angles(Quat::from_rotation_arc(Vec3::Z, unit(h).try_normalize().unwrap_or(Vec3::Z)));
-            let k = (l1 * l1 / (e.half_lean1 * e.half_lean1) + l2 * l2 / (e.half_lean2 * e.half_lean2)).sqrt();
-            let s = if k > 0.9 { 0.9 / k } else { 1.0 };
-            [l1 * s, l2 * s, tw.clamp(-e.half_twist * 0.9, e.half_twist * 0.9)]
-        } else {
-            // 0x2a42ebc: the rifle's clavicle follows the aim, from the incoming pose's
-            self.ran(10, "the rifle's clavicle (0x2a42ebc)");
-            let (fx, fy) = (e.m.a.dot(to), -e.m.b.dot(to));
-            let [mut l1, mut l2, mut tw] = [0.0; 3];
-            if fy < -0.01 {
-                l1 = fy * -1.04;
-            }
-            if fx > 0.0 {
-                if fy > 0.7 {
-                    l2 += 2.0 * fx * (fy - 0.7) * -2.0;
-                }
-                tw = fx * -0.35;
-            }
-            [l1, l2, tw]
-        };
-        c.ch.eff[l.e[0]].desired = crate::nmrs::effector_angles(raw, &limits, flip);
-        let inc = self.incoming(c).is_some();
-        if blend >= 0.0 && inc {
-            let m = crate::nmrs::incoming_rows(&c.b.doll.links, c.incoming);
-            let t = c.ch.incoming_angle(l.e[0], &m);
-            let d = &mut c.ch.eff[l.e[0]].desired;
-            *d = std::array::from_fn(|k| d[k] + (t[k] - d[k]) * blend);
-            self.ran(11, "the clavicle blended toward the incoming pose");
-        }
+        let src = self.incoming(c);
+        let src = src.as_deref();
+        let hand = c.b.part(l.p[3]).m;
+        let wrist = c.b.joint_pos(l.e[3]) - hand.d;
+        let mut x = on(&[goal.a, goal.b, goal.c], goal.d, Vec3::new(hand.a.dot(wrist), hand.b.dot(wrist), hand.c.dot(wrist)));
+        let raw = self.clavicle_raw(c, i, goal.d, hip && !support, src);
+        let p = self.set_clavicle(c, i, raw, blend, 0.9, src);
         if !hip && !support {
-            // a pistol out of the shoulder's range: the hand comes in by the angle past it
-            let es = c.b.eff3(l.e[1]);
-            let h = Vec3::new(es.m.a.dot(to), es.m.b.dot(to), es.m.c.dot(to));
-            let q = Quat::from_rotation_arc(Vec3::Z, unit(h).try_normalize().unwrap_or(Vec3::Z));
-            let [_, l1, l2] = crate::nmrs::angles(q);
-            let k = (l1 * l1 / (es.half_lean1 * es.half_lean1) + l2 * l2 / (es.half_lean2 * es.half_lean2)).sqrt();
-            if k > 0.9 {
+            let to = unit(x - p.d);
+            let h = p.q.inverse() * to;
+            let q = Quat::from_rotation_arc(Vec3::Z, h.try_normalize().unwrap_or(Vec3::Z));
+            let (clip, past) = limit(&c.b.eff3(l.e[1]), crate::nmrs::angles(q), 0.9);
+            if past > 0.0 {
                 self.ran(12, "a pistol past the shoulder's range: the hand comes in");
-                let past = (1.0 - 0.9 / k) * (l1 * l1 + l2 * l2).sqrt();
+                let (_, angle) = (crate::nmrs::rotation(clip).inverse() * q).to_axis_angle();
                 let most = 2.0 * (c.b.joint_pos(l.e[2]) - c.b.joint_pos(l.e[3])).length();
-                x = shoulder + to * (past.cos() * most).clamp(0.15, most.max(0.15));
+                x = p.d + to * (angle.cos() * most).clamp(0.15, most.max(0.15));
             }
         }
-        crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[3], x, elbow, 0.0, side, 1.0, Vec3::ZERO, None);
-        // the wrist: the hand's frame on the current forearm, times the weight
+        let (q, bend) = self.chain(c, i, x, elbow, p, src);
+        write3(c, l.e[1], crate::nmrs::angles(q));
+        c.ch.eff[l.e[2]].desired[0] = bend;
+        // the wrist: the hand's frame on the forearm the chain leaves, times the weight
         c.ch.eff[l.e[3]].desired = [0.0; 3];
-        if w > 0.0 && c.ch.joints[l.e[3]].rigid.is_some() {
-            let ident = [Vec3::X, Vec3::Y, Vec3::Z];
-            let mut m = vec![ident; c.b.frames.len()];
-            let fore = c.b.part(l.p[2]).m;
-            (m[l.p[2]], m[l.p[3]]) = ([fore.a, fore.b, fore.c], [goal.a, goal.b, goal.c]);
-            let t = c.ch.incoming_angle(l.e[3], &m);
-            c.ch.eff[l.e[3]].desired = t.map(|x| x * w);
+        if w > 0.0 {
+            let wq = wrist_q(c, i, p.q * q, bend, &goal);
+            let raw = crate::nmrs::angles(wq);
+            write3(c, l.e[3], raw);
+            let d = c.ch.eff[l.e[3]].desired;
+            c.ch.eff[l.e[3]].desired = d.map(|x| x * w);
             self.ran(13, "the wrist turned to the target frame");
         }
+    }
+
+    /// The type-9 request's second solver (0x2a43794, usePistolIK): the upper arm aimed at the target from its neutral turn, off the
+    /// line by `off` about the hinge; past the shoulder's limits turned so the hinge's plane holds the target; the elbow from
+    /// the current elbow's line to it; the wrist on the frame.
+    fn pistol_reach(&mut self, c: &mut Ctx, i: usize, goal: M34, blend: f32, off: f32) {
+        self.ran(46, "the pistol solver (0x2a43794)");
+        let l = limb(i);
+        let src = self.incoming(c);
+        let src = src.as_deref();
+        let raw = self.clavicle_raw(c, i, goal.d, true, src);
+        let p = self.set_clavicle(c, i, raw, blend, 0.99, src);
+        let e = c.b.limb(l.e[1], l.e[2]);
+        // (the note's 0x2a43794 steps; everything in the shoulder's parent frame)
+        let d0 = (p.q.inverse() * (goal.d - c.b.joint_pos(l.e[1]))).try_normalize().unwrap_or(Vec3::Z);
+        let neutral = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        let (ed, axis) = (neutral * e.d, neutral * e.c);
+        let du = Quat::from_axis_angle(axis.try_normalize().unwrap_or(Vec3::Z), off) * unit(ed);
+        let mut q = Quat::from_rotation_arc(du, d0) * neutral;
+        let es = c.b.eff3(l.e[1]);
+        let (clip, past) = limit(&es, crate::nmrs::angles(q), self.pik_limit);
+        q = crate::nmrs::rotation(clip);
+        if past <= 0.0 && self.pik_limit <= 1.15 {
+            self.pik_limit = 1.1999999;
+        } else if past > 0.0 && self.pik_limit >= 1.15 {
+            self.pik_limit = 1.1;
+        }
+        if past > 0.0 {
+            self.ran(47, "the pistol solver's limit: the hinge's plane turned to the target");
+            let w = q * du;
+            let row0 = q * e.a;
+            let n1 = unit(w.cross(d0));
+            let n2 = n1.cross(w);
+            let mut angle = acos(n2.dot(row0));
+            if n2.cross(row0).dot(w) > 0.0 {
+                angle = -angle;
+            }
+            q = Quat::from_axis_angle(w.try_normalize().unwrap_or(Vec3::Z), angle) * q;
+        }
+        let raw = limit(&es, crate::nmrs::angles(q), 0.95).0;
+        write3(c, l.e[1], raw);
+        let q = crate::nmrs::rotation(raw);
+        // the elbow: from straight, the frame on the arm just set, to the line from the elbow now
+        let up = p.then(Fr { q, d: Vec3::ZERO }).then(Fr { q: e_quat(&e), d: e.d });
+        let eff = c.b.eff1(l.e[2]);
+        let fore = up.then(fr(&eff.child).inv()).then(fr(&c.b.part(l.p[2]).m));
+        let upper = c.b.part(l.p[1]).m;
+        let along = fore.at(fr(&upper).inv().at(eff.pos)) - up.d;
+        let to = goal.d - c.b.joint_pos(l.e[2]);
+        let hinge = c.ch.joints[l.e[2]].limits[0];
+        let bend = acos(unit(along).dot(unit(to))).clamp(hinge.0.min(hinge.1), hinge.0.max(hinge.1));
+        c.ch.eff[l.e[2]].desired[0] = bend;
+        // the wrist, within 0.99 of its limits
+        let wq = wrist_q(c, i, p.q * q, bend, &goal);
+        let raw = limit(&c.b.eff3(l.e[3]), crate::nmrs::angles(wq), 0.99).0;
+        write3(c, l.e[3], raw);
+        self.ran(13, "the wrist turned to the target frame");
     }
 
     /// 0x2add8ec: the gun arm points; state 3, or 6 off the aim. (`again`: rebuild the target frame first.)
@@ -882,7 +994,11 @@ impl PointGun {
             c.out.lim_floor.push((l.p[3], [1.5, 1.5, 1.5]));
             let rifle = self.ws[i] == 2;
             let blend = if rifle && !(self.exists && self.connected) { 0.0 } else { self.p.clav_blend[0] };
-            self.reach(c, i, a.goal, self.p.elbow[0], blend, 1.0, false, rifle || self.p.from_hip);
+            if self.p.pistol_ik.0 && !self.two {
+                self.pistol_reach(c, i, a.goal, blend, self.p.pistol_ik.1);
+            } else {
+                self.reach(c, i, a.goal, self.p.elbow[0], blend, 1.0, false, rifle || self.p.from_hip);
+            }
             if self.p.ori.0 > 0.0 && a.relax > 0.0 {
                 self.ran(16, "the hand's orientation PD");
                 let (hand, k, d) = (c.b.part(l.p[3]), self.p.ori.0 * a.relax * self.tw, self.p.ori.1);
@@ -1213,9 +1329,9 @@ impl PointGun {
             }
             gun = self.dispatch(c, g, mode, again);
             if gun == 0xb && want == 4 {
-                // the gun arm went neutral: the support follows the real gun (0x2acd3b4, its pose: the hand's frame now)
+                // the gun arm went neutral: the support follows the gun the pose will hold (0x2acd3b4)
                 self.ran(23, "the support follows the neutral gun arm");
-                let h = c.b.part(limb(g).p[3]).m;
+                let h = pose_frame(c, g);
                 self.arms[g].goal = h;
                 let r = mul(&self.grip_rows, &gun_rows(&h));
                 let alt = M34 { a: r[0], b: r[1], c: r[2], d: on_rows(&gun_rows(&h), h.d, self.grip_pos) };
@@ -1408,6 +1524,26 @@ impl PointGun {
         }
     }
 
+    /// With RDR2_TRACE: the solvers' frames against his pose now (the shoulder's angles, the elbow's and wrist's places).
+    fn check_frames(&self, c: &Ctx, i: usize) {
+        let l = limb(i);
+        let (es, e) = (c.b.eff1(l.e[1]), c.b.limb(l.e[1], l.e[2]));
+        let d = &c.ch.joints[l.e[1]];
+        let [tw, l1, l2] = crate::nmrs::angles(rest(c, l.e[1], None));
+        let from = crate::nmrs::effector_angles([l1, l2, tw], &d.limits, d.flip);
+        let now = c.ch.actual(l.e[1], c.b.frames);
+        let sh = fr(&es.m).then(Fr { q: crate::nmrs::rotation([tw, l1, l2]), d: Vec3::ZERO });
+        let el = sh.then(Fr { q: e_quat(&e), d: e.d });
+        let ee = c.b.eff1(l.e[2]);
+        let w = c.b.joint_pos(l.e[3]) - ee.pos;
+        let v = Vec3::new(ee.child.a.dot(w), ee.child.b.dot(w), ee.child.c.dot(w));
+        let bend = c.ch.actual(l.e[2], c.b.frames)[0];
+        let wr = el.at(Quat::from_rotation_z(bend) * v);
+        let wr2 = el.at(Quat::from_rotation_z(-bend) * v);
+        note(format_args!("pointGun: frames: shoulder from {:.2?} now {:.2?} desired {:.2?}; elbow place off {:.3}; wrist place off {:.3} (other sign {:.3}), elbow {:.2} desired {:.2}; wrist desired {:.2?}",
+            from, now, c.ch.eff[l.e[1]].desired, (el.d - ee.pos).length(), (wr - c.b.joint_pos(l.e[3])).length(), (wr2 - c.b.joint_pos(l.e[3])).length(), bend, c.ch.eff[l.e[2]].desired[0], c.ch.eff[l.e[3]].desired));
+    }
+
     /// 0x2ae03b8: which of the arms' parts leave which of his parts alone.
     fn collisions(&mut self) {
         self.pair_off.clear();
@@ -1512,13 +1648,23 @@ impl PointGun {
         }
         let (g, s) = (self.g, self.s);
         if self.p.use_look {
-            // RDR2's priority, 0x12 or 0xb (+0x1a8), decides among its behaviours' look targets; Delirium's headLook has one
+            // the priority (nmhl's look): 0x12 pointing, or at the connect point with the support near and within reach; else 0xb
+            let mut prio = 0xb;
+            if self.support_mode {
+                let (gs, ss) = (self.arms[g], self.arms[s]);
+                if gs.state == 10 && gs.pose == 7 && ss.d_hand < 0.5 && ss.reach_kept {
+                    prio = 0x12;
+                }
+            }
+            if aiming {
+                prio = 0x12;
+            }
             if self.support_mode {
                 let (gs, ss) = (self.arms[g], self.arms[s]);
                 if !self.connected && ss.state == 4 && (point(&gs) || (gs.state == 10 && gs.pose == 7)) {
                     if self.look_r[1] {
                         self.ran(32, "the look at the support target");
-                        look = ss.req_m.d;
+                        (look, prio) = (ss.req_m.d, 0x12);
                     }
                 } else {
                     self.look_r[1] = c.ch.random() < 0.5;
@@ -1526,7 +1672,7 @@ impl PointGun {
                 if !self.connected && gs.state == 10 && gs.pose == 7 {
                     if self.look_r[0] && self.look_t <= 2.0 {
                         self.ran(33, "the look at the support hand and its target");
-                        look = (ss.req_m.d + c.b.at(limb(s).p[3])) * 0.5;
+                        (look, prio) = ((ss.req_m.d + c.b.at(limb(s).p[3])) * 0.5, 0x12);
                         self.look_t += dt;
                     }
                 } else {
@@ -1534,13 +1680,12 @@ impl PointGun {
                     self.look_r[0] = c.ch.random() < 0.3;
                 }
             }
-            if self.looking {
-                self.out.push(format!("headLook pos={}", v3s(look)));
-            } else {
+            if !self.looking {
                 self.ran(34, "headLook started");
                 self.out.push(format!("headLook start=true alwaysLook=true pos={}", v3s(look)));
                 self.looking = true;
             }
+            c.out.head_look_prio = Some((prio, look));
         }
         let due = self.p.step_turn && self.turn_t >= self.p.step_wait;
         self.turn_t += dt;
@@ -1612,6 +1757,139 @@ impl PointGun {
             self.fed = support;
         }
     }
+}
+
+/// A joint frame or part frame: a rotation and a position.
+#[derive(Clone, Copy, Debug)]
+struct Fr {
+    q: Quat,
+    d: Vec3,
+}
+
+impl Fr {
+    fn then(self, b: Fr) -> Fr {
+        Fr { q: self.q * b.q, d: self.d + self.q * b.d }
+    }
+    fn inv(self) -> Fr {
+        let q = self.q.inverse();
+        Fr { q, d: q * -self.d }
+    }
+    fn at(self, p: Vec3) -> Vec3 {
+        self.d + self.q * p
+    }
+}
+
+fn fr(m: &M34) -> Fr {
+    Fr { q: quat_of(m), d: m.d }
+}
+
+fn e_quat(e: &M34) -> Quat {
+    quat_of(e)
+}
+
+/// 0x2a248a0: the nearest point of the ellipse with half axes `a`, `b`, by the half-angle tangent u (Newton, up to 100 steps).
+fn nearest((x, y): (f32, f32), a: f32, b: f32) -> (f32, f32) {
+    let (px, py) = (x.abs(), y.abs());
+    let (ia, ib) = (1.0 / a, 1.0 / b);
+    let (kx, ky) = (ib * a, ia * b);
+    let (mut qx, mut qy) = (px.min(a), py.min(b));
+    let n = ((qx * qx) / (a * a) + (qy * qy) / (b * b)).sqrt();
+    (qx, qy) = (qx / n, qy / n);
+    let mut u = ((1.0 - ia * qx) / (ia * qx + 1.0)).max(0.0).sqrt();
+    for _ in 0..100 {
+        let g = 2.0 * ((px - qx) * kx * qy - (py - qy) * ky * qx);
+        let h = (2.0 * qy * qy * kx * kx + 2.0 * qx * qx * ky * ky + 2.0 * qx * (px - qx) + 2.0 * qy * (py - qy)) * (ia * qx + 1.0) - ib * qy * g;
+        let step = g / h;
+        u = (u - step).clamp(0.0, 1.0);
+        let w = 1.0 / (u * u + 1.0);
+        (qx, qy) = ((1.0 - u * u) * w * a, 2.0 * u * w * b);
+        if step.abs() <= 1e-7 {
+            break;
+        }
+    }
+    (qx * x.signum(), qy * y.signum())
+}
+
+/// 0x2a23f78: twist and leans within `f` of the joint's limits; how far the leans were past them.
+fn limit(e: &crate::nmdbm::Eff3, [tw, mut l1, mut l2]: [f32; 3], f: f32) -> ([f32; 3], f32) {
+    let t = f * e.half_twist;
+    let (a, b) = (f * e.half_lean1, f * e.half_lean2);
+    if a < 0.001 || b < 0.001 {
+        l1 = l1.clamp(-a, a);
+        l2 = l2.clamp(-b, b);
+    }
+    let past = ((l1 / a.max(1e-6)).powi(2) + (l2 / b.max(1e-6)).powi(2)).sqrt() - 1.0;
+    if past > 0.0 && a >= 0.001 && b >= 0.001 {
+        (l1, l2) = nearest((l1, l2), a, b);
+    }
+    ([tw.clamp(-t, t), l1, l2], past.max(0.0))
+}
+
+/// Raw (tw, l1, l2) from a joint's desired angles (effector_angles' inverse).
+fn read3(c: &Ctx, j: usize) -> [f32; 3] {
+    let (d, e) = (&c.ch.joints[j], c.ch.eff[j].desired);
+    let r = |k: usize| {
+        let mid = (d.limits[k].0 + d.limits[k].1) * 0.5;
+        if d.flip[k] { -e[k] - mid } else { e[k] - mid }
+    };
+    [r(2), r(0), r(1)]
+}
+
+/// 0x2acd3b4: the hand's frame the arm's records make: joint by joint from the clavicle's parent frame.
+fn pose_frame(c: &Ctx, i: usize) -> M34 {
+    let l = limb(i);
+    let (ec, es, ee, ew) = (c.b.eff1(l.e[0]), c.b.eff1(l.e[1]), c.b.eff1(l.e[2]), c.b.eff1(l.e[3]));
+    let turn = |q: Quat| Fr { q, d: Vec3::ZERO };
+    let f = fr(&ec.m).then(turn(crate::nmrs::rotation(read3(c, l.e[0])))).then(fr(&ec.child).inv().then(fr(&es.m)))
+        .then(turn(crate::nmrs::rotation(read3(c, l.e[1])))).then(fr(&es.child).inv().then(fr(&ee.m)))
+        .then(turn(Quat::from_rotation_z(c.ch.eff[l.e[2]].desired[0]))).then(fr(&ee.child).inv().then(fr(&ew.m)))
+        .then(turn(crate::nmrs::rotation(read3(c, l.e[3])))).then(fr(&ew.child).inv().then(fr(&c.b.part(l.p[3]).m)));
+    let m = Mat3::from_quat(f.q);
+    M34 { a: m.x_axis, b: m.y_axis, c: m.z_axis, d: f.d }
+}
+
+/// Raw (tw, l1, l2) into the joint's desired angles.
+fn write3(c: &mut Ctx, j: usize, [tw, l1, l2]: [f32; 3]) {
+    let d = &c.ch.joints[j];
+    c.ch.eff[j].desired = crate::nmrs::effector_angles([l1, l2, tw], &d.limits, d.flip);
+}
+
+/// A joint's rotation, child in parent, in the source pose: the incoming pose's, or his own (0x2a44338 takes either).
+fn rest(c: &Ctx, j: usize, src: Option<&[M34]>) -> Quat {
+    let (e, d) = (c.b.eff1(j), &c.ch.joints[j]);
+    let Some(m) = src else { return quat_of(&e.m).inverse() * quat_of(&e.child) };
+    let (pm, cm) = (quat_of(&c.b.part(d.parent).m).inverse() * quat_of(&e.m), quat_of(&c.b.part(d.child).m).inverse() * quat_of(&e.child));
+    (quat_of(&m[d.parent]) * pm).inverse() * (quat_of(&m[d.child]) * cm)
+}
+
+/// The wrist's rotation for the hand's frame `goal`, on the arm the solver leaves: the upper arm's child frame (rotation `up`),
+/// the elbow at `bend`.
+fn wrist_q(c: &Ctx, i: usize, up: Quat, bend: f32, goal: &M34) -> Quat {
+    let l = limb(i);
+    let (el, wr) = (c.b.eff1(l.e[2]), c.b.eff1(l.e[3]));
+    let e = c.b.limb(l.e[1], l.e[2]);
+    let parent = up * e_quat(&e) * Quat::from_rotation_z(bend) * (quat_of(&el.child).inverse() * quat_of(&wr.m));
+    let child = quat_of(goal) * (quat_of(&c.b.part(l.p[3]).m).inverse() * quat_of(&wr.child));
+    parent.inverse() * child
+}
+
+/// A ray against an object's box, grown by the probe's radius.
+fn ray_box(o: &crate::ragdoll::Obstacle, from: Vec3, dir: Vec3, len: f32) -> bool {
+    let (q, c) = (o.rot.inverse(), o.at + o.rot * o.centre);
+    let (p, d, h) = (q * (from - c), q * dir, o.half + Vec3::splat(0.05));
+    let (mut lo, mut hi) = (0.0f32, len);
+    for k in 0..3 {
+        if d[k].abs() < 1e-6 {
+            if p[k].abs() > h[k] {
+                return false;
+            }
+        } else {
+            let (a, b) = ((-h[k] - p[k]) / d[k], (h[k] - p[k]) / d[k]);
+            lo = lo.max(a.min(b));
+            hi = hi.min(a.max(b));
+        }
+    }
+    lo <= hi
 }
 
 fn on_rows(r: &[Vec3; 3], d: Vec3, p: Vec3) -> Vec3 {
@@ -1688,8 +1966,9 @@ impl Extra for PointGun {
         if crate::extras_ysk_rdr2::trace() && (c.b.doll.age * 2.0) as i32 != ((c.b.doll.age - dt) * 2.0) as i32 {
             let (a, h) = (self.arms[g], c.b.at(limb(g).p[3]));
             let sa = self.arms[s];
-            note(format_args!("pointGun: at {:.1}: gun state {} off the aim {:.2} rad, hand from its target {:.3}; support state {} hand from its grip {:.3}, connected {} constraint {:?}, rifle {:?}, pairs {}",
-                c.b.doll.age, a.state, acos((-c.b.part(limb(g).p[3]).m.b).dot(a.aim)), (h - a.goal.d).length(), sa.state, sa.d_hand, self.connected, self.hand_len, self.rifle_len, c.b.doll.pairs.len()));
+            self.check_frames(c, g);
+            note(format_args!("pointGun: at {:.1}: gun state {} off the aim {:.2} rad, hand from its target {:.3}; support state {} hand from its grip {:.3}, grip from the shoulder {:.3} of {:.3}, connected {} constraint {:?}, rifle {:?}, pairs {}",
+                c.b.doll.age, a.state, acos((-c.b.part(limb(g).p[3]).m.b).dot(a.aim)), (h - a.goal.d).length(), sa.state, sa.d_hand, sa.d_alt, self.arm_len * self.p.reach_scale, self.connected, self.hand_len, self.rifle_len, c.b.doll.pairs.len()));
         }
     }
 
@@ -1697,8 +1976,9 @@ impl Extra for PointGun {
         std::mem::take(&mut self.out)
     }
 
-    /// 0x2aceffc: the rifle probe, a ray along the aim; ×1.05 while it's hitting. (RDR2's sphere of radius 0.05 is a ray here.)
-    fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, _obs: &[crate::ragdoll::Obstacle]) {
+    /// 0x2aceffc: the rifle probe along the aim; ×1.05 while it's hitting. RDR2's sphere of radius 0.05: a ray against the world
+    /// (Delirium's world has no sphere sweep), the objects' boxes grown by the radius.
+    fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
         if !c.ch.rdr2 || !self.started || self.p.probe <= 0.0 {
             return;
         }
@@ -1709,7 +1989,7 @@ impl Extra for PointGun {
                 continue;
             }
             let len = self.p.probe * if self.probe_hit[i] { 1.05 } else { 1.0 };
-            let hit = world.cast(a.anchor, dir, len).is_some();
+            let hit = world.cast(a.anchor, dir, len).is_some() || obs.iter().any(|o| ray_box(o, a.anchor, dir, len));
             if hit && !self.probe_hit[i] {
                 note(format_args!("pointGun: the probe hit (arm {i})"));
             }
