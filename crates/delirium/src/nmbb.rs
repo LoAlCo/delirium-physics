@@ -192,6 +192,11 @@ struct Rdr2Bb {
 }
 
 impl BodyBalance {
+    /// NMX_POSE comparison: the turn state and target as a recording had them.
+    pub fn nmx_turn(&mut self, state: u8, far: Vec3) {
+        (self.rd.turn, self.turn_time, self.p.head_look_pos) = (state, 1.0, far);
+    }
+
     pub fn activate(p: Params, ch: &mut Character, b: &Body) -> BodyBalance {
         if ch.rdr2 {
             return BodyBalance::activate_rdr2(p, ch, b);

@@ -115,6 +115,7 @@ impl Writhe {
         self.rd = Rdr2State { start: c.com, started: true, ..Default::default() };
         self.t_noise = 4000.0 * ch.random();
         self.rd.seeds = (4000.0 * ch.random(), 4000.0 * ch.random());
+        if let Ok(v) = std::env::var("NMX_WR") { let x: Vec<f32> = v.split(' ').filter_map(|s| s.parse().ok()).collect(); if x.len() == 3 { self.t_noise = x[0]; self.rd.seeds = (x[1], x[2]); } } // NMXHOOK
         if self.rdr2.apply_stiffness {
             for j in Character::mask(self.mask) {
                 ch.eff[j].reset(&ch.joints[j]);

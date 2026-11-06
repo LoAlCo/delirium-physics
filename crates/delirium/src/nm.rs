@@ -1296,6 +1296,23 @@ impl Agent {
         self.balance.as_ref().is_some_and(|b| b.on() && b.still > delirium_data::kv!(116))
     }
 
+    /// NMX_DUMP: the balancer's two foot targets, and its centre.
+    pub fn nmx_targets(&self) -> Option<[Vec3; 3]> {
+        self.balance.as_ref().and_then(|b| b.dbm.as_ref()).map(|d| [d.f.pos[0], d.f.pos[1], d.f.centre])
+    }
+
+    /// NMX_DUMP: self pairs met; and once the whole list on stderr
+    pub fn nmx_met(&self) -> String {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| { let k: [u8; 9] = [delirium_data::kv!(0 int), delirium_data::kv!(1 int), delirium_data::kv!(7 int), delirium_data::kv!(23 int), delirium_data::kv!(54 int), delirium_data::kv!(107 int), delirium_data::kv!(251 int), delirium_data::kv!(252 int), delirium_data::kv!(253 int)]; eprintln!("NMX kv 0,1,7,23,54,107,251,252,253 = {k:?} ins {:?}", self.balance.as_ref().and_then(|b| b.dbm.as_ref()).map(|d| d.f.inside_raw)); eprintln!("NMX pairs {:?} LEG {:?}", self.doll.pairs, *LEG_PAIRS()); }); if let Some(d) = self.balance.as_ref().and_then(|b| b.dbm.as_ref()) { static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0); if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 60 == 0 { eprintln!("NMX p172 {} thr {:?} restep {:?} lead {} width {}", d.p.p172, d.p.rdr2.map(|r| r.p.step_decision_threshold), d.p.rdr2.map(|r| r.legs_apart()), d.p.lead, d.p.foot_width); } }
+        self.doll.self_met.iter().map(|p| format!("{}-{}", p.0, p.1)).collect::<Vec<_>>().join(" ")
+    }
+
+    /// NMX_DUMP: the balancer's step-decision state.
+    pub fn nmx_decision(&self) -> Option<(u8, [f32; 2], f32)> {
+        self.balance.as_ref().and_then(|b| b.dbm.as_ref()).map(|d| (d.f.flags, d.f.dist, d.p.lead))
+    }
+
     pub fn balance_steps(&self) -> Option<(u32, u32)> {
         self.balance.as_ref().filter(|b| b.on()).map(|b| (b.steps, b.dbm.as_ref().map_or(0, |d| d.f.stepping)))
     }
@@ -1323,6 +1340,38 @@ impl Agent {
 
     pub fn rolled_up(&self) -> bool {
         self.roll_up.is_some()
+    }
+
+    /// NMX_POSE comparison: bodyBalance's turn state and target as a recording had them.
+    pub fn nmx_turn(&mut self, state: u8, far: Vec3, back: f32) {
+        if let Some(bb) = self.balance.as_mut().and_then(|b| b.bb.as_mut()) {
+            bb.nmx_turn(state, far);
+        }
+        if let Some(w) = self.nm_bw.as_mut() {
+            w.back_stiffness = back;
+        }
+    }
+
+    /// Read-only list of what is running now, for the headless NMX_DUMP comparison (changes nothing).
+    pub fn nmx_active(&self) -> Vec<String> {
+        let mut v: Vec<String> = vec![];
+        if let Some(b) = self.balance.as_ref() {
+            if b.dbm.is_some() {
+                v.push(if self.rdr2_core.is_some() { "balancer(rdr2)".into() } else { "balancer(dbm)".into() });
+            } else if b.on() {
+                v.push("balancer(simple)".into());
+            }
+        }
+        let flags = [
+            ("bodyBalance", self.bb_on), ("shot", self.nm_shot.is_some()), ("catchFall", self.nm_cf.is_some()), ("bodyWrithe", self.nm_bw.is_some()),
+            ("bodyRollUp", self.nm_ru.active), ("rollDownStairs", self.nm_rds.active || self.rds_on), ("armsWindmill", self.nm_aw.active),
+            ("pedalLegs", self.nm_pd.active), ("bodyFoetal", self.nm_bf.active), ("headLook", self.nm_head.active), ("spineTwist", self.nm_twist.active),
+            ("upperBodyFlinch", self.nm_fl.active), ("braceForImpact", self.nm_br.active), ("relax", self.relax.is_some()),
+            ("lean", self.lean.is_some()), ("fallen", self.fallen), ("highFall", self.high_falling()),
+        ];
+        v.extend(flags.iter().filter(|f| f.1).map(|f| f.0.to_string()));
+        v.extend(self.extras.on.iter().map(|(n, _)| n.to_string()));
+        v
     }
 
     fn nm_shot_step(&mut self, build: &Build, frames: &[Transform], dbm_lost: bool, dt: f32, tick: bool) -> crate::nmshot::Out {
@@ -2068,6 +2117,7 @@ impl Agent {
                 (w.arm_period, w.back_period, w.leg_period) = (m.arm_period, m.back_period, m.leg_period);
                 (w.arm_amplitude, w.back_amplitude, w.leg_amplitude) = (m.arm_amplitude, m.back_amplitude, m.leg_amplitude);
                 (w.elbow_amplitude, w.knee_amplitude, w.rdr2) = (m.elbow_amplitude, m.knee_amplitude, m.rdr2);
+                if let Some(b) = std::env::var("NMX_BACK").ok().and_then(|v| v.parse().ok()) { w.back_stiffness = b; } // NMXHOOK
                 w.activate(c.ch);
             }
             if self.writhe.is_none() {
@@ -2453,6 +2503,7 @@ impl Agent {
         if let (Some(mut r), Some(ch)) = (self.limb_reqs.take(), self.ch.as_mut()) {
             r.mark(&ch.eff, crate::limbreq::CORE);
             r.resolve(&mut ch.eff, self.rdr2_core.is_some_and(|p| p.limb_order_reversed));
+            if std::env::var_os("NMX_MARK").is_some() { eprintln!("MARK resolved hip {} {} {} sp0 {:?} {} {} {} neck {:?} {} {} {}", ch.eff[0].strength, ch.eff[0].damping, ch.eff[0].muscle_stiffness, ch.eff[6].desired, ch.eff[6].strength, ch.eff[6].damping, ch.eff[6].muscle_stiffness, ch.eff[10].desired, ch.eff[10].strength, ch.eff[10].damping, ch.eff[10].muscle_stiffness); } // NMXHOOK
         }
         let mut m: Vec<Muscle> = match self.ch.as_mut() {
             Some(ch) => ch.muscles(Muscle { target: self.zero[self.roles.pelvis], stiffness: 0.0, damping: 0.0 }),
