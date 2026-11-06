@@ -615,7 +615,8 @@ impl Joint {
         let (pf, cf, kind, stiff) = if let Some(r) = rigid.filter(|r| r.limits != [(0.0, 0.0); 3]) {
             let half = |k: usize| (r.limits[k].1 - r.limits[k].0) * 0.5;
             let kind = if r.hinge { Kind::Hinge { lo: r.limits[0].0, hi: r.limits[0].1 } } else { Kind::Ball { lean: [half(0), half(1)], twist: half(2) } };
-            (r.frame, r.child, kind, r.blend)
+            // RDR2 core: the joint's own softness stops at 0.95 (0x2a45f02, 0x2a4641f); only the torque cap sees it unclamped
+            (r.frame, r.child, kind, if r.cap.is_some() { r.blend.min(0.95) } else { r.blend })
         } else {
             let stiff = rigid.map_or(0.0, |r| r.blend);
             match p.limit {
@@ -662,6 +663,16 @@ fn apply(joints: &[Option<Joint>], ev: &[(usize, Vec3)], acc: &mut [Acc]) {
 
 fn answer(artic: &Artic, k: usize, t: DVec3) -> DVec3 {
     artic.answer(k, t.as_vec3()).as_dvec3()
+}
+
+/// RDR2 core: the per-part drag of 0x287139c, as an acceleration, from one velocity. Law 0x2829334: c û + v V + |v| v V2, no
+/// more than stops it this step. The table is the ped archetype's (`meta_base_male.yft`, `meta_base_female.yft`, phArchetypeDamp):
+/// the same for linear and angular and on every axis, c 0.02, V 0.02, V2 0.01; with one number per axis the local frame doesn't matter.
+fn rage_drag(v: Vec3, h: f32) -> Vec3 {
+    let l2 = v.length_squared();
+    let l = l2.sqrt();
+    let c = if l2 > 1e-5 { 0.02 / l } else { 0.0 };
+    v * (c + 0.02 + 0.01 * l).min(1.0 / h)
 }
 
 fn solve3(a: [Vec3; 3], b: Vec3) -> Vec3 {
@@ -3572,6 +3583,15 @@ impl Ragdoll {
         self.soft_limits(&artic, &joints, &drive, &mut drive_ev, &mut jt);
         self.hinge_b = hb;
         apply(&joints, &drive_ev, &mut lt);
+        // RDR2 core: 0x283997c's order is gravity, muscles, then the archetype's drag on each part (0x287139c, on by the collider's reset, 0x2844a60)
+        if self.nm_first {
+            let xr = self.bodies[self.order[0]].x;
+            for (k, b) in self.bodies.iter().enumerate() {
+                let f = rage_drag(b.v, h) * -b.m;
+                lt[k].0 += f;
+                lt[k].1 = moment(f, b.x - xr, lt[k].1) - (b.tensor() * rage_drag(b.w, h).as_dvec3()).as_vec3();
+            }
+        }
         for (k, b) in self.bodies.iter().enumerate() {
             let f = (fall + Vec3::Z * GRAVITY()) * b.m + drive.force.get(k).filter(|_| self.gone >> k & 1 == 0).copied().unwrap_or(Vec3::ZERO);
             self.out[k] = (f, drive.torque.get(k).filter(|_| self.gone >> k & 1 == 0).copied().unwrap_or(Vec3::ZERO) + jt[k]);
@@ -3612,7 +3632,10 @@ impl Ragdoll {
             *vo = Vec3::new(-w.y, -w.z, -w.x).mul_add(Vec3::new(s.z, s.x, s.y), Vec3::new(w.z, w.x, w.y).mul_add(Vec3::new(s.y, s.z, s.x), *vo));
         }
         now.iter_mut().for_each(|f| f.0 += back);
-        let artic = self.artic(&joints);
+        // RDR2 core: the articulated factors are rebuilt once a step, when the move ends (0x288ac48 -> 0x28692d0), with the
+        // softness NM had written before that step. So the muscles, NM's impulses and the velocity solve all meet last step's.
+        let solve_with = if self.nm_first && was.len() == joints.len() { &was } else { &joints };
+        let artic = self.artic(solve_with);
         let resquared = self.rejuvenate();
         for (k, f, d) in std::mem::take(&mut self.root_moment) {
             self.out[k].0 += f;
@@ -3651,7 +3674,7 @@ impl Ragdoll {
         let (mut lr, mut push) = self.limit_rows(&artic, &joints, h, &qd0, &dvw);
         let (artic, lt, free_vel, free) = if quiet && lr.is_empty() && push.is_empty() {
             self.ped_inst = self.held_inst;
-            let artic = self.artic(&joints);
+            let artic = self.artic(solve_with);
             let mut lt = fallen;
             let mut limit_ev = vec![];
             if !self.nm_first {
@@ -3772,7 +3795,8 @@ impl Ragdoll {
         self.stage_vel = self.bodies.iter().map(|b| (b.v, b.w)).collect();
         if env_on!("NM_SVFREE") { self.stage_vel = st.free_vel.clone(); }
         if env_on!("NM_VELONLY") { return false; }
-        let damp = (-DAMPING()).fma(st.h, 1.0);
+        // RDR2 core: Rage's drag is the archetype's table, in the integrate pass (rage_drag); no blanket scale here
+        let damp = if self.nm_first { 1.0 } else { (-DAMPING()).fma(st.h, 1.0) };
         for b in &mut self.bodies {
             let cap = |v: Vec3, c: f32| delirium_data::collider::held(v.to_array(), c).map_or(v, |s| v * s);
             b.v = cap(b.v, MAX_SPEED()) * damp;
