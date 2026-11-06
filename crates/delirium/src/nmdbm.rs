@@ -1244,12 +1244,14 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         let off = if r.p.ankle_balance { r.p.ankle_offset } else { 0.0 };
         r.ankle_weight(off + s.legs[i].ankle.actual[0] - s.legs[i].ankle.desired[0])
     }));
-    // RDR2 balances with the ankles only below 1 m/s; faster, the planted ankles lie flat
-    let slow = s.vel.length() < 1.0;
+    // RDR2 balances with the ankles only below 1 m/s and not staggering; else the planted ankles lie flat
+    let slow = s.vel.length() < 1.0 && !p.rdr2.is_some_and(|r| r.stagger);
     let rd = p.rdr2.filter(|r| r.p.ankle_balance && !r.p.ankle_keep_pelvis);
     let stance_lean = if p.rdr2.is_some_and(|r| r.stagger) { 0.0 } else { lean };
     if let Some(r) = rd {
         for (i, sgn) in [(0, 1.0), (1, -1.0)] {
+            // only this path asks a twist of the ankle (0x2aaeed8; recorded 0 otherwise)
+            s.legs[i].ankle.desired[2] = 0.0;
             if let (true, Some((flat, tilted))) = (slow, twist_flat[i]) {
                 let w = r.ankle_twist_weight(s.legs[i].ankle.actual[2] - flat);
                 s.legs[i].ankle.desired[2] = sgn * (flat + r.p.ankle_twist_mult * aim.map_or(0.0, |a| a.0[i]) * w * (tilted - flat));
