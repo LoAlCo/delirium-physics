@@ -11,7 +11,11 @@ use bevy_math::Vec3;
 /// A message line can say start=false: on=false here, since an extra only starts with start=true.
 const ON: Param = Param { name: "on", kind: Kind::Bool, used: true, doc: "false: RDR2's start=false for this record (true)" };
 
-pub static MESSAGES: [Message; 5] = [
+pub static MESSAGES: [Message; 6] = [
+    Message { name: "setOpposeGravity", params: &[
+        Param { name: "oppose", kind: Kind::Float, used: true, doc: "the joints' gravity opposition, this step's request (1)" },
+        Param { name: "mask", kind: Kind::Str, used: true, doc: "the joints (fb)" },
+    ] },
     Message { name: "configureSoftLimit", params: &[
         ON,
         Param { name: "fresh", kind: Kind::Bool, used: true, doc: "RDR2's start=true: its default stiffness and damping before these values (false)" },
@@ -114,6 +118,60 @@ impl Default for BulletCfg {
     }
 }
 
+/// setFallingReaction's values (0x2a74c3c): catchFall's fields, which only that message writes (rdr2_catchfall.md 2).
+#[derive(Clone, Copy, Debug)]
+pub struct FallCfg {
+    pub com_vel_rds: f32,
+    pub inhibit_rolling: f32,
+    pub change_friction_time: f32,
+    pub ground_friction: f32,
+    pub arm_friction: f32,
+    pub friction_min: f32,
+    pub friction_max: f32,
+    pub k_rate: f32,
+    pub k_time: f32,
+    pub spine_lean: f32,
+    pub success: f32,
+    pub min_leg: f32,
+    pub min_spine: f32,
+    pub min_arm: f32,
+    pub call_rds: f32,
+    pub resist_rolling: f32,
+}
+
+impl Default for FallCfg {
+    fn default() -> FallCfg {
+        FallCfg { com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
+    }
+}
+
+impl FallCfg {
+    /// One value by the port's name; the names of the parameters the message takes for these.
+    pub const NAMES: [&'static str; 16] = ["comVelRDSThresh", "inhibitRollingTime", "changeFrictionTime", "groundFriction", "armFriction", "frictionMin", "frictionMax", "stoppedStrengthDecay", "kTime", "spineLeanGain", "successStrength", "minLegStiffness", "minSpineStiffness", "minArmStiffness", "callRDS", "resistRolling"];
+
+    pub fn set(&mut self, name: &str, v: f32) {
+        match name {
+            "comVelRDSThresh" => self.com_vel_rds = v,
+            "inhibitRollingTime" => self.inhibit_rolling = v,
+            "changeFrictionTime" => self.change_friction_time = v,
+            "groundFriction" => self.ground_friction = v,
+            "armFriction" => self.arm_friction = v,
+            "frictionMin" => self.friction_min = v,
+            "frictionMax" => self.friction_max = v,
+            "stoppedStrengthDecay" => self.k_rate = v,
+            "kTime" => self.k_time = v,
+            "spineLeanGain" => self.spine_lean = v,
+            "successStrength" => self.success = v,
+            "minLegStiffness" => self.min_leg = v,
+            "minSpineStiffness" => self.min_spine = v,
+            "minArmStiffness" => self.min_arm = v,
+            "callRDS" => self.call_rds = v,
+            "resistRolling" => self.resist_rolling = v,
+            _ => {}
+        }
+    }
+}
+
 /// What the core messages set: read each tick by `core_tick` and by the bullet records.
 #[derive(Clone, Copy, Debug)]
 pub struct CoreCfg {
@@ -138,12 +196,13 @@ pub struct CoreCfg {
     /// bullets' torque records running, and the sign of the last (.data 0x59af990, 0x59af93c)
     pub torques: i32,
     pub torque_sign: i32,
+    pub fall: FallCfg,
 }
 
 impl Default for CoreCfg {
     fn default() -> CoreCfg {
         CoreCfg { soft: Default::default(), soft_was: [false; 4], fric: [1.0; 32], fric_used: false, fric_min: 0.0, fric_max: 9999.0, fric_clamp: false, muscle: None, strength: 1.0,
-                  bullets: Default::default(), reduction: 0.15, min_leak: 0.2, recovery: None, leak_scaled: false, torques: 0, torque_sign: 0 }
+                  bullets: Default::default(), reduction: 0.15, min_leak: 0.2, recovery: None, leak_scaled: false, torques: 0, torque_sign: 0, fall: Default::default() }
     }
 }
 
@@ -248,6 +307,7 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "setFrictionScale" => friction_scale(p),
         "setMuscleStiffness" => muscle(p),
         "setCharacterStrength" => strength(p),
+        "setOpposeGravity" => oppose(p),
         "configureBullets" => bullets(p),
         _ => return None,
     })
@@ -320,6 +380,21 @@ fn muscle(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     Ok(once(move |c| {
         c.ch.core.cfg.muscle = on.then(|| (s, joint_mask(&mask)));
         trace(|| format!("muscle stiffness {s} on {mask}, on {on}"));
+    }))
+}
+
+/// 0x2a4f9b8: one request at priority 0x27 on the mask; the balancer's own write takes over its joints next step.
+fn oppose(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let v = p.f("oppose", 1.0)?;
+    let mask = p.s("mask", "fb")?;
+    Ok(once(move |c| {
+        let on = joint_mask(&mask);
+        for (j, e) in c.ch.eff.iter_mut().enumerate() {
+            if on.get(j).copied().unwrap_or(false) {
+                e.oppose_gravity = v;
+            }
+        }
+        trace(|| format!("oppose gravity {v} on {mask}"));
     }))
 }
 

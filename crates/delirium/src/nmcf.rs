@@ -367,15 +367,10 @@ pub(crate) fn clav_follow(ch: &mut Character, clav: usize, shoulder: usize) {
 
 
 // RDR2's catchFall (with the RDR2 core), from a study of RDR2's own catchFall: GTA IV's catchFall on RDR2's terms.
-// Its hands-and-knees and roll modes, the slope block and the friction scales stay off here, as RDR2's defaults leave
-// them (nothing in its behaviours turns them on); the both-arms-down event, the teeter edge clamp and the big-spin
+// Its hands-and-knees mode and the slope block stay off here (setFallingReaction's own extra does the hands and knees);
+// the both-arms-down event, the teeter edge clamp and the big-spin
 // stiffness aren't here.
 
-/// RDR2: k may only fall after this long on the ground (s), and moves at this rate toward 2 sqrt(2E).
-const R_K_TIME: f32 = 10.0;
-const R_K_RATE: f32 = 2.0;
-/// RDR2: the spine's lean1 gain with the fall's backwardness.
-const R_SPINE_LEAN: f32 = 0.5;
 /// RDR2: the probe reaches 1.5 arm lengths plus the speed (at most 10 m/s's worth).
 const R_PROBE_ARMS: f32 = 1.5;
 
@@ -408,6 +403,11 @@ pub(crate) struct Rdr2Cf {
     upright: f32,
     dir: Vec3,
     roll: f32,
+    /// the roll delay and friction delay timers (+0x294, +0x298), each hand's friction ramp (+0x2a8, +0x2ac), rolling started
+    roll_wait: f32,
+    friction_wait: f32,
+    hand_friction: [f32; 2],
+    rolling: bool,
 }
 
 impl Rdr2Cf {
@@ -426,6 +426,7 @@ impl Rdr2Cf {
 impl CatchFall {
     fn start_rdr2(p: Params, c: &mut Ctx, head: &mut HeadLook, st: &mut SpineTwist) -> CatchFall {
         let ch = &mut *c.ch;
+        let fall = ch.core.cfg.fall;
         for (e, j) in ch.eff.iter_mut().zip(&ch.joints) {
             e.reset(j);
         }
@@ -442,7 +443,8 @@ impl CatchFall {
             e.oppose_gravity = 1.0;
         }
         let mut r = Rdr2Cf { time: 0.0, on_ground: false, knee_amount: [0.0; 2], hip_gain: [0.0; 2], spine_lean2: 0.0, knee: [0.0; 2],
-                             len: 0.0, reach_scale: 1.0, arm: [RArm::default(); 2], forward: 0.0, upright: 0.0, dir: Vec3::ZERO, roll: 0.0 };
+                             len: 0.0, reach_scale: 1.0, arm: [RArm::default(); 2], forward: 0.0, upright: 0.0, dir: Vec3::ZERO, roll: 0.0,
+                             roll_wait: fall.inhibit_rolling, friction_wait: fall.change_friction_time, hand_friction: [fall.arm_friction; 2], rolling: false };
         r.draw_legs(ch);
         r.spine_lean2 = ch.random() * 0.2 - 0.1;
         for i in 0..2 {
@@ -481,6 +483,23 @@ impl CatchFall {
         r.on_ground |= c.b.doll.collided(&others);
         if r.on_ground {
             r.time += dt;
+            if r.roll_wait >= 0.0 {
+                r.roll_wait -= dt;
+            }
+            if r.friction_wait > 0.0 {
+                r.friction_wait -= dt;
+            }
+        }
+        let fall = c.ch.core.cfg.fall;
+        // setFallingReaction's roll: moving fast enough once the delay is over, rollDownStairs takes him (with resistRolling
+        // only with a trunk or arm part down); the stop on slowing isn't here
+        let parts: Vec<usize> = (0..c.b.frames.len()).filter(|k| !(1..=6).contains(k)).collect();
+        if !r.rolling && fall.call_rds != 0.0 && r.roll_wait < 0.0 && c.vel.length() > fall.com_vel_rds
+            && (fall.resist_rolling == 0.0 || c.b.doll.collided(&parts))
+        {
+            r.rolling = true;
+            c.out.rds = Some((crate::nmrds::RollDownStairs::rdr2_defaults(), None));
+            crate::extras_core_rdr2::trace(|| format!("catchFall: rolling at {:.2} m/s over {}", c.vel.length(), fall.com_vel_rds));
         }
         // the ground's normal: the arms' probes' mean once down
         let ground = if r.on_ground { nrm(r.arm[0].normal + r.arm[1].normal) } else { up };
@@ -489,8 +508,8 @@ impl CatchFall {
         }
         let (kl, kr) = (r.arm[0].k.max(0.0), r.arm[1].k.max(0.0));
         let goal = (2.0 * c.b.doll.kinetic()).sqrt() * 2.0;
-        let mut step = (goal - self.k) * R_K_RATE * dt;
-        if r.time > R_K_TIME {
+        let mut step = (goal - self.k) * fall.k_rate * dt;
+        if r.time > fall.k_time {
             step = -step.abs();
         }
         self.k = (self.k + step).clamp(0.0, 1.0);
@@ -499,17 +518,45 @@ impl CatchFall {
         if weak < 0.30001 {
             c.out.send(delirium_data::kv!(54 int), "catchFall", 0.0);
         }
-        if weak < 0.9 && k < 1.0 {
+        if weak < 0.9 && k < fall.success {
             c.out.send(delirium_data::kv!(55 int), "catchFall", 0.0);
         }
+        // the friction: when its delay is over the body takes groundFriction, and the clamp frictionMin to frictionMax
+        // comes on; each hand and upper arm starts at armFriction and ramps while it touches (rdr2_catchfall.md 5.10)
+        if r.friction_wait <= 0.0 {
+            let cfg = &mut c.ch.core.cfg;
+            for (k, x) in cfg.fric.iter_mut().enumerate() {
+                if !matches!(k, 3 | 6 | 11 | 12 | 16 | 20) {
+                    *x = fall.ground_friction;
+                }
+            }
+            (cfg.fric_used, cfg.fric_clamp, cfg.fric_min, cfg.fric_max) = (true, true, fall.friction_min, fall.friction_max);
+        }
+        for i in 0..2 {
+            let (hand, upper) = (limb(i).p[limb(i).p.len() - 1], limb(i).p[1]);
+            let touching = c.b.doll.collided(&limb(i).p);
+            let fh = r.hand_friction[i];
+            if fh <= 1.0 && fh < fall.ground_friction {
+                c.out.part_friction.push((hand, fh));
+                c.out.part_friction.push((upper, fh));
+            }
+            if touching && fh <= 1.0 {
+                r.hand_friction[i] += 2.0 * dt;
+            } else if !touching && fh >= fall.arm_friction {
+                r.hand_friction[i] -= 0.666 * dt;
+            }
+        }
         let ch = &mut *c.ch;
-        let torso = p.torso_stiffness * k;
+        // the stiffness floors minSpine, minArm, minLegStiffness under k (rdr2_catchfall.md 5.4)
+        let (legs, torso_k, arms) = (p.legs_stiffness.max(fall.min_leg), p.torso_stiffness.max(fall.min_spine), p.arms_stiffness.max(fall.min_arm));
+        let torso = (torso_k - fall.min_spine) * k + fall.min_spine;
         ch.set_stiffness(torso, 0.5, "us", Some(0.5));
-        ch.set_stiffness((p.arms_stiffness * kl).max(3.0).min(20.0), 1.0, "ul", Some(0.5));
-        ch.set_stiffness((p.arms_stiffness * kr).max(3.0).min(20.0), 1.0, "ur", Some(0.5));
+        ch.set_stiffness(((arms - fall.min_arm) * kl + fall.min_arm).max(3.0).min(20.0), 1.0, "ul", Some(0.5));
+        ch.set_stiffness(((arms - fall.min_arm) * kr + fall.min_arm).max(3.0).min(20.0), 1.0, "ur", Some(0.5));
         // (one side's lerp is scaled by k twice in RDR2)
-        ch.set_stiffness((p.legs_stiffness * 0.25).max(p.legs_stiffness * k * k).max(4.0), 0.5, "ll", None);
-        ch.set_stiffness((p.legs_stiffness * 0.25).max(p.legs_stiffness * k).max(4.0), 0.5, "lr", None);
+        let leg = (legs - fall.min_leg) * k + fall.min_leg;
+        ch.set_stiffness((p.legs_stiffness * 0.25).max(leg * k).max(4.0), 0.5, "ll", None);
+        ch.set_stiffness((p.legs_stiffness * 0.25).max(leg).max(4.0), 0.5, "lr", None);
         for (i, ka) in [(0, kl), (1, kr)] {
             ch.eff[limb(i).e[3]].set_stiffness((6.5 + 0.5 * p.arms_stiffness) * ka.max(0.6), 1.0, Some(10.0));
             ch.eff[(*ANKLE())[i]].set_stiffness(10.0, 1.0, None);
@@ -528,7 +575,7 @@ impl CatchFall {
             ch.eff[(*ANKLE())[i]].desired[0] = 0.0;
         }
         for j in (*SPINE()) {
-            ch.eff[j].desired[0] = R_SPINE_LEAN * (-f).clamp(0.0, 1.0);
+            ch.eff[j].desired[0] = fall.spine_lean * (-f).clamp(0.0, 1.0);
             ch.eff[j].desired[1] = r.spine_lean2;
         }
         let arms: Vec<usize> = (0..2).flat_map(|i| limb(i).p).collect();

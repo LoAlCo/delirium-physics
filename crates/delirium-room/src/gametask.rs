@@ -264,7 +264,7 @@ pub fn merge<'a>(sets: impl IntoIterator<Item = &'a Set>) -> Vec<SentMessage> {
 /// The sets the shot task queues for one bullet on a standing, unhurt body hit by this weapon (rdr2_tasks.md 2): Base,
 /// the weapon's, then by what was hit. `weapon` is the file's id of the weapon's set: the weapon file names it and
 /// isn't exported, so it is the caller's choice.
-pub fn shot_sets(weapon: &str, hit: ShotHit) -> Vec<String> {
+pub fn shot_sets(weapon: &str, hit: ShotHit, kill: bool) -> Vec<String> {
     let mut v = vec!["Base".to_string(), weapon.to_string()];
     match hit {
         ShotHit::Front => {}
@@ -272,6 +272,14 @@ pub fn shot_sets(weapon: &str, hit: ShotHit) -> Vec<String> {
         ShotHit::Back => v.push("3a2fb9af".into()),
         // the weapon's +0x570, ctor default cd34be4d, and the stagger path's set
         ShotHit::Leg => v.extend(["cd34be4d".to_string(), "staggerfall".to_string()]),
+        // the weapon's +0x55c and +0x560 (0x1c6eb20); the arm and hand bones' (0x1c3cd68)
+        ShotHit::Head => v.push("HeadShot".into()),
+        ShotHit::Neck => v.push("0ea0c262".into()),
+        ShotHit::Arm => v.push("ArmShot".into()),
+        ShotHit::Hand => v.push("3eb0c6ba".into()),
+    }
+    if kill {
+        v.push("FatallyInjured".into());
     }
     v
 }
@@ -281,6 +289,10 @@ pub enum ShotHit {
     Front,
     Back,
     Leg,
+    Head,
+    Neck,
+    Arm,
+    Hand,
 }
 
 /// The shot's sub-modules run by their own switch, whatever start their message says: its start only opens a block of
@@ -329,13 +341,13 @@ fn shot_block(hash: u32) -> bool {
 
 /// The core messages: an extra here, so each carries start=true, and the game's start in on and fresh.
 fn core_message(hash: u32) -> bool {
-    ["configuresoftlimit", "setfrictionscale", "setmusclestiffness", "setcharacterstrength", "configurebullets", "configurebulletsextra"].iter().any(|n| joaat(n) == hash)
+    ["configuresoftlimit", "setfrictionscale", "setmusclestiffness", "setcharacterstrength", "configurebullets", "configurebulletsextra", "setopposegravity"].iter().any(|n| joaat(n) == hash)
 }
 
 /// The port's own message for the game's. The same name by hash, or one of the port's own names for it.
 pub fn port_message(hash: u32) -> Option<&'static Message> {
     let alias = [("sit", "rdr2Sit"), ("configurebolas", "rdr2Bolas"), ("configureshotinjuredleg", "shotInjuredLeg"), ("configureshotinjuredarm", "shotInjuredArm"),
-                 ("shotconfigurearms", "shot"), ("shotshockspin", "shot"), ("shotheadlook", "shot"), ("configurebulletsextra", "configureBullets"), ("setopposegravity", "setOppGrav")];
+                 ("shotconfigurearms", "shot"), ("shotshockspin", "shot"), ("shotheadlook", "shot"), ("configurebulletsextra", "configureBullets"),];
     let name = alias.iter().find(|a| joaat(a.0) == hash).map(|a| a.1);
     let all = || delirium::msg::MESSAGES.iter().chain(delirium::extras::messages());
     match name {
@@ -371,8 +383,10 @@ pub fn line(m: &SentMessage, port: &Message) -> (String, Vec<String>) {
             continue;
         }
         // uncracked in the code's table, named by the port (setFrictionScale's global clamp switch)
-        let own = [(0xa7180f98u32, "clamp")];
-        let wanted = own.iter().find(|o| o.0 == p.hash).map_or(p.hash, |o| joaat(o.1));
+        let own = [(0xa7180f98u32, "clamp"), (0x2bc0e7e9, "flatterSwingFeetRun"), (0xc5ebfd7b, "avoidFootWidthB"), (0x428c2b6f, "turnLiftFeet"), (0xcfe51361, "turnLiftFeetVariance"),
+                   (0x96c82edf, "minLegTwistVariance"), (0x5831d084, "maxLegTwistVariance"), (0x747a3a5c, "slopePelvisBlend"), (0xa81569cc, "slopeDrop2"), (0xbcda0e93, "slopeDrop1"),
+                   (0x47e73885, "maxStillTime"), (0x9de396e2, "spineBlendPose"), (0xae9bb2a3, "kTime"), (0x9be8054b, "spineLeanGain"), (0xcb0eb739, "armFriction")];
+        let wanted = own.iter().find(|o| o.0 == p.hash).map(|o| o.1).or_else(|| crate::own_names::OWN.iter().find(|o| o.0 == p.hash && port.params.iter().any(|x| x.name == o.1)).map(|o| o.1)).map_or(p.hash, joaat);
         // a module's switch, used by gate_modules
         if ["snap", "shotingusts", "shotfrombehind", "shotspin", "falltoknees"].iter().any(|n| joaat(n) == p.hash) && m.hash != joaat("shot") {
             continue;

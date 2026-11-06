@@ -28,6 +28,7 @@ mod fluid;
 mod fluid_gpu;
 mod foam;
 mod gametask;
+mod own_names;
 mod getup;
 mod learn;
 mod locomotion;
@@ -3407,7 +3408,8 @@ impl Sim {
 
     /// RDR2_GAME_SETS under the RDR2 core: the file's sets drive a shot.
     fn game_sets(&self) -> bool {
-        self.rdr2_core && std::env::var_os("RDR2_GAME_SETS").is_some()
+        // RDR2_GAME_SETS_ROOM=1 keeps the room's own messages beside them, to compare
+        self.rdr2_core && std::env::var_os("RDR2_GAME_SETS").is_some() && std::env::var_os("RDR2_GAME_SETS_ROOM").is_none()
     }
 
     fn hit(&self) -> Hit {
@@ -3997,12 +3999,20 @@ impl Sim {
         let fwd = self.ours().fwd.with_z(0.0).normalize_or_zero();
         let hit = if matches!(part, 1..=6) {
             gametask::ShotHit::Leg
+        } else if part == 12 {
+            gametask::ShotHit::Head
+        } else if part == 11 {
+            gametask::ShotHit::Neck
+        } else if matches!(part, 14 | 15 | 18 | 19) {
+            gametask::ShotHit::Arm
+        } else if matches!(part, 16 | 20) {
+            gametask::ShotHit::Hand
         } else if fwd.dot(dir.with_z(0.0).normalize_or_zero()) > 0.0 {
             gametask::ShotHit::Back
         } else {
             gametask::ShotHit::Front
         };
-        let ids = gametask::shot_sets(&weapon, hit);
+        let ids = gametask::shot_sets(&weapon, hit, self.health <= 0.0);
         let named: Vec<_> = ids.iter().filter_map(|id| gametask::shot_set(&sets, id)).collect();
         let merged = gametask::gate_modules(gametask::merge(named.iter().copied()), hit, part);
         let found = named.len();
