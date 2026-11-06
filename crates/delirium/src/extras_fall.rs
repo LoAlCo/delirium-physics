@@ -929,7 +929,8 @@ impl StgRdr2 {
         // the upper body's ramp from the start values
         let lerp = |a: [f32; 2], b: [f32; 2], u: f32| [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
         let u = if t > p.hold + 1e-6 { if t > p.hold + p.ramp { 1.0 } else { (t - p.hold) / p.ramp } } else { 0.0 };
-        let (arm, spine) = (lerp(p.arm_start, p.arm, u), lerp(p.spine_start, p.spine, u));
+        // (the arms' pair ramps too; no reader of it was found: `arms` has its own)
+        let spine = lerp(p.spine_start, p.spine, u);
         // the legs' base: lowerBodyStiffness, ramped to its End in time (0x2a9e8a4)
         let [end, t_end, r_end] = p.legs_end;
         let base = if t >= t_end + r_end - 1e-6 {
@@ -1014,8 +1015,6 @@ impl StgRdr2 {
         }
         c.ch.set_stiffness(spine[0], spine[1], "us", None);
         c.ch.set_stiffness(spine[0], spine[1], "un", None);
-        // the arm pair of the ramp isn't what the arms get: the arm helper's own (no reader of it found)
-        let _ = arm;
         self.arms(c, p);
         // fall types (timeToFall)
         let elapsed = self.t > p.time_to_fall;
