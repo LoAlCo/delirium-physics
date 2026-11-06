@@ -810,6 +810,8 @@ impl Shot {
             }
             self.p.shock_spin_scale_per_component = per;
             self.spin = mag.clamp(-0.5 * p.shock_spin_max, 0.5 * p.shock_spin_max);
+            let (m, per2) = (self.spin, per);
+            crate::extras_core_rdr2::trace(|| format!("shock spin: size {m}, per component {per2}"));
             self.spin_blend = 1.0;
         }
         if self.spin_blend < 0.0 {
@@ -855,6 +857,7 @@ impl Shot {
             let angle = [c.rand(r.fling2_angle[0][0], r.fling2_angle[0][1]), c.rand(r.fling2_angle[1][0], r.fling2_angle[1][1])];
             let length = [c.rand(r.fling2_length[0][0] * g0, r.fling2_length[0][1] * g0), c.rand(r.fling2_length[1][0] * g1, r.fling2_length[1][1] * g1)];
             let hand = [c.b.at(limb(0).p[3]), c.b.at(limb(1).p[3])];
+            crate::extras_core_rdr2::trace(|| format!("fling2: angles {angle:?}, lengths {length:?}"));
             self.fling2 = Some(Fling2 { t: 0.0, relax: [r.fling2_before + r.fling2_relax[0], r.fling2_before + r.fling2_relax[1]], angle, length, hand });
             for i in 0..2 {
                 let l = limb(i);
