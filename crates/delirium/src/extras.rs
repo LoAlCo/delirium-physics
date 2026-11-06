@@ -123,6 +123,10 @@ pub trait Extra: Send + Sync {
     fn sit_stirrups(&self) -> Option<[bool; 2]> {
         None
     }
+    /// The RDR2 core's sit: joints as they stay, whatever the behaviours it started write.
+    fn sit_legs(&self) -> &[(usize, crate::nmrs::Effector)] {
+        &[]
+    }
     /// The RDR2 core's sit: its state, running (the shot and reachForWound read it).
     fn sit_state(&self) -> Option<usize> {
         None
@@ -287,6 +291,10 @@ impl Extras {
             self.ropes.extend(e.ropes());
             self.pair_off.extend(e.pair_off());
             self.contact_off |= e.contact_off();
+        }
+        // RDR2 core: sit starts catchFall and smartFall with its mask & 0xffffff09: their writes on his legs don't happen
+        for (j, e) in self.on.iter().flat_map(|(_, e)| e.sit_legs().iter().cloned()).collect::<Vec<_>>() {
+            c.ch.eff[j] = e;
         }
         // RDR2 core: injuredOnGround's arms that a running reachForWound must let go
         for h in self.on.iter().filter_map(|(_, e)| e.rfw_block()).collect::<Vec<_>>() {

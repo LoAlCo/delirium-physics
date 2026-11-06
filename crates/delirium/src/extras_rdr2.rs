@@ -4058,6 +4058,10 @@ impl Extra for Sit {
         self.r2.on.then_some(self.r2.state)
     }
 
+    fn sit_legs(&self) -> &[(usize, crate::nmrs::Effector)] {
+        &self.r2.legs
+    }
+
     fn update(&mut self, p: &mut P) -> Result<(), Error> {
         for (i, n) in ["seatPos", "seatForward", "stirrupL", "stirrupR"].iter().enumerate() {
             let v = p.v(n, Vec3::ZERO)?;
@@ -4467,6 +4471,8 @@ pub struct SitRdr2 {
     key_off: bool,
     latched: bool,
     logged: u64,
+    /// falling with catchFall or smartFall: his legs, out of their masks (& 0xffffff09)
+    legs: Vec<(usize, crate::nmrs::Effector)>,
     pub ropes: Vec<(usize, Vec3, Vec3, f32, f32)>,
     pub contact_off: u32,
     pub bullet: bool,
@@ -4491,7 +4497,7 @@ impl SitRdr2 {
             up_seat: Vec3::Z, locals: (Vec3::Z, Vec3::NEG_Y), q_rel: inf, cons: [None; 4], len: [0.0; 3],
             knee: -0.9, seeds: [0.0; 3], fail_t: 1000.0, healthy: true, probes: [f32::MAX; 3], probe_i: 0, kids: vec![],
             rds_t: None, rds_dir: Vec3::ZERO, prev_seat: None, prev_anim: vec![], last: None, found: None, probed: false,
-            obstacle: None, shrunk: [false; 3], restore: false, key_off: false, latched: false, logged: 0,
+            obstacle: None, shrunk: [false; 3], restore: false, key_off: false, latched: false, logged: 0, legs: vec![],
             ropes: vec![], contact_off: 0, bullet: false,
         };
         s.read(p)?;
@@ -5129,6 +5135,11 @@ impl SitRdr2 {
                 if start { "start=true " } else { "" }, self.soft.0, self.soft.1, self.soft_break, sit_v(m), sit_v(n))
     }
 
+    fn keep_legs(&mut self, c: &Ctx) {
+        self.legs = [HIP(), KNEE(), ANKLE()].iter().flat_map(|l| l.iter().copied()).map(|j| (j, c.ch.eff[j].clone())).collect();
+        self.say(27, || "falling: his legs out of the reaction's mask".into());
+    }
+
     /// Before the fall reactions: the other behaviours sit started stop (fallingReaction 0 or more), or the balancer's
     /// hip pitch and knee bend stay asked (0x2aac3c8).
     fn preamble(&mut self, c: &mut Ctx, out: &mut Vec<String>) {
@@ -5233,12 +5244,18 @@ impl SitRdr2 {
                 self.feedback(c, false, -1);
                 match self.falling {
                     0 => self.start(out, "bodyRollUp", "bodyRollUp start=true useArmToSlowDown=2 legPush=0 asymmetricalLegs=0.75".into()),
-                    1 => self.start(out, "catchFall", "catchFall start=true".into()),
+                    1 => {
+                        self.start(out, "catchFall", "catchFall start=true".into());
+                        self.keep_legs(c);
+                    }
                     2 => {
                         let line = self.rds_line(self.rds.2, self.use_roll_dir, self.roll_dir);
                         self.start(out, "rollDownStairs", line);
                     }
-                    3 => self.start(out, "smartFall", "smartFall start=true initialState=6".into()),
+                    3 => {
+                        self.start(out, "smartFall", "smartFall start=true initialState=6".into());
+                        self.keep_legs(c);
+                    }
                     _ => {
                         c.out.dbm_crouch.push(Crouch::ReleaseHip(self.hip.1));
                         c.out.dbm_crouch.push(Crouch::ReleaseKnee(self.straight.1));
@@ -5308,6 +5325,7 @@ impl SitRdr2 {
     }
 
     fn exit(&mut self, c: &mut Ctx, n: usize, out: &mut Vec<String>) {
+        self.legs.clear();
         match n {
             0 => {
                 self.feedback(c, false, 0);
@@ -5487,6 +5505,7 @@ impl SitRdr2 {
         self.ropes.clear();
         self.contact_off = 0;
         self.key_off = false;
+        self.legs.clear();
         self.shrunk = [false; 3];
         c.ch.bb_off.clear();
         self.on = false;
