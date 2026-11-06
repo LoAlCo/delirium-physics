@@ -113,6 +113,8 @@ pub struct SentMessage {
     pub reset: bool,
     /// parameters the file holds but nothing in NM takes from it (priority, blend, a reset of the message)
     pub other: Vec<String>,
+    /// in the file: how many items the message has, every type counted. In the merged list: slots taken, a repeat counted
+    pub items: usize,
 }
 
 pub struct Set {
@@ -136,6 +138,7 @@ fn name_hash(s: &str) -> u32 {
 fn message(m: &Node) -> SentMessage {
     let raw = m.kid("Name").map_or("", |n| n.text.as_str());
     let mut out = SentMessage { hash: name_hash(raw), label: raw.to_string(), params: vec![], other: vec![], reset: false,
+                                items: m.kid("Params").map_or(0, |p| p.kids.len()),
                                 force: m.kid("ForceNewMessage").and_then(Node::value) == Some("true"),
                                 task_side: m.kid("TaskMessage").and_then(Node::value) == Some("true") };
     for p in m.kid("Params").map_or(&[][..], |p| &p.kids) {
@@ -230,27 +233,44 @@ pub fn selects(sel: &str, path: &[String]) -> bool {
     })
 }
 
-/// The game's poster (0x1c2b154): the sets sorted by priority, lowest first (a stable sort, as they were named), each
-/// message merged into the one of its name (a later value wins), or a new one when it says so. A set disabled in the
-/// file is not added (0x1c3f7a0).
+/// A message in the game's merged list holds this many parameters (0x9db1a0 builds each with 64 inline; 0x2a75fd8 and its
+/// like drop the rest). Start, mask, priority and blend go in the header and take none.
+const MESSAGE_SLOTS: usize = 64;
+
+/// The game's poster (0x1c2b154): the sets sorted by priority, lowest first (a stable sort, as they were named). Each
+/// message (0x1c2aa0c) goes into the last of its name with fewer than 64 - n slots taken, n its count of items (64 with
+/// ForceNewMessage, so never), or else into a new one at the end. So a message filled past that doesn't take what
+/// follows: a later set's bare start=true opens its own, and that one, handled after, reloads the defaults over all of
+/// it. A later value of a parameter wins (the handlers read in order). A set disabled in the file is not added
+/// (0x1c3f7a0).
 pub fn merge<'a>(sets: impl IntoIterator<Item = &'a Set>) -> Vec<SentMessage> {
     let mut on: Vec<&Set> = sets.into_iter().filter(|s| s.enabled && !s.messages.is_empty()).collect();
     on.sort_by_key(|s| s.priority);
     let mut out: Vec<SentMessage> = vec![];
     for m in on.iter().flat_map(|s| &s.messages) {
-        let here = if m.force { None } else { out.iter_mut().rev().find(|x| x.hash == m.hash) };
+        let need = if m.force { MESSAGE_SLOTS } else { m.items };
+        let here = out.iter_mut().rev().find(|x| x.hash == m.hash && x.items + need < MESSAGE_SLOTS);
         let x = match here {
             Some(x) => x,
             None => {
-                out.push(SentMessage { hash: m.hash, label: m.label.clone(), params: vec![], task_side: m.task_side, force: m.force, reset: false, other: vec![] });
+                out.push(SentMessage { hash: m.hash, label: m.label.clone(), params: vec![], task_side: m.task_side, force: m.force, reset: false, other: vec![], items: 0 });
                 out.last_mut().unwrap()
             }
         };
         if m.reset {
             x.params.clear();
+            x.items = 0;
         }
         for p in &m.params {
             let new = SentParam { hash: p.hash, label: p.label.clone(), val: p.val.clone() };
+            let header = p.hash == joaat("start") || p.hash == joaat("mask");
+            if !header {
+                if x.items == MESSAGE_SLOTS {
+                    x.other.push(format!("{} (past the message's 64 slots)", p.label));
+                    continue;
+                }
+                x.items += 1;
+            }
             match x.params.iter_mut().find(|q| q.hash == p.hash) {
                 Some(q) => *q = new,
                 None => x.params.push(new),
