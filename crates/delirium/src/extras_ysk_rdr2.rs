@@ -1901,7 +1901,7 @@ impl Extra for Swim {
 // ---- keyframe ----
 
 /// Our parts for a joint mask: each joint's child part, and the pelvis with both hips.
-fn mask_parts(m: &str) -> Vec<usize> {
+pub(crate) fn mask_parts(m: &str) -> Vec<usize> {
     let js = crate::nmrs::Character::mask(m);
     let mut ps: Vec<usize> = js.iter().map(|j| j + 1).collect();
     if js.contains(&HIP()[0]) && js.contains(&HIP()[1]) {

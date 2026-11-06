@@ -111,6 +111,13 @@ fn legs_high(c: &Ctx) -> bool {
 }
 
 impl RollDownStairs {
+    /// RDR2 core: sit writes these while it runs (rollDownStairs +0x5c, and +0xa0 in the seat's frame).
+    pub fn live(&mut self, force: f32, dir: Vec3) {
+        self.forcemag = force;
+        self.custom_roll_dir = dir;
+        self.dir = dir;
+    }
+
     /// RDR2's defaults (its handler's with no message).
     pub fn rdr2_defaults() -> RollDownStairs {
         RollDownStairs { stiffness: 11.0, damping: 1.4, forcemag: 0.55, asymmetrical_legs: 0.0, use_arm_to_slow_down: -1.9, arm_reach_amount: 1.4,

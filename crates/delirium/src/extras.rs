@@ -123,6 +123,10 @@ pub trait Extra: Send + Sync {
     fn sit_stirrups(&self) -> Option<[bool; 2]> {
         None
     }
+    /// The RDR2 core's sit: its state, running (the shot and reachForWound read it).
+    fn sit_state(&self) -> Option<usize> {
+        None
+    }
     /// The RDR2 core's yanked: a running sit's stirrups.
     fn yanked_stirrups_set(&mut self, _alive: Option<[bool; 2]>) {}
     /// The RDR2 core's pointGun: part masks (RDR2's bits) that leave each other alone this step.
@@ -159,6 +163,8 @@ pub struct Extras {
     /// the running extras' ropes and contact-off bits this step (RDR2 core's sit)
     pub ropes: Vec<(usize, bevy_math::Vec3, bevy_math::Vec3, f32, f32)>,
     pub contact_off: u32,
+    /// RDR2 core: a running sit's state, as of its last tick
+    pub sit_state: Option<usize>,
     /// RDR2 core's pointGun: self-collision pairs off this step, as RDR2 part masks
     pub pair_off: Vec<(u32, u32)>,
 }
@@ -252,6 +258,7 @@ impl Extras {
             }
         }
         c.extras_on = self.on.iter().map(|(n, _)| *n).collect();
+        self.sit_state = self.on.iter().find_map(|(_, e)| e.sit_state());
         for mut e in self.stopping.drain(..) {
             e.stop(c);
             self.outbox.extend(e.lines());

@@ -551,6 +551,10 @@ pub struct Character {
     /// RDR2 core's joint drive (mod rdr2); false: GTA IV's
     pub rdr2: bool,
     pub busy: [bool; 2],
+    /// RDR2 core: sit on bodyBalance: noisy elbows (+0x150, cleared by its tick), the joints out of its mask, its target
+    pub bb_noisy: bool,
+    pub bb_off: Vec<usize>,
+    pub bb_target: Option<Vec3>,
     pub stabilise: Option<(f32, f32)>,
     pub foot_yaw: [f32; 2],
     pub attached: Option<(usize, Vec3, f32)>,
@@ -663,7 +667,7 @@ fn targets(j: &JointDef, e: &Effector) -> [f32; 3] {
 
 impl Character {
     pub fn new(joints: Vec<JointDef>, frames: &[Transform]) -> Character {
-        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, bcr_probe: None, cf_exclude: [false; 2], fow_state: None, core: CoreState::default() };
+        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], bb_noisy: false, bb_off: vec![], bb_target: None, stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, bcr_probe: None, cf_exclude: [false; 2], fow_state: None, core: CoreState::default() };
         c.seed(0);
         c.eff = (0..c.joints.len()).map(|i| Effector::new(&c.joints[i], c.angle(i, frames))).collect();
         static ONCE: std::sync::Once = std::sync::Once::new();
@@ -708,6 +712,13 @@ impl Character {
             let r = if rel.w < 0.0 { -rel } else { rel };
             [2.0 * r.z.atan2(r.w), 0.0, 0.0]
         }
+    }
+
+    /// A joint's rotation as its effector's (lean1, lean2, twist): RDR2's 0x2a4acb0 and 0x2a376b4.
+    pub fn joint_triple(&self, i: usize, q: Quat) -> [f32; 3] {
+        let j = &self.joints[i];
+        let [tw, l1, l2] = angles(q);
+        effector_angles([l1, l2, tw], &j.limits, j.flip)
     }
 
     pub fn incoming_quat(&self, i: usize, m: &[[Vec3; 3]]) -> Quat {

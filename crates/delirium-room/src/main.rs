@@ -10067,7 +10067,8 @@ fn headless(mut sim: Sim, n: usize) {
         .filter_map(|x| x.split_once(':')).filter_map(|(f, l)| Some((f.trim().parse().ok()?, l.trim().to_string()))).collect();
     let hold_incoming: Option<usize> = std::env::var("RDR2_HOLD_INCOMING").ok().and_then(|x| x.parse().ok());
     for i in 0..n {
-        if i == 60 {
+        // (test hook: RDR2_NO_SHOT leaves this out: the room's shot stops every behaviour first, sit too)
+        if i == 60 && std::env::var_os("RDR2_NO_SHOT").is_none() {
             sim.button("shot");
         }
         for (_, l) in sends.iter().filter(|(f, _)| *f == i) {

@@ -68,8 +68,8 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "pelvisLength", kind: Kind::Float, used: true, doc: "RDR2 core, uncracked 7eb6c0a8: its slack once tightened, m (0.05)" },
         Param { name: "pelvisRate", kind: Kind::Float, used: true, doc: "RDR2 core, uncracked 66b2fa7e: how fast it tightens, m/s (0.1)" },
         Param { name: "orientLengthStart", kind: Kind::Float, used: true, doc: "RDR2 core, uncracked ffb7714b: how far the pelvis may turn from the seat at the start, rad (0.2)" },
-        Param { name: "orientLength", kind: Kind::Float, used: true, doc: "RDR2 core, uncracked 4356388b: once tightened, rad (0)" },
-        Param { name: "orientRate", kind: Kind::Float, used: true, doc: "RDR2 core, uncracked 7a822fad: rad/s (0.1)" },
+        Param { name: "orientLength", kind: Kind::Float, used: true, doc: "RDR2 core, uncracked 4356388b: copied and never used: the turn never tightens (0)" },
+        Param { name: "orientRate", kind: Kind::Float, used: true, doc: "RDR2 core, uncracked 7a822fad: copied and never used (0.1)" },
         Param { name: "stirrupLengthStart", kind: Kind::Float, used: true, doc: "RDR2 core, uncracked 1d0ffcf0: the stirrups' slack at the start, m (0.2)" },
         Param { name: "stirrupLength", kind: Kind::Float, used: true, doc: "RDR2 core, uncracked 47195a12: once tightened, m (0.05)" },
         Param { name: "stirrupRate", kind: Kind::Float, used: true, doc: "RDR2 core, uncracked 1d24def6: m/s (0.1)" },
@@ -90,15 +90,25 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "spinefollowanims", kind: Kind::Bool, used: true, doc: "RDR2 core: his spine leans toward the animation's trunk (true; no incoming animation: toward the sky)" },
         Param { name: "seatuplocal", kind: Kind::Vec3, used: false, doc: "RDR2's seat up in the seat part's frame ((0,-1,0); here seatUp, world)" },
         Param { name: "seatrightlocal", kind: Kind::Vec3, used: false, doc: "RDR2's ((1,0,0); here seatForward, world)" },
-        Param { name: "activePoseMask", kind: Kind::Str, used: false, doc: "RDR2's: parts driven to the incoming pose (fb)" },
-        Param { name: "softbreakthreshold", kind: Kind::Float, used: false, doc: "RDR2's (0.15)" },
-        Param { name: "softmaxaccel", kind: Kind::Vec3, used: false, doc: "RDR2's (50,50,50)" },
-        Param { name: "softmaxangaccel", kind: Kind::Vec3, used: false, doc: "RDR2's (50,50,50)" },
-        Param { name: "stateridingtarget", kind: Kind::Bool, used: false, doc: "RDR2's (false)" },
-        Param { name: "animSource", kind: Kind::Int, used: false, doc: "RDR2's (0)" },
-        Param { name: "constraintsfollowanims", kind: Kind::Bool, used: false, doc: "RDR2's (false)" },
-        Param { name: "pelvisradiusscale", kind: Kind::Float, used: false, doc: "RDR2's (1)" },
-        Param { name: "thighradiusscale", kind: Kind::Float, used: false, doc: "RDR2's (1)" },
+        Param { name: "activePoseMask", kind: Kind::Str, used: true, doc: "RDR2's: parts driven to the incoming pose (fb)" },
+        Param { name: "softbreakthreshold", kind: Kind::Float, used: true, doc: "RDR2's (0.15)" },
+        Param { name: "softmaxaccel", kind: Kind::Vec3, used: true, doc: "RDR2's (50,50,50)" },
+        Param { name: "softmaxangaccel", kind: Kind::Vec3, used: true, doc: "RDR2's (50,50,50)" },
+        Param { name: "stateridingtarget", kind: Kind::Bool, used: true, doc: "RDR2's (false)" },
+        Param { name: "animSource", kind: Kind::Int, used: true, doc: "RDR2's (0)" },
+        Param { name: "constraintsfollowanims", kind: Kind::Bool, used: true, doc: "RDR2's (false)" },
+        Param { name: "pelvisradiusscale", kind: Kind::Float, used: true, doc: "RDR2's (1)" },
+        Param { name: "thighradiusscale", kind: Kind::Float, used: true, doc: "RDR2's (1)" },
+        Param { name: "mask", kind: Kind::Str, used: true, doc: "RDR2 core: the behaviour's mask, on activePoseMask (fb)" },
+        Param { name: "seatboundhandle", kind: Kind::Int, used: true, doc: "RDR2 core: the seat: an obstacle's id (RDR2: a physics instance); 0 none: a probe 0.4 m down from his pelvis finds one (0)" },
+        Param { name: "hipLimitsWide", kind: Kind::Bool, used: true, doc: "RDR2 core, uncracked 352571d7: constrain 2, the hips' limits at least 1, 0.65, 0.46 (false)" },
+        Param { name: "halfStepSeat", kind: Kind::Bool, used: false, doc: "RDR2's uncracked 1636ff85: seat smoothing by Rage's substep (false)" },
+        Param { name: "constraintsCollide", kind: Kind::Bool, used: false, doc: "RDR2's uncracked 85765ef9: a Rage constraint flag (true)" },
+        Param { name: "dragBlock", kind: Kind::Bool, used: false, doc: "RDR2's uncracked 1e5f57c9: dragged, a block of the articulated body overridden (false)" },
+        Param { name: "dragBlockA", kind: Kind::Float, used: false, doc: "RDR2's uncracked b878dcfc (1)" },
+        Param { name: "dragBlockB", kind: Kind::Float, used: false, doc: "RDR2's uncracked 949a1547 (1)" },
+        Param { name: "dragBlockC", kind: Kind::Float, used: false, doc: "RDR2's uncracked 696858c4 (0.1)" },
+        Param { name: "dragUnused", kind: Kind::Float, used: false, doc: "RDR2's uncracked 69aa1b80: nothing in the code reads it (1)" },
     ] },
     Message { name: "keyframe", params: &[
         Param { name: "blendTime", kind: Kind::Float, used: true, doc: "s to blend into the neutral stand (0.3)" },
@@ -2661,7 +2671,8 @@ impl ReachForWound {
         };
         // on the ground: only as reachFalling (or, lying, reachOnFloor) allows; then catchFall and bodyRollUp leave
         // this arm alone (RDR2's one-hand-by-orientation rule needs its predicted body orientation: both hands here)
-        if !c.upright {
+        // (riding isn't on the ground: reachForWound's +0x52e, sit running with its state at most 2)
+        if !c.upright && !c.sit_state.is_some_and(|s| s <= 2) {
             let body: Vec<usize> = std::iter::once(0).chain(7..21).collect();
             let lying = c.b.doll.collided(&body);
             let allow = if lying { r.floor } else { r.falling };
@@ -4042,6 +4053,10 @@ impl Extra for Sit {
         Some([self.r2.cons[2].is_some(), self.r2.cons[1].is_some()])
     }
 
+    fn sit_state(&self) -> Option<usize> {
+        self.r2.on.then_some(self.r2.state)
+    }
+
     fn update(&mut self, p: &mut P) -> Result<(), Error> {
         for (i, n) in ["seatPos", "seatForward", "stirrupL", "stirrupR"].iter().enumerate() {
             let v = p.v(n, Vec3::ZERO)?;
@@ -4056,7 +4071,7 @@ impl Extra for Sit {
         }
         self.up = p.v("seatUp", self.up)?;
         self.throw |= p.b("throw", false)?;
-        self.r2.health = p.f("health", self.r2.health)?;
+        self.r2.read(p)?;
         Ok(())
     }
 
@@ -4215,9 +4230,10 @@ impl Extra for Sit {
         self.r2.bullet = true;
     }
 
-    fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, _obs: &[crate::ragdoll::Obstacle]) {
+    fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle]) {
         if c.ch.rdr2 {
-            self.r2.probe(c, world);
+            let given = self.given[0] || self.r2.mount > 0.0;
+            self.r2.probe(c, world, obs, given);
         }
     }
 
@@ -4235,7 +4251,8 @@ impl Sit {
         self.t += dt;
         let at = |k: usize| c.b.part(k).m.d;
         let from = *self.from.get_or_insert([at(0), at(3), at(6)]);
-        if !self.given[0] {
+        // (Delirium's mounting needs a seat: where he starts, as without the core. Without it the seat is RDR2's)
+        if !self.given[0] && self.r2.mount > 0.0 {
             self.seat = from[0];
             self.given[0] = true;
         }
@@ -4277,29 +4294,37 @@ impl Sit {
         }
         let q = bevy_math::Quat::from_mat3(&bevy_math::Mat3::from_cols(fwd, left, up));
         let throw = std::mem::take(&mut self.throw);
-        self.r2.tick(c, dt, self.seat, q, throw, &mut self.out, &mut self.cons);
+        let seat = self.given[0].then_some((self.seat, q));
+        self.r2.tick(c, dt, seat, throw, &mut self.out, &mut self.cons);
     }
 }
 
 /// A constraint of RDR2's sit: our part, the point on it (in its frame) and the other end, in the seat's frame
-/// (carried with the seat) or the world's.
+/// (carried with the seat).
 #[derive(Clone, Copy, Debug)]
 struct SitCon {
     part: usize,
     local: Vec3,
     anchor: Vec3,
-    carried: bool,
+    /// constraintsfollowanims: the animated point the other end follows, (part, the point in that part's frame)
+    anim: Option<(usize, Vec3)>,
 }
 
-/// The seat this step, world: where it is, its turn, its velocity, and the rider's seat frame's rows (his up, his
-/// left, his back: RDR2's pelvis frame at activation, carried by the seat).
+/// The seat this step, world: where it is, its turn, its velocity, its up as RDR2's seat test reads it (+0x200: the sky
+/// at activation, carried), its up and right for the pelvis's turn (seatuplocal, seatrightlocal), the rider's seat
+/// frame's rows (his up, his left, his back: RDR2's pelvis frame at activation, carried by the seat, +0x2a0..) and its
+/// origin (+0x2d0).
 #[derive(Clone, Copy, Debug)]
 struct SeatNow {
     at: Vec3,
     q: bevy_math::Quat,
     up: Vec3,
+    up_w: Vec3,
+    right_w: Vec3,
     vel: Vec3,
     rows: [Vec3; 3],
+    rider_at: Vec3,
+    has: bool,
 }
 
 /// The sit tests of one step (rdr2_sit.md §4.3, §6.1).
@@ -4311,15 +4336,18 @@ struct SitTests {
     in_box: bool,
     rel: f32,
     below: f32,
+    healthy: bool,
     health_fail: bool,
+    health_over: bool,
 }
 
 /// The state machine's exits (RDR2's row table 0x3cc7cf0), tried in order once a state is done.
 const SIT_ROWS: [&[usize]; 8] = [&[2], &[2], &[7, 3, 5, 4], &[6, 4], &[6, 3], &[], &[3, 4], &[]];
 /// RDR2's knee offset added to the activation knee angle (a tunable global, 0 in the dump).
 const SIT_KNEE: f32 = 0.0;
-/// The constraint slots' length rows: pelvis, right shin, left shin, the pelvis's turn.
-const SIT_LEN: [usize; 4] = [0, 1, 1, 2];
+/// The tightening constraint slots' length rows: pelvis, right shin, left shin (slot 3 never tightens, 0x2aac424's loop
+/// stops at 3).
+const SIT_LEN: [usize; 3] = [0, 1, 1];
 
 #[allow(non_snake_case)]
 #[inline]
@@ -4332,25 +4360,24 @@ fn sit_v(v: Vec3) -> String {
     format!("{},{},{}", v.x, v.y, v.z)
 }
 
-/// RDR2's sit (slot 0x108, rdr2_sit.md), with the RDR2 core. His pelvis and both shins are held to the seat by
-/// distance constraints that start with 0.2 m of slack and tighten at 0.1 m/s to 0.05 m, breaking at
-/// constrainstrength / constrainstrengthstirrup (unless neverreleaseconstraint), and his pelvis's turn to the seat's by
-/// an angle constraint; a bullet gives them their slack back. While riding his spine leans toward the animation's
-/// trunk (or the sky), his hips keep their angle and his knees their activation bend, his hands go to the reins, and
-/// the balancer's hip pitch and knee bend are asked -0.5 / -0.1. RDR2's 8-state machine decides how he leaves: fall
+/// RDR2's sit (slot 0x108, rdr2_sit.md §13), with the RDR2 core. His pelvis and both shins are held to the seat by
+/// distance constraints whose far ends lie above them along the seat's up (half the slack above the pelvis, all of it
+/// above the ankles), tightening at 0.1 m/s to 0.05 m, so tightening lifts him into the seat; they break at
+/// constrainstrength / constrainstrengthstirrup (unless neverreleaseconstraint), and his pelvis's up and right stay
+/// within 0.2 rad of the seat's; a bullet gives the lengths their start values back. While riding his joints follow
+/// the incoming animation on activePoseMask, his spine leans toward the animation's trunk (or the sky), his hips turn
+/// with his trunk's error and his knees keep their activation bend (constrain 2), his hands go to the reins, and the
+/// balancer's hip pitch and knee bend are asked -0.5 / -0.1. RDR2's 8-state machine decides how he leaves: fall
 /// (fallingReaction), roll off and slump (health), dragged by a stirrup (dragreaction, dragreach), or on his feet.
 ///
-/// Delirium's: the horse is no body his solver holds him to, so every anchor is a world point moved with the seat
-/// (RDR2's constraintoworld; RDR2's constrain 2 hangs them on the horse's body) and the horse isn't told
-/// (defineAttachedObject: Delirium's horse carries no rider's mass). RDR2's distance constraints are Delirium's grip
-/// ropes (a breaking strength on the solver's impulse per step); its angle constraint, which Delirium lacks, is a hard
-/// hold of the pelvis's turn at the limit once he's past it. Which RDR2 pelvis axis is which is the note's guess: his
-/// up, side (the seat box's 0.3 m and the hands' side) and back (the hands 0.5 m ahead); rolling off goes to his side.
-/// RDR2's hip targets (the thighs kept at their angle to the trunk) are held at their activation angles here. The
-/// three ground probes are ours (down from his pelvis and 0.5 m to each side). RDR2's flag F (mgr+0x5229) is taken as
-/// off. Left out: the collision radius scales, the seat instance list, the keyframed state's joint limits and its
-/// soft-key settings, the incoming-pose drive (no riding animation here), bodyBalance's noisy elbows and mask, the
-/// shot made subordinate, the drag block override (+0x170).
+/// Delirium's: Homer's solver has no constraint between him and another body, so every far end is a world point moved
+/// with the seat (RDR2's constraintoworld) and the horse isn't told (defineAttachedObject: Delirium's horse carries no
+/// rider's mass). RDR2's seat is a physics instance: here seatboundhandle is an obstacle's id, seatPos (Delirium's)
+/// gives a seat outright, and a seat found by the probe is the hit point. RDR2's distance constraints are the solver's
+/// grip ropes (a breaking strength on the solver's impulse per step); its angle constraints, which Delirium lacks, are a
+/// hard hold of the pelvis's turn at the limit once he's past it; constrain 1's rigid constraint (type 8) is a rope of
+/// 0.001 m with that hold. RDR2's flag F (mgr+0x5229, a game-side byte set from outside NM) is off, so its branches are
+/// left out; see the note for the rest of what has no source here.
 pub struct SitRdr2 {
     mount: f32,
     constrain: i32,
@@ -4384,28 +4411,61 @@ pub struct SitRdr2 {
     drag_k: f32,
     keys: [String; 3],
     soft: (f32, f32),
+    soft_break: f32,
+    soft_accel: (Vec3, Vec3),
+    active: String,
+    mask: String,
     spine_anims: bool,
+    cons_anims: bool,
+    riding_target: bool,
+    anim_source: i32,
+    radius: (f32, f32),
+    hips_wide: bool,
+    handle: i32,
     pub health: f32,
     on: bool,
     t: f32,
     state: usize,
     entered: f32,
     roll_t: f32,
+    /// the seat frame at activation
     seat0: (Vec3, bevy_math::Quat),
+    /// the rider's seat frame in the seat's: rows and origin (+0x260)
     rider: [Vec3; 3],
+    rider_at: Vec3,
+    /// his pelvis at activation: its turn in the world, its rows (up, left, back)
+    pelvis0: (bevy_math::Quat, [Vec3; 3]),
+    /// world up in the seat's frame at activation (+0x1f0)
+    up_seat: Vec3,
+    /// the seat's up and right in its own frame
+    locals: (Vec3, Vec3),
     q_rel: bevy_math::Quat,
     cons: [Option<SitCon>; 4],
-    len: [f32; 4],
+    len: [f32; 3],
     knee: f32,
-    hips: [[f32; 3]; 2],
     seeds: [f32; 3],
     fail_t: f32,
     healthy: bool,
     probes: [f32; 3],
+    probe_i: usize,
     kids: Vec<&'static str>,
     rds_t: Option<f32>,
+    /// rolling off: the way he rolls, in the seat's frame (+0x20, re-expressed in the seat instance's)
+    rds_dir: Vec3,
     prev_seat: Option<Vec3>,
+    prev_anim: Vec<bevy_transform::components::Transform>,
     last: Option<SeatNow>,
+    /// the probe's seat, and the obstacle's seat this step (at, turn, velocity)
+    found: Option<Vec3>,
+    probed: bool,
+    obstacle: Option<(Vec3, bevy_math::Quat, Vec3)>,
+    /// the pelvis and thighs at their radius scales, and whether the restore is armed (+0x404.., +0x3f4)
+    shrunk: [bool; 3],
+    restore: bool,
+    /// keyframe's masks are on (state 1); parts 4..7 they name don't collide
+    key_off: bool,
+    latched: bool,
+    logged: u64,
     pub ropes: Vec<(usize, Vec3, Vec3, f32, f32)>,
     pub contact_off: u32,
     pub bullet: bool,
@@ -4413,39 +4473,100 @@ pub struct SitRdr2 {
 
 impl SitRdr2 {
     fn new(p: &mut P, mount: f32, constrain: i32) -> Result<SitRdr2, Error> {
-        // taken, not used: the seat's frame is given in the world here, and there's no riding animation
-        let _ = (p.v("seatuplocal", Vec3::NEG_Y)?, p.v("seatrightlocal", Vec3::X)?, p.s("activePoseMask", "fb")?);
-        let _ = (p.f("softbreakthreshold", 0.15)?, p.v("softmaxaccel", Vec3::splat(50.0))?, p.v("softmaxangaccel", Vec3::splat(50.0))?);
-        let _ = (p.b("stateridingtarget", false)?, p.i("animSource", 0)?, p.b("constraintsfollowanims", false)?);
-        let _ = (p.f("pelvisradiusscale", 1.0)?, p.f("thighradiusscale", 1.0)?, p.b("constraintoworld", false)?);
-        let slump = p.b("Slump", false)?;
-        Ok(SitRdr2 {
-            mount, constrain,
-            strength: (p.f("constrainstrength", 40.0)?, p.f("constrainstrengthstirrup", 40.0)?),
-            never_release: p.b("neverreleaseconstraint", false)?,
-            lens: [(p.f("pelvisLengthStart", 0.2)?, p.f("pelvisLength", 0.05)?, p.f("pelvisRate", 0.1)?),
-                   (p.f("stirrupLengthStart", 0.2)?, p.f("stirrupLength", 0.05)?, p.f("stirrupRate", 0.1)?),
-                   (p.f("orientLengthStart", 0.2)?, p.f("orientLength", 0.0)?, p.f("orientRate", 0.1)?)],
-            fail: [p.f("failangle", 0.71)?, p.f("posefailangle", 0.71)?, p.f("seatfailangle", 0.71)?, p.f("standfailangle", 0.71)?],
-            health_delay: p.f("healthfaildelay", 0.0)?, health_now: p.b("healthFailNow", true)?,
-            roll: (p.f("rolldelay", 0.3)?, p.f("rollspeedthreshold", 2.0)?),
-            seat_box: (p.f("seatBoxSide", 0.3)?, p.f("seatBoxLength", 0.75)?),
-            rds: (p.f("rdsforcemagstart", 0.5)?, p.f("rdsforcemagramp", 0.05)?, p.f("rdsForceMag", 2.0)?),
-            roll_dir: p.v("rollDir", Vec3::Z)?, use_roll_dir: p.b("useRollDir", false)?, rds_min: p.f("rdsMinAngVel", 0.3)?,
-            falling: p.i("fallingReaction", 0)?, slump: p.b("slump", slump)?,
-            hip: (p.f("hippitchstart", -0.5)?, p.f("hippitchramp", 0.25)?),
-            straight: (p.f("straightnessstart", -0.1)?, p.f("straightnessramp", 0.35)?),
-            drag: p.b("drag", false)?, reach: p.b("dragreach", true)?, drag_time: p.f("dragTime", 10.0)?,
-            drag_reaction: p.i("dragreaction", 1)?, reach_chance: p.f("dragReachChance", 0.5)?,
-            reach_delay: p.f("dragreachdelay", 0.2)?, drag_slack: p.f("dragSlack", 0.0)?, drag_k: p.f("dragstiffness", 9.0)?,
-            keys: [p.s("hardKeyMask", "na")?, p.s("softKeyMask", "na")?, p.s("softKeyMaskAlt", "na")?],
-            soft: (p.f("softweight", 0.8)?, p.f("softweightalt", 0.8)?), spine_anims: p.b("spinefollowanims", true)?,
-            health: p.f("health", 1.0)?,
-            on: false, t: 0.0, state: 2, entered: 0.0, roll_t: 0.0, seat0: (Vec3::ZERO, bevy_math::Quat::IDENTITY),
-            rider: [Vec3::Z, Vec3::Y, Vec3::NEG_X], q_rel: bevy_math::Quat::IDENTITY, cons: [None; 4], len: [0.0; 4],
-            knee: 0.0, hips: [[0.0; 3]; 2], seeds: [0.0; 3], fail_t: 1000.0, healthy: true, probes: [f32::MAX; 3], kids: vec![],
-            rds_t: None, prev_seat: None, last: None, ropes: vec![], contact_off: 0, bullet: false,
-        })
+        let inf = bevy_math::Quat::IDENTITY;
+        let mut s = SitRdr2 {
+            mount, constrain, strength: (40.0, 40.0), never_release: false,
+            lens: [(0.2, 0.05, 0.1), (0.2, 0.05, 0.1), (0.2, 0.0, 0.1)],
+            fail: [0.71; 4], health_delay: 0.0, health_now: true, roll: (0.3, 2.0), seat_box: (0.3, 0.75),
+            rds: (0.5, 0.05, 2.0), roll_dir: Vec3::Z, use_roll_dir: false, rds_min: 0.3, falling: 0, slump: false,
+            hip: (-0.5, 0.25), straight: (-0.1, 0.35), drag: false, reach: true, drag_time: 10.0, drag_reaction: 1,
+            reach_chance: 0.5, reach_delay: 0.2, drag_slack: 0.0, drag_k: 9.0,
+            keys: ["na".into(), "na".into(), "na".into()], soft: (0.8, 0.8), soft_break: 0.15,
+            soft_accel: (Vec3::splat(50.0), Vec3::splat(50.0)), active: "fb".into(), mask: "fb".into(),
+            spine_anims: true, cons_anims: false, riding_target: false, anim_source: 0, radius: (1.0, 1.0),
+            hips_wide: false, handle: 0, health: 1.0,
+            on: false, t: 0.0, state: 2, entered: 0.0, roll_t: 0.0, seat0: (Vec3::ZERO, inf),
+            rider: [Vec3::X, Vec3::Y, Vec3::Z], rider_at: Vec3::ZERO, pelvis0: (inf, [Vec3::Z, Vec3::Y, Vec3::NEG_X]),
+            up_seat: Vec3::Z, locals: (Vec3::Z, Vec3::NEG_Y), q_rel: inf, cons: [None; 4], len: [0.0; 3],
+            knee: -0.9, seeds: [0.0; 3], fail_t: 1000.0, healthy: true, probes: [f32::MAX; 3], probe_i: 0, kids: vec![],
+            rds_t: None, rds_dir: Vec3::ZERO, prev_seat: None, prev_anim: vec![], last: None, found: None, probed: false,
+            obstacle: None, shrunk: [false; 3], restore: false, key_off: false, latched: false, logged: 0,
+            ropes: vec![], contact_off: 0, bullet: false,
+        };
+        s.read(p)?;
+        Ok(s)
+    }
+
+    /// The message's parameters: at the start RDR2's defaults (the 0x150 block at 0x59b0fe0), sent again without start
+    /// only those given, live (rdr2_sit.md §3).
+    fn read(&mut self, p: &mut P) -> Result<(), Error> {
+        // read for the message's sake: with F off they aren't used (0x2aa8810 forces (0,-1,0), (1,0,0) with constrain
+        // on, and there's no seat with it off), +0x180 nothing reads, +0x105 needs Rage's substep count (mgr+0x522c),
+        // +0x120 a Rage constraint flag, +0x170.. a block of the articulated body
+        let _ = (p.v("seatuplocal", Vec3::NEG_Y)?, p.v("seatrightlocal", Vec3::X)?, p.b("constraintoworld", false)?);
+        let _ = (p.b("halfStepSeat", false)?, p.b("constraintsCollide", true)?, p.f("dragUnused", 1.0)?);
+        let _ = (p.b("dragBlock", false)?, p.f("dragBlockA", 1.0)?, p.f("dragBlockB", 1.0)?, p.f("dragBlockC", 0.1)?);
+        self.constrain = p.get("constrain").map(|v| v.i()).transpose()?.unwrap_or(self.constrain);
+        self.strength = (p.f("constrainstrength", self.strength.0)?, p.f("constrainstrengthstirrup", self.strength.1)?);
+        self.never_release = p.b("neverreleaseconstraint", self.never_release)?;
+        let l = self.lens;
+        self.lens = [(p.f("pelvisLengthStart", l[0].0)?, p.f("pelvisLength", l[0].1)?, p.f("pelvisRate", l[0].2)?),
+                     (p.f("stirrupLengthStart", l[1].0)?, p.f("stirrupLength", l[1].1)?, p.f("stirrupRate", l[1].2)?),
+                     (p.f("orientLengthStart", l[2].0)?, p.f("orientLength", l[2].1)?, p.f("orientRate", l[2].2)?)];
+        self.fail = [p.f("failangle", self.fail[0])?, p.f("posefailangle", self.fail[1])?, p.f("seatfailangle", self.fail[2])?, p.f("standfailangle", self.fail[3])?];
+        self.health_delay = p.f("healthfaildelay", self.health_delay)?;
+        self.health_now = p.b("healthFailNow", self.health_now)?;
+        self.roll = (p.f("rolldelay", self.roll.0)?, p.f("rollspeedthreshold", self.roll.1)?);
+        self.seat_box = (p.f("seatBoxSide", self.seat_box.0)?, p.f("seatBoxLength", self.seat_box.1)?);
+        self.rds = (p.f("rdsforcemagstart", self.rds.0)?, p.f("rdsforcemagramp", self.rds.1)?, p.f("rdsForceMag", self.rds.2)?);
+        self.roll_dir = p.v("rollDir", self.roll_dir)?;
+        self.use_roll_dir = p.b("useRollDir", self.use_roll_dir)?;
+        self.rds_min = p.f("rdsMinAngVel", self.rds_min)?;
+        self.falling = p.i("fallingReaction", self.falling)?;
+        let big = p.b("Slump", self.slump)?;
+        self.slump = p.b("slump", big)?;
+        self.hip = (p.f("hippitchstart", self.hip.0)?, p.f("hippitchramp", self.hip.1)?);
+        self.straight = (p.f("straightnessstart", self.straight.0)?, p.f("straightnessramp", self.straight.1)?);
+        self.drag = p.b("drag", self.drag)?;
+        self.reach = p.b("dragreach", self.reach)?;
+        self.drag_time = p.f("dragTime", self.drag_time)?;
+        self.drag_reaction = p.i("dragreaction", self.drag_reaction)?;
+        self.reach_chance = p.f("dragReachChance", self.reach_chance)?;
+        self.reach_delay = p.f("dragreachdelay", self.reach_delay)?;
+        self.drag_slack = p.f("dragSlack", self.drag_slack)?;
+        self.drag_k = p.f("dragstiffness", self.drag_k)?;
+        for (k, n) in self.keys.iter_mut().zip(["hardKeyMask", "softKeyMask", "softKeyMaskAlt"]) {
+            let v = p.s(n, "\0")?;
+            if v != "\0" {
+                *k = v;
+            }
+        }
+        self.soft = (p.f("softweight", self.soft.0)?, p.f("softweightalt", self.soft.1)?);
+        self.soft_break = p.f("softbreakthreshold", self.soft_break)?;
+        self.soft_accel = (p.v("softmaxaccel", self.soft_accel.0)?, p.v("softmaxangaccel", self.soft_accel.1)?);
+        for (k, n) in [(&mut self.active, "activePoseMask"), (&mut self.mask, "mask")] {
+            let v = p.s(n, "\0")?;
+            if v != "\0" {
+                *k = v;
+            }
+        }
+        self.spine_anims = p.b("spinefollowanims", self.spine_anims)?;
+        self.cons_anims = p.b("constraintsfollowanims", self.cons_anims)?;
+        self.riding_target = p.b("stateridingtarget", self.riding_target)?;
+        self.anim_source = p.i("animSource", self.anim_source)?;
+        self.radius = (p.f("pelvisradiusscale", self.radius.0)?, p.f("thighradiusscale", self.radius.1)?);
+        self.hips_wide = p.b("hipLimitsWide", self.hips_wide)?;
+        self.handle = p.i("seatboundhandle", self.handle)?;
+        self.health = p.f("health", self.health)?;
+        Ok(())
+    }
+
+    /// With RDR2_TRACE: a line the first time a branch runs (proof, no effect on the physics).
+    fn say(&mut self, bit: u32, s: impl FnOnce() -> String) {
+        if crate::extras_ysk_rdr2::trace() && self.logged >> bit & 1 == 0 {
+            self.logged |= 1 << bit;
+            eprintln!("sit: {}", s());
+        }
     }
 
     fn keyed(&self) -> bool {
@@ -4473,48 +4594,156 @@ impl SitRdr2 {
         }
     }
 
-    /// Activation (RDR2's 0x2a96df0), with him in the seat.
-    fn activate(&mut self, c: &mut Ctx, seat: Vec3, q: bevy_math::Quat, out: &mut Vec<String>) {
+    /// RDR2's 0x2aa78f8: an event with the state and a code (none below 0), and once per activation its start, or
+    /// success when asked.
+    fn feedback(&mut self, c: &mut Ctx, success: bool, code: i32) {
+        if code >= 0 {
+            c.out.send(SIT_EVENT(), "sit", (self.state * 10) as f32 + code as f32);
+        }
+        if !self.latched {
+            self.latched = true;
+            if success {
+                c.out.send(SIT_SUCCESS(), "sit", 0.0);
+            }
+        }
+    }
+
+    /// His pelvis's rows now (up, left, back): its frame at activation, turned with it.
+    fn pelvis_rows(&self, c: &Ctx) -> [Vec3; 3] {
+        let turn = c.b.frames[0].rotation * self.pelvis0.0.inverse();
+        self.pelvis0.1.map(|r| turn * r)
+    }
+
+    /// The incoming animation's buffer animSource reads (0 now, 1 last step's, RDR2's two buffers).
+    fn buffer<'s>(&'s self, c: &'s Ctx) -> &'s [bevy_transform::components::Transform] {
+        if self.anim_source == 1 { &self.prev_anim } else { c.incoming }
+    }
+
+    fn anim(&self, c: &Ctx, k: usize) -> Option<bevy_transform::components::Transform> {
+        self.buffer(c).get(k).copied()
+    }
+
+    /// Activation (RDR2's 0x2a96df0), with him in the seat. Delirium's seat is a world frame given in `seat` or None.
+    fn activate(&mut self, c: &mut Ctx, seat: Option<(Vec3, bevy_math::Quat)>, out: &mut Vec<String>) {
         use crate::extras_ysk_rdr2::rp;
         self.on = true;
         self.t = 0.0;
         self.seeds = [c.ch.random() * 4000.0, c.ch.random() * 4000.0, 0.0];
         (self.fail_t, self.healthy) = (1000.0, true);
+        (self.probes, self.probe_i, self.latched) = ([f32::MAX; 3], 0, false);
         self.knee = c.ch.actual(KNEE()[0], c.b.frames)[0];
-        self.hips = [c.ch.actual(HIP()[0], c.b.frames), c.ch.actual(HIP()[1], c.b.frames)];
-        // the rider's seat frame: his pelvis's frame now, in the seat's
+        // his pelvis's frame now: up, left and back ([C] 0x2a91b90's axis pairs, row 0 along the spine, -row 1 his
+        // right, as 0x2aa2a48 and 0x2aa67a4 use them; from his body, the rig's frames being Delirium's)
         let pelvis = c.b.part(0).m.d;
-        let left = (c.b.joint_pos(HIP()[0]) - c.b.joint_pos(HIP()[1])).normalize_or(q * Vec3::Y);
-        let up = (c.b.part(rp(10)).m.d - pelvis).reject_from_normalized(left).normalize_or(q * Vec3::Z);
-        let qi = q.inverse();
-        self.rider = [qi * up, qi * left, qi * up.cross(left)];
-        self.seat0 = (seat, q);
-        self.q_rel = qi * c.b.frames[0].rotation;
+        let left = (c.b.joint_pos(HIP()[0]) - c.b.joint_pos(HIP()[1])).normalize_or(Vec3::Y);
+        let up = (c.b.part(rp(10)).m.d - pelvis).reject_from_normalized(left).normalize_or(Vec3::Z);
+        self.pelvis0 = (c.b.frames[0].rotation, [up, left, up.cross(left)]);
+        match seat {
+            Some((at, q)) => {
+                let qi = q.inverse();
+                // with stateridingtarget the rider's frame is the animated pelvis's
+                let (rows, from) = match self.anim(c, 0).filter(|_| self.riding_target) {
+                    Some(a) => {
+                        let turn = a.rotation * c.b.frames[0].rotation.inverse();
+                        (self.pelvis0.1.map(|r| turn * r), a.translation)
+                    }
+                    None => (self.pelvis0.1, pelvis),
+                };
+                self.rider = rows.map(|r| qi * r);
+                self.rider_at = qi * (from - at);
+                self.up_seat = qi * c.up;
+                self.seat0 = (at, q);
+                self.q_rel = qi * c.b.frames[0].rotation;
+            }
+            None => {
+                self.rider = [Vec3::X, Vec3::Y, Vec3::Z];
+                self.rider_at = Vec3::ZERO;
+                self.up_seat = Vec3::Z;
+                self.seat0 = (Vec3::ZERO, bevy_math::Quat::IDENTITY);
+            }
+        }
+        self.shrunk = [self.radius.0 < 1.0, self.radius.1 < 1.0, self.radius.1 < 1.0];
+        self.restore = false;
         // the balancer's hip pitch and knee bend at their start values (our hip sign is RDR2's negated); every
         // riding state's enter asks RDR2's constants at once, so these hold for no step, as RDR2's code reads
         c.out.dbm_crouch.push(Crouch::Hip(11, -self.hip.0.clamp(-2.0, 2.0), 100000.0));
         c.out.dbm_crouch.push(Crouch::Knee(10, self.straight.0, 100000.0));
+        if self.constrain != 0 {
+            // (with it on, the key masks go)
+            self.keys = ["na".into(), "na".into(), "na".into()];
+        }
         self.state = if self.constrain != 0 { 0 } else if self.keyed() { 1 } else { 2 };
         self.entered = 0.0;
         self.stop_kids(out);
-        let s = self.seat_now(seat, q, Vec3::ZERO);
+        let s = self.seat_now(c, seat, Vec3::ZERO, 1.0 / 60.0);
+        let (state, knee, seeds) = (self.state, self.knee, self.seeds);
+        self.say(0, || format!("activate: state {state}, seat {} at {:?}, knee {knee:.2}, seeds {seeds:?}", s.has, s.at));
         self.enter(c, self.state, &s, out);
     }
 
-    fn seat_now(&self, at: Vec3, q: bevy_math::Quat, vel: Vec3) -> SeatNow {
-        SeatNow { at, q, up: q * Vec3::Z, vel, rows: self.rider.map(|r| q * r) }
+    /// RDR2's 0x2aacc20 / 0x2aad19c: the seat this step. No seat: the world's axes, up the z axis, and the seat's point
+    /// nowhere, unless (constrain 0) his keyed pelvis gives it from the animation.
+    fn seat_now(&mut self, c: &Ctx, seat: Option<(Vec3, bevy_math::Quat)>, vel: Vec3, dt: f32) -> SeatNow {
+        match seat {
+            Some((at, q)) => SeatNow {
+                at, q, up: q * self.up_seat, up_w: q * self.locals.0, right_w: q * self.locals.1, vel,
+                rows: self.rider.map(|r| q * r), rider_at: at + q * self.rider_at, has: true,
+            },
+            None => {
+                let mut s = SeatNow {
+                    at: Vec3::ZERO, q: bevy_math::Quat::IDENTITY, up: Vec3::Z, up_w: Vec3::Z, right_w: Vec3::X, vel: Vec3::ZERO,
+                    rows: self.rider, rider_at: self.rider_at, has: false,
+                };
+                let pelvis_keyed = self.constrain == 0 && self.keys[..2].iter().any(|k| !matches!(k.as_str(), "" | "na") && crate::extras_ysk_rdr2::mask_parts(k).contains(&0));
+                if let (true, Some(a)) = (pelvis_keyed, c.incoming.first()) {
+                    s.at = a.translation;
+                    if let Some(p) = self.prev_anim.first() {
+                        s.vel = (a.translation - p.translation) / dt.max(1e-6);
+                    }
+                }
+                s
+            }
+        }
     }
 
-    fn tick(&mut self, c: &mut Ctx, dt: f32, seat: Vec3, q: bevy_math::Quat, throw: bool, out: &mut Vec<String>,
+    fn tick(&mut self, c: &mut Ctx, dt: f32, given: Option<(Vec3, bevy_math::Quat)>, throw: bool, out: &mut Vec<String>,
             cons: &mut Vec<(usize, Option<Vec3>, Option<bevy_math::Quat>)>) {
         use crate::extras_ysk_rdr2::rp;
-        let vel = self.prev_seat.map_or(Vec3::ZERO, |p| (seat - p) / dt.max(1e-6));
-        self.prev_seat = Some(seat);
+        // the seat: seatPos (Delirium's) as given; constrain on, seatboundhandle's obstacle, or what the probe found under
+        // him; constrain off, none (0x2aa8810)
+        let (seat, ob_vel) = if let Some(s) = given {
+            self.locals = (Vec3::Z, Vec3::NEG_Y);
+            (Some(s), None)
+        } else if self.constrain == 0 {
+            (None, None)
+        } else if let Some((at, rot, v)) = self.obstacle {
+            self.locals = (Vec3::NEG_Y, Vec3::X);
+            (Some((at, rot)), Some(v))
+        } else {
+            self.locals = (Vec3::Z, Vec3::NEG_Y);
+            (self.found.map(|p| (p, self.seat0.1)), None)
+        };
+        let at = seat.map(|s| s.0);
+        let vel = ob_vel.unwrap_or_else(|| match (at, self.prev_seat) {
+            (Some(a), Some(p)) => (a - p) / dt.max(1e-6),
+            _ => Vec3::ZERO,
+        });
+        self.prev_seat = at;
         if !self.on {
-            self.activate(c, seat, q, out);
+            // the probe's frame: Delirium's seat frame, from his facing
+            let seat = seat.map(|(a, q)| (a, if self.found.is_some() && given.is_none() && self.obstacle.is_none() { self.frame_of(c) } else { q }));
+            self.activate(c, seat, out);
         }
+        let seat = seat.map(|(a, q)| (a, if self.found.is_some() && given.is_none() && self.obstacle.is_none() { self.seat0.1 } else { q }));
         self.t += dt;
-        let s = self.seat_now(seat, q, vel);
+        let s = self.seat_now(c, seat, vel, dt);
+        // stateridingtarget: the animation played relative to the saddle: its root through the rider's frame (0x2aaccec)
+        if self.riding_target && s.has {
+            let (rot0, rows0) = self.pelvis0;
+            let t = bevy_math::Mat3::from_cols(s.rows[0], s.rows[1], s.rows[2]) * bevy_math::Mat3::from_cols(rows0[0], rows0[1], rows0[2]).transpose();
+            c.out.incoming_root = Some(bevy_transform::components::Transform { translation: s.rider_at, rotation: bevy_math::Quat::from_mat3(&t) * rot0, ..bevy_transform::components::Transform::IDENTITY });
+            self.say(26, || "stateridingtarget: the incoming animation is carried by the seat".into());
+        }
         // a constraint whose rope broke last step is gone
         for slot in 0..3 {
             if self.cons[slot].is_some_and(|k| c.b.doll.snapped.contains(&k.part)) {
@@ -4522,17 +4751,20 @@ impl SitRdr2 {
                 out.push(format!("#say rdr2Sit: the {} constraint broke", ["pelvis", "right stirrup", "left stirrup"][slot]));
             }
         }
-        // a bullet gives the seat its slack back (RDR2's 0x2a95b54, while the pelvis constraint lives)
+        // a bullet gives the seat its start lengths back (RDR2's 0x2a95b54, while the pelvis constraint lives)
         if std::mem::take(&mut self.bullet) && self.cons[0].is_some() {
-            for slot in 0..4 {
+            for slot in 0..3 {
                 self.len[slot] = self.lens[SIT_LEN[slot]].0;
             }
+            self.say(1, || "a bullet: the constraints back at their start lengths".into());
         }
-        // tightening
-        for slot in 0..4 {
-            if self.cons[slot].is_some() {
-                let (_, to, rate) = self.lens[SIT_LEN[slot]];
-                self.len[slot] = (self.len[slot] - dt * rate).max(to);
+        // tightening (0x2aac424, constrain 2 only: the pelvis and the stirrups)
+        if self.constrain == 2 {
+            for slot in 0..3 {
+                if self.cons[slot].is_some() {
+                    let (_, to, rate) = self.lens[SIT_LEN[slot]];
+                    self.len[slot] = (self.len[slot] - dt * rate).max(to);
+                }
             }
         }
         // the tests
@@ -4540,7 +4772,7 @@ impl SitRdr2 {
         let pelvis = c.b.part(0).m.d;
         let top = c.b.part(rp(10)).m.d;
         let trunk = (top - pelvis).normalize_or(up);
-        let pose_ok = match (c.incoming.get(0), c.incoming.get(rp(10))) {
+        let pose_ok = match (self.anim(c, 0), self.anim(c, rp(10))) {
             (Some(a), Some(b)) => trunk.dot((b.translation - a.translation).normalize_or(trunk)).clamp(-1.0, 1.0).acos() < self.fail[1],
             _ => true,
         };
@@ -4557,7 +4789,9 @@ impl SitRdr2 {
             in_box: d.dot(s.rows[1]).abs() < self.seat_box.0 && d.dot(s.rows[2]).abs() < self.seat_box.1,
             rel: (c.vel - s.vel).length(),
             below: (pelvis - s.at).dot(up),
+            healthy,
             health_fail: !healthy && (self.health_now || self.t > self.fail_t + self.health_delay),
+            health_over: !healthy && self.t > self.fail_t + self.health_delay,
         };
         // Delirium's throw (the game's): out of the saddle now
         if throw && self.state <= 2 {
@@ -4570,8 +4804,15 @@ impl SitRdr2 {
         }
         // the state machine (RDR2's 0x2aac1ac)
         if self.state <= 2 {
-            // riding, the balancer stands aside [P: RDR2's shot hand-over 0x2ab9c14]
-            c.out.dbm = Some(false);
+            // riding, the balancer stands aside (the shot's hand-over: bal+0xbe7, 0x2a824c4); bodyBalance runs on
+            c.out.dbm_aside = true;
+            // RDR2's tick step 7 on bodyBalance's noisy elbows
+            c.ch.bb_noisy = true;
+        }
+        if self.state == 7 {
+            // its mask & 0x102709: only the trunk, neck and head are bodyBalance's
+            let on = crate::extras_ysk_rdr2::joints(0x102709);
+            c.ch.bb_off = (0..c.ch.eff.len()).filter(|j| !on.contains(j)).collect();
         }
         self.tick_state(c, dt, &s, &x, out);
         if self.done(c, &x) {
@@ -4582,6 +4823,10 @@ impl SitRdr2 {
                     self.state = n;
                     self.entered = self.t;
                     self.enter(c, n, &s, out);
+                    let bit = 2 + n as u32;
+                    let now = self.t;
+                    self.say(bit, || format!("state {old} to {n} at {:.2} s: trunk {:.2}, seat ok {}, pose ok {}, in box {}, against the seat {:.2} m/s, pelvis {:.2} above it, healthy {}",
+                                             now, x.trunk, x.seat_ok, x.pose_ok, x.in_box, x.rel, x.below, x.healthy));
                     break;
                 }
             }
@@ -4589,22 +4834,44 @@ impl SitRdr2 {
         // the constraints, to the solver
         self.ropes.clear();
         for slot in 0..3 {
-            let Some(k) = self.cons[slot] else { continue };
+            let Some(mut k) = self.cons[slot] else { continue };
+            let mut to = s.at + s.q * k.anchor;
+            if let Some((part, local)) = k.anim {
+                // constraintsfollowanims: the far end at the animated point, its length along the seat's up (0x2aac424)
+                if let Some(a) = self.anim(c, part) {
+                    let u = if self.constrain == 2 { s.up_w } else { Vec3::ZERO };
+                    to = a.translation + a.rotation * local + u * self.len[slot];
+                    k.anchor = s.q.inverse() * (to - s.at);
+                    self.cons[slot] = Some(k);
+                }
+            }
             let f = c.b.frames[k.part];
-            let to = if k.carried { s.at + s.q * k.anchor } else { k.anchor };
-            let slack = if slot > 0 && self.state == 6 { self.drag_slack } else { 0.0 };
+            let slack = if slot > 0 && self.state == 6 && self.drag_slack > 0.0 { self.drag_slack } else { 0.0 };
             let strength = if slot == 0 { self.strength.0 } else { self.strength.1 };
             let strength = if self.never_release || strength < 0.0 { -1.0 } else { strength };
             self.ropes.push((k.part, f.translation + f.rotation * k.local, to, self.len[slot] + slack, strength));
         }
         if self.cons[3].is_some() {
-            // the pelvis's turn: held at the limit once past it (constrain 1: RDR2's three axes at 0.001)
-            let want = s.q * self.q_rel;
             let now = c.b.frames[0].rotation;
+            let (want, lim) = if self.constrain == 1 {
+                // constrain 1: rigid (type 8), or with constraintsfollowanims three angle constraints on the animated pelvis
+                let want = match self.anim(c, 0).filter(|_| self.cons_anims) {
+                    Some(a) => a.rotation,
+                    None => s.q * self.q_rel,
+                };
+                (want, 0.001)
+            } else {
+                // constrain 2: his pelvis's up on the seat's up and his right on the seat's right, within slot 3's start
+                // value for good (0x2a91b90; 0x2aac424 tightens only slots 0..2)
+                let (u, l) = (s.up_w, -s.right_w);
+                let t = bevy_math::Mat3::from_cols(u, l, u.cross(l));
+                let r = self.pelvis0.1;
+                let f0 = bevy_math::Mat3::from_cols(r[0], r[1], r[2]);
+                (bevy_math::Quat::from_mat3(&(t * f0.transpose())).normalize() * self.pelvis0.0, self.lens[2].0)
+            };
             let dq = want.inverse() * now;
             let dq = if dq.w < 0.0 { -dq } else { dq };
             let (axis, angle) = dq.normalize().to_axis_angle();
-            let lim = if self.constrain == 1 { 0.001 } else { self.len[3] };
             if angle > lim && angle.is_finite() {
                 cons.push((0, None, Some(want * bevy_math::Quat::from_axis_angle(axis, lim))));
             }
@@ -4620,7 +4887,50 @@ impl SitRdr2 {
                 }
             }
         }
+        // the key masks' parts 4..7 don't collide while keyframe has them (0x2aacb80)
+        if self.key_off {
+            let m: Vec<usize> = self.keys.iter().flat_map(|k| crate::extras_ysk_rdr2::mask_parts(k)).collect();
+            for i in 4..8 {
+                if m.contains(&rp(i)) {
+                    self.contact_off |= 1 << rp(i);
+                }
+            }
+        }
+        // the collision radii, until the restore's armed and the part is free (0x2aa6fcc, 0x2aa7764)
+        for (i, k) in [0, rp(1), rp(2)].into_iter().enumerate() {
+            if self.shrunk[i] && self.restore && !c.b.doll.collided(&[k]) {
+                self.shrunk[i] = false;
+                self.say(22, || "a shrunk capsule has its radius back".into());
+            }
+            if self.shrunk[i] {
+                c.out.part_radius.push((k, if i == 0 { self.radius.0 } else { self.radius.1 }));
+                let r = self.radius;
+                self.say(23, || format!("capsules scaled: pelvis {}, thighs {}", r.0, r.1));
+            }
+        }
+        // with RDR2_TRACE, twice a second: where he is against the seat
+        if crate::extras_ysk_rdr2::trace() && (self.t * 2.0).floor() != ((self.t - dt) * 2.0).floor() {
+            let reins = |i: usize| {
+                let side = 1.0 - 2.0 * i as f32;
+                let h = s.rider_at + s.rows[0] * 0.2 + s.rows[1] * (0.1 * side) - s.rows[2] * 0.5;
+                c.b.part(c.ch.joints[crate::nmshot::limb(i).e[3]].child).m.d.distance(h)
+            };
+            eprintln!("sit: t {:.2} side slide {:.3}, hands off the reins {:.2} {:.2}", self.t, (pelvis - s.rider_at).dot(s.rows[1]), reins(0), reins(1));
+            let gaps: Vec<String> = self.ropes.iter().map(|r| format!("{:.3}/{:.3}", r.1.distance(r.2), r.3)).collect();
+            eprintln!("sit: t {:.2} state {} pelvis off the seat {:.3}, ropes (gap/length) {gaps:?}, trunk {:.2}, dbm_failed {}, stiffness^2 hip {:.0} knee {:.0} ankle {:.0} spine {:.0}, knee {:.2}/{:.2}", self.t, self.state, pelvis.distance(s.at), x.trunk, c.dbm_failed,
+                      c.ch.eff[HIP()[0]].strength, c.ch.eff[KNEE()[0]].strength, c.ch.eff[ANKLE()[0]].strength, c.ch.eff[SPINE()[0]].strength,
+                      c.ch.actual(KNEE()[0], c.b.frames)[0], c.ch.eff[KNEE()[0]].desired[0]);
+        }
+        // the second animation buffer
+        self.prev_anim.clear();
+        self.prev_anim.extend_from_slice(c.incoming);
         self.last = Some(s);
+    }
+
+    /// Delirium's seat frame for a seat the probe found: his facing, the sky up.
+    fn frame_of(&self, c: &Ctx) -> bevy_math::Quat {
+        let left = (c.b.joint_pos(HIP()[0]) - c.b.joint_pos(HIP()[1])).normalize_or(Vec3::Y).reject_from(c.up).normalize_or(Vec3::Y);
+        bevy_math::Quat::from_mat3(&bevy_math::Mat3::from_cols(left.cross(c.up), left, c.up))
     }
 
     fn alive(&self, mask: u32) -> bool {
@@ -4638,31 +4948,55 @@ impl SitRdr2 {
     /// RDR2's 0x2aa7354: every constraint let go, the caught foot collides again, and the "success".
     fn drop_all(&mut self, c: &mut Ctx) {
         self.release(0b1111);
-        c.out.send(SIT_EVENT(), "sit", 0.0);
+        self.feedback(c, true, 0);
         c.out.send(SIT_SUCCESS(), "sit", 0.0);
     }
 
-    /// RDR2's 0x2a90eb8 / 0x2a91fa4 / 0x2a91b90: the seat's constraints, at their start lengths.
+    /// RDR2's 0x2a90eb8 / 0x2a91fa4 / 0x2a91b90: the seat's constraints, at their start lengths. Needs a seat. The near
+    /// ends are the pelvis and the ankle joints themselves; the far ends lie above them along the seat's up.
     fn make(&mut self, c: &Ctx, s: &SeatNow) {
         use crate::extras_ysk_rdr2::rp;
+        if !s.has || self.constrain == 0 {
+            return;
+        }
         let qi = s.q.inverse();
-        let con = |part: usize, point: Vec3, carried: bool| {
+        let on = |part: usize, near: Vec3, far: Vec3, anim: Option<(usize, Vec3)>| {
             let f = c.b.frames[part];
-            SitCon { part, local: f.rotation.inverse() * (point - f.translation), anchor: if carried { qi * (point - s.at) } else { point }, carried }
+            SitCon { part, local: f.rotation.inverse() * (near - f.translation), anchor: qi * (far - s.at), anim }
         };
         let pelvis = c.b.part(0).m.d;
+        let u = s.up_w;
         if self.constrain == 2 {
             let b = self.lens[1].0;
-            self.cons[1] = Some(con(rp(6), c.b.joint_pos(ANKLE()[1]) + s.up * b, true));
-            self.cons[2] = Some(con(rp(4), c.b.joint_pos(ANKLE()[0]) + s.up * b, true));
-            self.cons[0] = Some(con(0, pelvis + s.up * (0.5 * self.lens[0].0), true));
+            for (slot, part, joint) in [(1, rp(6), ANKLE()[1]), (2, rp(4), ANKLE()[0])] {
+                let ankle = c.b.joint_pos(joint);
+                let f = c.b.frames[part];
+                let in_part = f.rotation.inverse() * (ankle - f.translation);
+                let anim = self.cons_anims.then_some((part, in_part));
+                let base = match anim.and_then(|(p, l)| self.anim(c, p).map(|a| a.translation + a.rotation * l)) {
+                    Some(a) => a,
+                    None => ankle,
+                };
+                let far = base + u * b;
+                self.cons[slot] = Some(on(part, ankle, far, anim));
+                self.len[slot] = if self.cons_anims { b.max(far.distance(ankle)) } else { b };
+            }
+            let (a0, b0) = (self.lens[0].1, self.lens[0].0);
+            let far = match self.anim(c, 0).filter(|_| self.cons_anims) {
+                Some(a) => a.translation + u * (0.5 * a0),
+                None => pelvis + u * (0.5 * b0),
+            };
+            self.cons[0] = Some(on(0, pelvis, far, self.cons_anims.then_some((0, Vec3::ZERO))));
+            self.len[0] = if self.cons_anims { b0.max(far.distance(pelvis)) } else { b0 };
         } else {
-            self.cons[0] = Some(con(0, pelvis, false));
+            // constrain 1: to the seat where he is (type 8), or to the animated pelvis at 0.001 m
+            let far = self.anim(c, 0).filter(|_| self.cons_anims).map_or(pelvis, |a| a.translation);
+            self.cons[0] = Some(on(0, pelvis, far, self.cons_anims.then_some((0, Vec3::ZERO))));
+            self.len[0] = 0.001;
         }
-        self.cons[3] = Some(SitCon { part: 0, local: Vec3::ZERO, anchor: Vec3::ZERO, carried: true });
-        for slot in 0..4 {
-            self.len[slot] = self.lens[SIT_LEN[slot]].0;
-        }
+        self.cons[3] = Some(SitCon { part: 0, local: Vec3::ZERO, anchor: Vec3::ZERO, anim: None });
+        let (k, l, far) = (self.constrain, self.len, self.cons[0].map(|k| k.anchor));
+        self.say(10, || format!("constraints made, constrain {k}: pelvis length {:.3} (far end {far:?}), stirrups {:.3}", l[0], l[1]));
     }
 
     /// RDR2's 0x2aac3c8: the balancer's hip pitch -0.5 and knee bend -0.1 (owners 11 and 10), asked every riding step.
@@ -4671,64 +5005,136 @@ impl SitRdr2 {
         c.out.dbm_crouch.push(Crouch::Knee(10, -0.1, 100000.0));
     }
 
-    /// RDR2's 0x2a92b1c: both knees at the left knee's activation angle.
+    /// RDR2's 0x2a92b1c, constrain 2: both knees at the left knee's activation angle.
     fn knees(&self, c: &mut Ctx) {
+        if self.constrain != 2 {
+            return;
+        }
+        let d0 = knee_dir(c, KNEE()[0]);
         for &j in KNEE().iter() {
-            c.ch.eff[j].desired[0] = SIT_KNEE + self.knee;
+            let d = knee_dir(c, j);
+            c.ch.eff[j].desired[0] = (SIT_KNEE + self.knee) * d * d0;
         }
     }
 
-    /// RDR2's 0x2aa2a48: his spine leans toward the animation's trunk (or the sky) by twice his trunk's error, split
-    /// over the spine; with constrain 2 his hips are held (ours: at their activation angles) at 15, damping 1.
-    fn spine(&self, c: &mut Ctx) {
+    /// RDR2's 0x2a7c134: joints on activePoseMask and the behaviour's mask follow the incoming animation (asked at
+    /// sub-priority -1, so everything else here is above it).
+    fn anim_pose(&mut self, c: &mut Ctx) {
+        let on: Vec<usize> = {
+            let (a, b) = (crate::nmrs::Character::mask(&self.active), crate::nmrs::Character::mask(&self.mask));
+            a.into_iter().filter(|j| b.contains(j)).collect()
+        };
+        if on.is_empty() || self.buffer(c).is_empty() {
+            return;
+        }
+        let m = crate::nmrs::incoming_rows(&c.b.doll.links, self.buffer(c));
+        for &j in &on {
+            c.ch.eff[j].desired = c.ch.incoming_angle(j, &m);
+        }
+        let src = self.anim_source;
+        self.say(11, || format!("{} joints from animation buffer {src}", on.len()));
+    }
+
+    /// RDR2's 0x2aa2a48. The spine: the rotation taking his pelvis's up row onto u (the animation's trunk or the sky), in
+    /// the first spine joint's frame, as lean1 and lean2, times twice his trunk's error, split over the spine. With
+    /// constrain 2 each hip: its angles now, turned by the arc from u to his trunk, at 15, damping 1, so the thighs go
+    /// with the trunk's error (with hipLimitsWide its limits first at least 1, 0.65, 0.46).
+    fn spine(&mut self, c: &mut Ctx) {
         use crate::extras_ysk_rdr2::rp;
         let (pelvis, top) = (c.b.part(0).m.d, c.b.part(rp(10)).m.d);
-        let u = match (c.incoming.get(0), c.incoming.get(rp(10))) {
+        let u = match (self.anim(c, 0), self.anim(c, rp(10))) {
             (Some(a), Some(b)) if self.spine_anims => (b.translation - a.translation).normalize_or(c.up),
             _ => c.up,
         };
-        let trunk = (top - pelvis).normalize_or(u);
-        let turn = c.b.frames[0].rotation * (self.seat0.1 * self.q_rel).inverse();
-        let (pu, pl) = (turn * (self.seat0.1 * self.rider[0]), turn * (self.seat0.1 * self.rider[1]));
-        let axis = pu.cross(u).normalize_or_zero();
-        let amount = 2.0 * trunk.dot(u).clamp(-1.0, 1.0).acos();
-        // a turn about his left leans him forward (lean1), about his front to his right (lean2 [P])
-        spine_split(c, amount * axis.dot(pl), amount * axis.dot(pl.cross(pu)));
+        let d = (top - pelvis).normalize_or(u);
+        let row = self.pelvis_rows(c)[0];
+        let axis = row.cross(u).normalize_or_zero();
+        let theta = row.dot(u).clamp(-1.0, 1.0).acos();
+        let j0 = SPINE()[0];
+        let m = c.b.frames[c.ch.joints[j0].child].rotation * c.ch.joints[j0].rage_child;
+        let q = bevy_math::Quat::from_axis_angle((m.inverse() * axis).normalize_or(Vec3::Z), theta);
+        let [l1, l2, _] = c.ch.joint_triple(j0, q);
+        let amount = 2.0 * d.dot(u).clamp(-1.0, 1.0).acos();
+        spine_split(c, l1 * amount, l2 * amount);
         if self.constrain == 2 {
+            let arc = bevy_math::Quat::from_rotation_arc(u, d);
             for i in 0..2 {
-                let e = &mut c.ch.eff[HIP()[i]];
-                e.desired = self.hips[i];
-                e.set_stiffness(15.0, 1.0, None);
+                let j = HIP()[i];
+                if self.hips_wide {
+                    c.out.lim_floor.push((j + 1, [1.0, 0.65, 0.46]));
+                }
+                let jd = &c.ch.joints[j];
+                let p = c.b.frames[jd.parent].rotation * jd.rage_parent;
+                let rel = p.inverse() * (c.b.frames[jd.child].rotation * jd.rage_child);
+                let want = (p.inverse() * arc * p) * rel;
+                let t = c.ch.joint_triple(j, want);
+                let e = &mut c.ch.eff[j];
+                e.desired = t;
+                e.set_stiffness(15.0, 1.0, Some(1.0));
             }
         }
+        self.say(12, || format!("spine lean {:.3}, {:.3}: pelvis off u {theta:.3}, trunk off u {:.3}", l1 * amount, l2 * amount, amount * 0.5));
     }
 
-    /// RDR2's 0x2aa6924: each hand to the reins in the rider's seat frame, unless his pelvis (0.2 s ahead, against
-    /// the seat) has slid 0.1 m to that side; the elbow floor 0.28..0.6 from noise.
-    fn hands(&self, c: &mut Ctx, s: &SeatNow) {
+    /// RDR2's 0x2aa6924 / 0x2aa67a4: each hand to the reins in the rider's seat frame, unless his pelvis (0.2 s ahead,
+    /// against the seat) has slid 0.1 m to that side; the elbow floor 0.28..0.6 from noise. A running bodyBalance has
+    /// that arm taken from its mask, and the point as its target.
+    fn hands(&mut self, c: &mut Ctx, s: &SeatNow) {
         let p = c.b.part(0).m.d + (c.b.part(0).v - s.vel) * 0.2;
         for i in 0..2 {
             let side = 1.0 - 2.0 * i as f32;
-            if side * (p - s.at).dot(s.rows[1]) >= 0.1 {
+            if i == 0 && c.bb_on {
+                c.ch.bb_off.clear();
+            }
+            if side * (p - s.rider_at).dot(s.rows[1]) >= 0.1 {
+                self.say(13, || format!("arm {i} left off the reins: his pelvis has slid to that side"));
                 continue;
             }
-            let h = s.at + s.rows[0] * 0.2 + s.rows[1] * (0.1 * side) - s.rows[2] * 0.5;
+            let h = s.rider_at + s.rows[0] * 0.2 + s.rows[1] * (0.1 * side) - s.rows[2] * 0.5;
             let l = crate::nmshot::limb(i);
             crate::nmdbm::limb_ik(c.b, c.ch, l.e[1], l.e[2], l.p[0], l.p[delirium_data::kv!(0 int)], h, 0.0, 0.0, side, 1.0, Vec3::ZERO, None);
             let floor = crate::nmfl::noise01(2.0 * self.t, self.seeds[i], 0.0) * 0.32 + 0.28;
             let e = &mut c.ch.eff[l.e[2]];
             e.desired[0] = e.desired[0].max(floor);
+            if c.bb_on {
+                // its mask: the one saved on entering state 0 (0xffefd8f6, no trunk, neck or head), without this arm
+                c.ch.bb_off.extend(crate::extras_ysk_rdr2::joints(0x102709));
+                c.ch.bb_off.extend(crate::nmshot::limb(i).e.iter().copied());
+                c.ch.bb_target = Some(h);
+                self.say(14, || "bodyBalance: the arm out of its mask, the reins its target".into());
+            }
         }
     }
 
-    /// Before the fall reactions: the other behaviours sit started stop (fallingReaction 0 or more), or the
-    /// balancer's hip pitch and knee bend are let go at the ramps.
+    /// RDR2's 0x2aa7cd8: the ankles' lean1 half-range at least 1.4; the knees' hinge down to -2.7; the hips', with neither the
+    /// pelvis nor its turn held, at least 1, 0.65, 0.46 (else the joint's vt+0x110 (1, 0.1, 0), a Rage setting with no
+    /// source here).
+    fn key_limits(&mut self, c: &mut Ctx) {
+        for i in 0..2 {
+            c.out.lim_floor.push((ANKLE()[i] + 1, [1.4, 0.0, 0.0]));
+            c.out.lim_floor.push((KNEE()[i] + 1, [2.7, 0.0, 0.0]));
+            if !self.alive(0b1001) {
+                c.out.lim_floor.push((HIP()[i] + 1, [1.0, 0.65, 0.46]));
+            }
+        }
+        self.say(15, || "keyed ride: the joint limits widened".into());
+    }
+
+    /// RDR2's 0x2aac2a4 in state 1: keyframe's masks and settings.
+    fn key_line(&self, start: bool) -> String {
+        let [h, k, a] = &self.keys;
+        let (m, n) = self.soft_accel;
+        format!("keyframe {}hardKeyMask={h} softKeyMask={k} softKeyMaskAlt={a} softweight={} softweightalt={} softbreakthreshold={} softmaxaccel={} softmaxangaccel={}",
+                if start { "start=true " } else { "" }, self.soft.0, self.soft.1, self.soft_break, sit_v(m), sit_v(n))
+    }
+
+    /// Before the fall reactions: the other behaviours sit started stop (fallingReaction 0 or more), or the balancer's
+    /// hip pitch and knee bend stay asked (0x2aac3c8).
     fn preamble(&mut self, c: &mut Ctx, out: &mut Vec<String>) {
         if self.falling >= 0 {
             self.stop_kids(out);
         } else {
-            c.out.dbm_crouch.push(Crouch::ReleaseHip(self.hip.1));
-            c.out.dbm_crouch.push(Crouch::ReleaseKnee(self.straight.1));
+            self.pose(c);
         }
     }
 
@@ -4739,11 +5145,11 @@ impl SitRdr2 {
                  applyNewRollingCheatingTorques=false applyHelPerTorqueToAlign=true delayToAlignBody=0", sit_v(dir), self.rds_min)
     }
 
-    /// RDR2's 0x2aa73dc: of two stirrups, the one further along the way he falls from the seat stays.
+    /// RDR2's 0x2aa73dc: of two stirrups, the one whose ankle is further along the way he has gone from the seat stays.
     fn keep_stirrup(&mut self, c: &Ctx, s: &SeatNow) {
         let (Some(r), Some(l)) = (self.cons[1], self.cons[2]) else { return };
         let d = c.b.part(0).m.d - s.at;
-        let at = |k: SitCon| if k.carried { s.at + s.q * k.anchor } else { k.anchor };
+        let at = |k: SitCon| { let f = c.b.frames[k.part]; f.translation + f.rotation * k.local };
         if (at(l) - s.at).dot(d) < (at(r) - s.at).dot(d) {
             self.cons[2] = None;
         } else {
@@ -4755,11 +5161,13 @@ impl SitRdr2 {
         let fails = x.trunk >= self.fail[0] || !x.pose_ok || !x.seat_ok || x.health_fail;
         match self.state {
             0 => self.constrain == 0 || self.cons[0].is_none() || (fails && !self.never_release),
-            1 => !(c.extras_on.contains(&"keyframe") && self.keyed()) || (fails && !self.never_release),
+            // (keyframe's start line reaches it after this step)
+            1 => (self.t > self.entered + 0.05 && !(c.extras_on.contains(&"keyframe") && self.keys[..2].iter().any(|k| !matches!(k.as_str(), "" | "na"))))
+                 || (fails && !self.never_release),
             2 => true,
             3 => (x.rel * x.rel < 0.25 || self.drag) && x.below < -0.02,
             4 => x.trunk >= 1.2 && x.rel >= self.roll.1 + 0.1 && !x.in_box,
-            6 => self.t > self.entered + self.drag_time || !self.alive(0b1111) || !self.drag,
+            6 => self.t > self.entered + self.drag_time || !self.alive(0b110) || !self.drag,
             _ => false,
         }
     }
@@ -4769,21 +5177,22 @@ impl SitRdr2 {
         match n {
             3 => !x.in_box || !x.seat_ok,
             4 => {
-                if self.state == 6 || self.healthy {
+                if self.state == 6 {
                     return false;
                 }
                 self.roll_t += dt;
-                self.roll_t > self.roll.0 && ((x.rel < self.roll.1 && x.in_box) || !x.seat_ok)
+                !x.healthy && self.roll_t > self.roll.0 && ((x.rel < self.roll.1 && x.in_box) || !x.seat_ok)
             }
-            5 => self.slump && !self.healthy && self.t - self.fail_t >= self.health_delay && c.vel.length() < 0.5 && self.probes[2] < f32::MAX,
+            5 => self.slump && x.health_over && c.vel.length() < 0.5 && self.probes[2] < f32::MAX,
             6 => self.drag && self.alive(0b110),
             7 => {
                 if x.seat_ok && x.trunk < self.fail[0] && x.pose_ok {
                     return false;
                 }
+                // the shins and feet on something other than himself, its normal up
                 let (mut n, mut at) = (0.0, Vec3::ZERO);
                 for i in 4..8 {
-                    if let Some(Some((p, normal, _))) = c.b.doll.hit.get(rp(i)) {
+                    if let Some(Some((p, normal, _))) = c.b.doll.hit_out.get(rp(i)) {
                         if normal.dot(c.up) > 0.8 {
                             (n, at) = (n + 1.0, at + *p);
                         }
@@ -4799,20 +5208,28 @@ impl SitRdr2 {
         use crate::extras_ysk_rdr2::rp;
         match n {
             0 => {
-                if self.constrain != 0 {
-                    self.make(c, s);
-                }
+                self.make(c, s);
                 self.pose(c);
+                // keyframe started with no masks (0x2aac2a4(0) outside state 1)
+                let line = "keyframe start=true hardKeyMask=na softKeyMask=na softKeyMaskAlt=na".to_string();
+                self.start(out, "keyframe", line);
+                self.feedback(c, false, 0);
             }
             1 => {
+                self.key_limits(c);
                 self.pose(c);
-                let [h, k, a] = self.keys.clone();
-                self.start(out, "keyframe", format!("keyframe start=true hardKeyMask={h} softKeyMask={k} softKeyMaskAlt={a} softweight={} softweightalt={}",
-                                                    self.soft.0, self.soft.1));
+                let line = self.key_line(true);
+                self.start(out, "keyframe", line);
+                self.key_off = true;
+                self.feedback(c, false, 0);
             }
-            2 => self.pose(c),
+            2 => {
+                self.pose(c);
+                self.feedback(c, false, 1);
+            }
             3 => {
                 self.preamble(c, out);
+                self.feedback(c, false, -1);
                 match self.falling {
                     0 => self.start(out, "bodyRollUp", "bodyRollUp start=true useArmToSlowDown=2 legPush=0 asymmetricalLegs=0.75".into()),
                     1 => self.start(out, "catchFall", "catchFall start=true".into()),
@@ -4829,40 +5246,42 @@ impl SitRdr2 {
                 if !self.drag {
                     self.release(0b1111);
                 }
-                c.out.send(SIT_EVENT(), "sit", 1.0);
+                self.feedback(c, false, 1);
                 out.push("#say rdr2Sit: falls off".into());
             }
             4 => {
                 self.preamble(c, out);
-                // the side he rolls to: his COM's, 0.2 s ahead against the seat, unless the ground decides (ours: his
-                // side axis, see the struct's doc)
-                let left = s.rows[1];
+                self.feedback(c, false, -1);
+                self.roll_t = 0.0;
+                // the way he rolls: his pelvis's left row, by which side his COM is on 0.2 s ahead against the seat,
+                // unless one side's far closer than the other: away from it (RDR2's +0x3e4 - +0x3e8 past +-0.7)
+                let left = self.pelvis_rows(c)[1];
                 let ahead = (c.vel - s.vel) * 0.2 + c.com - s.at;
-                let mut side = if ahead.dot(left) >= 0.0 { 1.0 } else { -1.0 };
-                let dh = self.probes[0] - self.probes[1];
-                if self.probes[0] < f32::MAX && self.probes[1] < f32::MAX && dh.abs() > 0.7 {
-                    side = if dh < 0.0 { 1.0 } else { -1.0 };
-                }
-                let r = if self.use_roll_dir { left } else { left * side };
+                let h = self.probes[0] - self.probes[1];
+                let keep = (ahead.dot(left) > 0.0 && h >= -0.7) || h > 0.7;
+                let r = if keep { left } else { -left };
+                self.rds_dir = s.q.inverse() * r;
                 let line = self.rds_line(self.rds.0, true, r);
                 self.start(out, "rollDownStairs", line);
                 self.rds_t = Some(self.t);
-                if !self.drag {
-                    self.release(0b1111);
-                } else {
-                    // the stirrup on the far side goes
-                    self.release(if r.dot(left) > 0.0 { 0b10 } else { 0b100 });
-                }
-                c.out.send(SIT_EVENT(), "sit", 1.0);
+                // the stirrup on the far side goes
+                self.release(if !self.drag { 0b1111 } else if keep { 0b10 } else { 0b100 });
+                self.say(16, || format!("rolls to {r:?}: COM ahead by {:.2} on his left, the probes' difference {h:.2}", ahead.dot(left)));
+                self.feedback(c, false, 1);
                 out.push("#say rdr2Sit: rolls off".into());
             }
-            5 => out.push("#say rdr2Sit: slumps".into()),
+            5 => {
+                self.feedback(c, false, -1);
+                self.slumped(c);
+                self.feedback(c, false, 1);
+                out.push("#say rdr2Sit: slumps".into());
+            }
             6 => {
                 self.keep_stirrup(c, s);
                 c.ch.set_stiffness(self.drag_k, 1.0, "fb", None);
                 let slot = if self.cons[2].is_some() { 2 } else { 1 };
                 let foot = if slot == 2 { rp(5) } else { rp(7) };
-                c.out.send(SIT_EVENT(), "sit", if slot == 2 { 1.0 } else { 2.0 });
+                self.feedback(c, true, if slot == 2 { 1 } else { 2 });
                 self.stop_kids(out);
                 match self.drag_reaction {
                     0 => {
@@ -4870,7 +5289,7 @@ impl SitRdr2 {
                         self.start(out, "pedalLegs", "pedalLegs start=true radius=0.6 angularSpeed=15 adaptivePedal4Dragging=true hula=true".into());
                     }
                     1 => {
-                        let to = self.cons[slot].map_or(c.b.part(foot).m.d, |k| if k.carried { s.at + s.q * k.anchor } else { k.anchor });
+                        let to = self.cons[slot].map_or(c.b.part(foot).m.d, |k| s.at + s.q * k.anchor);
                         self.start(out, "yanked", format!("yanked start=true ropePart={foot} ropePos={} force=0", sit_v(to)));
                     }
                     _ => self.start(out, "bodyFoetal", "bodyFoetal start=true".into()),
@@ -4879,6 +5298,7 @@ impl SitRdr2 {
                 out.push(format!("#say rdr2Sit: dragged by the {} foot", if slot == 2 { "left" } else { "right" }));
             }
             7 => {
+                // (0x2a84690)
                 self.start(out, "bodyBalance", "bodyBalance start=true".into());
                 out.push("#say rdr2Sit: lands on his feet".into());
             }
@@ -4888,9 +5308,31 @@ impl SitRdr2 {
 
     fn exit(&mut self, c: &mut Ctx, n: usize, out: &mut Vec<String>) {
         match n {
-            0 => self.release(if self.drag && self.constrain == 2 { 0b1001 } else { 0b1111 }),
-            1 => self.stop_kid(out, "keyframe"),
-            4 => self.rds_t = None,
+            0 => {
+                self.feedback(c, false, 0);
+                self.release(if self.drag && self.constrain == 2 { 0b1001 } else { 0b1111 });
+            }
+            1 => {
+                // keyframe's masks off, its collision back: it keeps running (mode 2)
+                out.push("keyframe hardKeyMask=na softKeyMask=na softKeyMaskAlt=na".into());
+                self.key_off = false;
+                self.feedback(c, true, 0);
+            }
+            2 => {
+                self.feedback(c, false, 0);
+                self.restore = true;
+                c.ch.bb_off.clear();
+                if self.kids.contains(&"bodyBalance") {
+                    self.stop_kid(out, "bodyBalance");
+                } else if c.bb_on {
+                    out.push("bodyBalance start=false".into());
+                    self.say(17, || "out of the free sit: a running bodyBalance stopped".into());
+                }
+            }
+            4 => {
+                self.rds_t = None;
+                self.feedback(c, true, 0);
+            }
             6 => {
                 self.drop_all(c);
                 self.stop_kid(out, "reachForWound");
@@ -4899,11 +5341,22 @@ impl SitRdr2 {
         }
     }
 
+    /// RDR2's 0x2a999c0 / 0x2aa1af4: the spine 0.9 forward, trunk, neck and arms at 4, damping 0.5.
+    fn slumped(&mut self, c: &mut Ctx) {
+        spine_split(c, 0.9, 0.0);
+        for j in crate::extras_ysk_rdr2::joints(0x1fff09) {
+            if j < c.ch.eff.len() {
+                c.ch.eff[j].set_stiffness(4.0, 0.5, None);
+            }
+        }
+    }
+
     fn tick_state(&mut self, c: &mut Ctx, dt: f32, s: &SeatNow, x: &SitTests, out: &mut Vec<String>) {
-        use crate::extras_ysk_rdr2::{joints, rp};
-        let _ = x;
+        use crate::extras_ysk_rdr2::rp;
+        let _ = (x, dt);
         match self.state {
             0 | 2 => {
+                self.anim_pose(c);
                 self.spine(c);
                 self.pose(c);
                 self.knees(c);
@@ -4911,38 +5364,41 @@ impl SitRdr2 {
             }
             1 => {
                 self.pose(c);
+                let line = self.key_line(false);
+                out.push(line);
+                self.anim_pose(c);
+                self.key_limits(c);
                 self.knees(c);
             }
             3 => {
-                if self.drag && self.alive(0b110) && self.cons[1].is_some() && self.cons[2].is_some() && self.t - self.entered >= 0.2 {
+                if self.cons[1].is_some() && self.cons[2].is_some() && self.t > self.entered + 0.2 {
                     self.keep_stirrup(c, s);
+                    self.say(18, || "falling: one stirrup kept".into());
                 }
             }
             4 => {
                 if let Some(t0) = self.rds_t {
-                    let since = self.t - t0;
-                    if since <= self.rds.1 + dt {
-                        let k = if self.rds.1 > 0.0 { (since / self.rds.1).clamp(0.0, 1.0) } else { 1.0 };
-                        out.push(format!("rollDownStairs forcemag={}", self.rds.0 + (self.rds.2 - self.rds.0) * k));
-                    }
+                    let k = if self.rds.1 > 0.0 { ((self.t - t0) / self.rds.1).clamp(0.0, 1.0) } else { 1.0 };
+                    let force = self.rds.0 + (self.rds.2 - self.rds.0) * k;
+                    // its force ramp, and the way he rolls carried by the seat (rollDownStairs +0x90)
+                    // (a rollDownStairs line without start would stop it)
+                    c.out.rds_live = Some((force, s.q * self.rds_dir));
+                    self.say(19, || format!("rolling off: force {force:.2} on its ramp"));
                 }
             }
             5 => {
                 if self.falling >= 0 {
                     self.stop_kids(out);
+                } else {
+                    self.pose(c);
                 }
-                spine_split(c, 0.9, 0.0);
-                for j in joints(0x1fff09) {
-                    if j < c.ch.eff.len() {
-                        c.ch.eff[j].set_stiffness(4.0, 0.5, None);
-                    }
-                }
+                self.slumped(c);
             }
             6 => {
                 let slot = if self.cons[2].is_some() { 2 } else if self.cons[1].is_some() { 1 } else { return };
                 let foot = if slot == 2 { rp(5) } else { rp(7) };
                 if self.drag_reaction == 1 {
-                    // the free leg, by how face-up he lies (his front row [P])
+                    // the free leg, by how he lies: f 1 face down .. 0 face up (RDR2's row c, his back, against the sky)
                     let f = (c.m.c.dot(c.up) + 1.0) * 0.5;
                     let leg = if slot == 2 { 1 } else { 0 };
                     let (h, k, a) = (HIP()[leg], KNEE()[leg], ANKLE()[leg]);
@@ -4953,6 +5409,7 @@ impl SitRdr2 {
                     c.ch.eff[h].desired = [2.0 * (1.0 - f), 0.7 * (1.0 - f), tw];
                     c.ch.eff[k].desired[0] = (2.0 - f) * knee_dir(c, k);
                     c.ch.eff[a].desired = [0.5 - 1.5 * f, c.ch.eff[a].desired[1], tw];
+                    self.say(20, || format!("dragged: free leg {leg} posed at f {f:.2}"));
                 }
                 if self.reach && self.t - self.entered > self.reach_delay {
                     let n = crate::nmfl::noise01(self.t, self.seeds[2], 0.0);
@@ -4961,6 +5418,7 @@ impl SitRdr2 {
                     } else if !self.kids.contains(&"reachForWound") {
                         let at = c.b.part(foot).m.d;
                         self.start(out, "reachForWound", format!("reachForWound start=true hitPart={foot} hitPoint={}", sit_v(at)));
+                        self.say(21, || "dragged: reaches for the caught foot".into());
                     }
                 }
             }
@@ -4968,18 +5426,55 @@ impl SitRdr2 {
         }
     }
 
-    /// The three ground samples state 2 takes (ours: down from his pelvis 0.5 m to his left, right, and under it).
-    fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision) {
-        let Some(s) = self.last.filter(|_| self.on && self.state == 2) else { return };
+    /// The first step, the seat under him (0x2aa8810: with constrain on and none given, down 0.4 m from his pelvis, 0.05 m
+    /// along its back); each step, seatboundhandle's obstacle; in the free sit, one sample a step of RDR2's three
+    /// (0x2aa3bd4, 0x2aab100): how far along his left and his right to anything within 1 m, and whether anything comes
+    /// down to pelvis height 0.4 m in front of him, within 0.3 m above it.
+    fn probe(&mut self, c: &Ctx, world: &crate::collision::Collision, obs: &[crate::ragdoll::Obstacle], given: bool) {
+        use crate::extras_ysk_rdr2::rp;
+        self.obstacle = (self.handle > 0 && self.constrain != 0).then(|| obs.iter().find(|o| o.id == self.handle).map(|o| (o.at, o.rot, o.vel))).flatten();
+        let seat_id = self.handle;
+        let cast = |from: Vec3, dir: Vec3, len: f32| -> Option<f32> {
+            let w = world.contact(from, dir, len).map(|h| h.0);
+            let o = obs.iter().filter(|o| o.id != seat_id).filter_map(|o| sit_ray_box(o, from, dir, len)).fold(None, |a: Option<f32>, t| Some(a.map_or(t, |x| x.min(t))));
+            match (w, o) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        };
         let pelvis = c.b.part(0).m.d;
-        for (i, off) in [0.5, -0.5, 0.0].into_iter().enumerate() {
-            let from = pelvis + s.rows[1] * off;
-            self.probes[i] = world.contact(from, -c.up, 3.0).map_or(f32::MAX, |(t, _, _)| (from - c.up * t).dot(c.up));
+        if !self.on && !self.probed {
+            self.probed = true;
+            if !given && self.constrain != 0 && self.handle == 0 {
+                let left = (c.b.joint_pos(HIP()[0]) - c.b.joint_pos(HIP()[1])).normalize_or(Vec3::Y);
+                let up = (c.b.part(rp(10)).m.d - pelvis).reject_from_normalized(left).normalize_or(Vec3::Z);
+                let from = pelvis + up.cross(left) * 0.05;
+                self.found = cast(from, -c.up, 0.4).map(|t| from - c.up * t);
+                let f = self.found;
+                self.say(24, || format!("the seat probe from his pelvis: {f:?}"));
+            }
         }
+        if !self.on || self.state != 2 || self.probe_i >= 3 {
+            return;
+        }
+        let rows = self.pelvis_rows(c);
+        let (from, dir, len) = match self.probe_i {
+            0 => (pelvis, rows[1], 1.0),
+            1 => (pelvis, -rows[1], 1.0),
+            _ => {
+                let off = rows[2] * -0.4;
+                (pelvis + off + c.up * (0.3 - off.dot(c.up)), -c.up, 0.3)
+            }
+        };
+        let i = self.probe_i;
+        self.probes[i] = cast(from, dir, len).unwrap_or(f32::MAX);
+        self.probe_i += 1;
+        let got = self.probes;
+        self.say(25, || format!("the free sit's samples so far {got:?}"));
     }
 
     /// RDR2's deactivate and cleanup: the balancer's hip pitch and knee bend let go at the ramps, the behaviours sit
-    /// started stopped, the constraints let go.
+    /// started stopped, the constraints let go, the radii back at once.
     fn deactivate(&mut self, c: &mut Ctx, out: &mut Vec<String>) {
         if !self.on {
             return;
@@ -4990,8 +5485,30 @@ impl SitRdr2 {
         self.release(0b1111);
         self.ropes.clear();
         self.contact_off = 0;
+        self.key_off = false;
+        self.shrunk = [false; 3];
+        c.ch.bb_off.clear();
         self.on = false;
     }
+}
+
+/// Along a ray to an obstacle's box, the distance.
+fn sit_ray_box(o: &crate::ragdoll::Obstacle, from: Vec3, dir: Vec3, len: f32) -> Option<f32> {
+    let r = o.rot.inverse();
+    let (a, d) = (r * (from - o.at) - o.centre, r * dir);
+    let (mut lo, mut hi) = (0.0f32, len);
+    for k in 0..3 {
+        if d[k].abs() < 1e-6 {
+            if a[k].abs() > o.half[k] {
+                return None;
+            }
+        } else {
+            let (t0, t1) = ((-o.half[k] - a[k]) / d[k], (o.half[k] - a[k]) / d[k]);
+            lo = lo.max(t0.min(t1));
+            hi = hi.min(t0.max(t1));
+        }
+    }
+    (lo <= hi).then_some(lo)
 }
 
 /// RDR2's bolas, written from how it looks (its own parameters aren't known, so these are Delirium's): the bolas
