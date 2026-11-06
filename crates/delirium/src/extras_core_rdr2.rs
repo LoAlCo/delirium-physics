@@ -147,7 +147,7 @@ impl Default for CoreCfg {
     }
 }
 
-fn trace(s: impl FnOnce() -> String) {
+pub fn trace(s: impl FnOnce() -> String) {
     static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *T.get_or_init(|| std::env::var_os("RDR2_TRACE").is_some()) {
         eprintln!("core: {}", s());

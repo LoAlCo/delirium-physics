@@ -6043,6 +6043,7 @@ impl Extra for BulletImpulse {
                 let bit = c.ch.random_bits() & 1 != 0;
                 if let Some((tau, kept)) = crate::extras_core_rdr2::bullet_torque(&mut c.ch.core.cfg, &t, r, imp, axis, bit) {
                     imp_kept = imp * kept;
+                    crate::extras_core_rdr2::trace(|| format!("bullet torque: {tau} N m, impulse kept {kept}"));
                     torque = Some(BulletTorque { tau, now: axis * tau, clock: 0.0 });
                 }
             }
