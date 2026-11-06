@@ -883,8 +883,8 @@ impl Rdr2 {
     }
 
     /// Moving sideways: `along_side` is the velocity direction along the pelvis's side axis.
-    pub fn sideways(&mut self, stepping: bool, speed2: f32, along_side: f32) {
-        self.sideways = !stepping && (self.stagger || self.p.sideways_cheat_force.abs() >= 0.01) && speed2 > SIDEWAYS_SPEED2
+    pub fn sideways(&mut self, speed2: f32, along_side: f32) {
+        self.sideways = (self.stagger || self.p.sideways_cheat_force.abs() >= 0.01) && speed2 > SIDEWAYS_SPEED2
             && along_side.abs() > self.p.sideways_thresh;
     }
 

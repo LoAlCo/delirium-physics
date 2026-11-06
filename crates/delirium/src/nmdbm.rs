@@ -1836,6 +1836,11 @@ impl Dbm {
             r.cancel_step = false;
             self.f.stepping = 0;
         }
+        // RDR2 (0x2aba1cc): moving along the pelvis's side axis (minus its second row) is read before the placement, stepping or not
+        if let Some(r) = self.p.rdr2.as_mut() {
+            let v = horizontal(s.hvel, self.p.up);
+            r.sideways(v.length_squared(), v.normalize_or_zero().dot(horizontal(-s.pelvis.m.b, self.p.up).normalize_or_zero()));
+        }
         foot_placement(&self.p, &s, &mut self.f);
         if let Some(r) = self.p.rdr2.as_mut() {
             // a step landing ends the turn step for the rest of the tick
@@ -1846,7 +1851,6 @@ impl Dbm {
                 r.last_foot = i as usize - 1;
             }
             let v = horizontal(s.hvel, self.p.up);
-            r.sideways(self.f.stepping != 0, v.length_squared(), sdot(v.normalize_or_zero(), s.m.a, b"zyx"));
             // RDR2's sideways force (stage 3, 0x2abc4ec): on one foot, the heading error to his way (the way he faces below
             // useComDirTurnVelThresh) times sidewaysCheatForce, along the stance foot to the spine's top; on the left
             // foot only moving backward, on the right only not. Both or neither: 1 N up.
