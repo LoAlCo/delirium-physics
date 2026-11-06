@@ -141,13 +141,12 @@ pub fn build(fr: &Frag, xml: &[RigJoint], base: &Build, base_frames: &[Transform
     pairs.sort();
     pairs.dedup();
     let npairs = pairs.len();
-    // the links' own capsules, each in its link's frame, for the legs' meeting test
+    // the links' first capsules, each in its link's frame, for the legs' meeting test
     *delirium::ragdoll::LINK_CAPSULES.write().unwrap() = link_of.iter().map(|&l| {
         let (turn, com) = fr.links[l].frame();
-        fr.links[l].capsules.iter().map(|c| {
-            let e = c.turn * Vec3::Y * (c.half - c.radius).max(0.0);
-            (turn.transpose() * (c.at - e - com), turn.transpose() * (c.at + e - com), c.radius)
-        }).collect()
+        let c = &fr.links[l].capsules[0];
+        let e = c.turn * Vec3::Y * (c.half - c.radius).max(0.0);
+        (turn.transpose() * (c.at - e - com), turn.transpose() * (c.at + e - com), c.radius)
     }).collect();
     delirium::nmrs::set(slot, table_joints, table_parts, masses.clone(), pairs);
     // each part: Homer's frame in the zero pose; its body's (RDR2's link) through the build's links
