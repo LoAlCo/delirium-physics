@@ -1781,7 +1781,10 @@ impl Agent {
         let mut stop_dbm = false;
         let mut hf_balance = None;
         let mut bb_req = (false, None, None);
+        #[allow(unused_mut)]
         let mut part_scales: (Vec<(usize, f32)>, Vec<(usize, [f32; 3])>) = (vec![], vec![]);
+        let (mut key_part, mut key_vel): (Vec<(usize, Option<Transform>, Vec3, Vec3)>, Vec<(usize, Vec3, Vec3)>) = (vec![], vec![]);
+        let mut shot_bullet: Option<(usize, Vec3)> = None;
         let mut fric_clamp = None;
         let mut part_radii: Vec<(usize, f32)> = vec![];
         let mut dbm_aside = false;
@@ -1874,6 +1877,7 @@ impl Agent {
             c.sit_state = self.extras.sit_state;
             c.bb_on = c.ch.rdr2 && (self.balance.as_ref().is_some_and(|b| b.bb.is_some()) || self.extras.on.iter().any(|(n, _)| *n == "rdr2Balance"));
             c.incoming = &self.incoming;
+            c.incoming_prev = &self.incoming_prev;
             c.upright = !self.fallen && self.balance.as_ref().is_some_and(|b| b.dbm.is_some());
             c.shot_on = self.nm_shot.is_some();
             c.fall_on = self.nm_cf.as_ref().is_some_and(|f| f.active) || self.nm_ru.active;
@@ -2274,6 +2278,9 @@ impl Agent {
             // RDR2 core: an extra (onFire) stops or starts bodyBalance and sets the balancer's leg stiffness
             bb_req = (out.bb_stop, out.bb_start.take(), out.dbm_leg_stiffness);
             part_scales = (std::mem::take(&mut out.part_friction), std::mem::take(&mut out.lim_floor));
+            key_part = std::mem::take(&mut out.key_part);
+            key_vel = std::mem::take(&mut out.key_vel);
+            shot_bullet = out.shot_bullet.take();
             fric_clamp = out.fric_clamp.take();
             part_radii = std::mem::take(&mut out.part_radius);
             dbm_aside = std::mem::take(&mut out.dbm_aside);
@@ -2366,9 +2373,90 @@ impl Agent {
                 }
             }
         }
+        // RDR2 core: shotNewBullet: the shot's reaction takes a new bullet (0x2ad4a10), no new impulse
+        if let (Some((k, at)), Some(s)) = (shot_bullet.take(), self.nm_shot.as_mut()) {
+            s.new_bullet(k, at);
+        }
+        // RDR2 core: what the tick asked of the joints' limits goes to the Rage joints (each joint's slot +0x108, in 0x2a45344)
+        if self.rdr2_core.is_some() {
+            let hit: Vec<Option<Vec3>> = self.doll.hit.iter().map(|h| h.as_ref().map(|x| x.1)).collect();
+            let touch: Vec<bool> = (0..hit.len()).map(|k| self.doll.collided(&[k])).collect();
+            let frames: Vec<Transform> = self.doll.frames().collect();
+            if let Some(ch) = self.ch.as_mut() {
+                for &(k, f) in &part_scales.1 {
+                    if let Some(j) = k.checked_sub(1) {
+                        ch.lim_floor(j, f);
+                    }
+                }
+                let knees = *crate::nmrs::KNEE();
+                let actual = [ch.actual(knees[0], &frames)[0], ch.actual(knees[1], &frames)[0]];
+                let slow = ch.knee_tweak(&hit, &touch, actual);
+                let rate = ch.core.cfg.fall.limit_rate;
+                ch.lim_step(dt, |j| if j == slow { rate } else { 4.0 });
+            }
+            for (k, to, v, w) in key_part.drain(..) {
+                self.doll.key_part(k, to, v, w);
+            }
+            for (k, dv, dw) in key_vel.drain(..) {
+                self.doll.key_vel(k, dv, dw);
+            }
+        }
         let rigid = self.ch.as_ref().map_or(vec![], |ch| ch.rigid(dt, self.strength, self.most));
+        if self.rdr2_core.is_some() {
+            if let Some(ch) = self.ch.as_mut() {
+                ch.lim_settle();
+            }
+        }
         let (mut torque, mut force, mut push) = (vec![], vec![], vec![]);
         let mut stay_at: Vec<(usize, Vec3, Vec3)> = vec![];
+        // RDR2 core: the spin limiters (0x2a1d9e4), at the pelvis; setCharacterCollisions on a contact with something that isn't
+        // the level (ours: RDR2 goes by the object's type, ctx+0x10f0; nothing here has one, so any obstacle)
+        if self.rdr2_core.is_some() {
+            let out_hit = self.doll.hit_out_id.iter().zip(&self.doll.hit_out).any(|(id, h)| h.is_some() && *id >= 0);
+            let frames: Vec<Transform> = self.doll.frames().collect();
+            if let Some(ch) = self.ch.as_mut() {
+                let snap = ch.clone();
+                let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames: &frames };
+                let s = body.snap(snap.up);
+                let cfg = &mut ch.core.cfg;
+                if out_hit && cfg.spin_hit.time != 0.0 {
+                    cfg.spin_hit.left = cfg.spin_hit.time;
+                }
+                if out_hit && cfg.coll.on && s.vel.length() < cfg.coll.max_speed {
+                    let r = cfg.coll;
+                    for k in 0..frames.len().min(32) {
+                        let scale = if matches!(k, 5 | 7) { r.scale[1] } else { r.scale[0] };
+                        part_scales.0.push((k, if r.cap < 0.0 { scale } else { scale.min(r.cap) }));
+                    }
+                    if r.foot_slip {
+                        ch.core.foot_unlatch = true;
+                    }
+                    crate::extras_core_rdr2::trace_first("setCharacterCollisions: a contact with an obstacle");
+                }
+                let cfg = &mut ch.core.cfg;
+                if cfg.spin.left > 0.0 || cfg.spin_hit.left > 0.0 {
+                    let (mut h, mut c_) = (Vec3::ZERO, Vec3::ZERO);
+                    let mut mass = 0.0;
+                    for k in 0..frames.len() {
+                        let m_ = self.doll.part_mass(k);
+                        (c_, mass) = (c_ + frames[k].translation * m_, mass + m_);
+                    }
+                    c_ /= mass.max(1e-3);
+                    for k in 0..frames.len() {
+                        let p = body.part(k);
+                        let m_ = self.doll.part_mass(k);
+                        h += (frames[k].translation - c_).cross(p.v) * m_ + p.w * self.doll.inertia(k, p.w.normalize_or(Vec3::Z));
+                    }
+                    let (t1, t2) = (crate::extras_core_rdr2::spin_limit_step(&mut cfg.spin, h, s.m.a, s.m.c, s.vel.length(), dt),
+                                    crate::extras_core_rdr2::spin_limit_step(&mut cfg.spin_hit, h, s.m.a, s.m.c, s.vel.length(), dt));
+                    if t1 + t2 != Vec3::ZERO {
+                        torque.resize(torque.len().max(1), Vec3::ZERO);
+                        torque[0] += t1 + t2;
+                        crate::extras_core_rdr2::trace_first("spin limiter acts");
+                    }
+                }
+            }
+        }
         for &(k, v, f) in &shot_out.seq {
             torque.resize(torque.len().max(k + 1), Vec3::ZERO);
             torque[k] = if f { self.doll.force_moment(k, v, torque[k]) } else { torque[k] + v };
@@ -2426,7 +2514,7 @@ impl Agent {
             self.doll.impulse(pelvis, self.doll.com().0, Vec3::Z * (fall_assist * dt));
         }
         if self.rdr2_core.is_some() {
-            self.doll.set_part_scales(&part_scales.0, &part_scales.1);
+            self.doll.set_part_scales(&part_scales.0, &[]);
             self.doll.fric_clamp = fric_clamp;
             self.doll.set_part_radii(&part_radii);
             if dbm_aside {

@@ -191,6 +191,12 @@ pub struct Out {
     /// RDR2 core: per-joint limit half-range floors this step, child part and (lean1, lean2, twist) in rad
     /// (the 3-DOF joint's +0x11c..+0x124, 0x2a4eaa0)
     pub lim_floor: Vec<(usize, [f32; 3])>,
+    /// RDR2 core: parts set outright this step (0x2a1b1a4, keyframe's hard keys): pose, velocity, turn
+    pub key_part: Vec<(usize, Option<Transform>, Vec3, Vec3)>,
+    /// RDR2 core: parts' velocity and turn changed outright this step (SoftKey sets velocities, 0x2a518e0)
+    pub key_vel: Vec<(usize, Vec3, Vec3)>,
+    /// RDR2 core: shotNewBullet for the shot's reaction: part, point
+    pub shot_bullet: Option<(usize, Vec3)>,
     /// RDR2 core: per-part collision radius scales this step, part and scale (sit's pelvis and thighs)
     pub part_radius: Vec<(usize, f32)>,
     /// RDR2 core: the balancer off (bal+0xbe7), a running bodyBalance left alone (sit's riding)
@@ -411,6 +417,9 @@ pub struct Ctx<'a, 'b> {
     pub extras_on: Vec<&'static str>,
     /// RDR2 core: the incoming animation's part frames (empty: none), which animPose drives the limbs to
     pub incoming: &'a [Transform],
+    /// RDR2 core: last step's incoming pose (ctx+0x3638)
+    pub incoming_prev: &'a [Transform],
+    pub dt: f32,
     /// RDR2 core: the shot's strength scale for the behaviours that read it (controlledFall); 1 without a shot
     pub shot_scale: f32,
 }
@@ -462,7 +471,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
         let up = ch.up;
         let s = b.snap(up);
         Ctx { ch, b, out, dbm_failed, m: s.m, com: s.com, vel: s.vel, angvel: s.angvel, up, cf: None, reqs: None, shot_slot: crate::limbreq::SHOT, upright: !dbm_failed, head_look_on: false,
-              dbm: None, shot_on: false, fall_on: false, rfw: None, bb_on: false, sit_state: None, extras_on: vec![], incoming: &[], shot_scale: 1.0 }
+              dbm: None, shot_on: false, fall_on: false, rfw: None, bb_on: false, sit_state: None, extras_on: vec![], incoming: &[], incoming_prev: &[], dt: 1.0 / 60.0, shot_scale: 1.0 }
     }
 
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.
@@ -602,6 +611,12 @@ impl Shot {
 
     pub fn hit(&mut self, p: Params) {
         self.p = p;
+        self.new_hit = true;
+    }
+
+    /// RDR2's shotNewBullet: the same reaction start as a hit, with the sent part.
+    pub fn new_bullet(&mut self, part: usize, _at: Vec3) {
+        self.p.body_part = part;
         self.new_hit = true;
     }
 

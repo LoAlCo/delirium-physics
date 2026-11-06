@@ -1869,7 +1869,7 @@ impl Injured {
         self.rd.rfw_block = None;
         self.rd.time += dt;
         // the log: last tick's friction and floors reached the body, a shoulder went past the rig's limit
-        if let (Some(&f), Some(&g)) = (c.b.doll.fric.get(13), c.b.doll.lim_floor.get(SHOULDER()[0] + 1)) {
+        if let (Some(&f), Some(g)) = (c.b.doll.fric.get(13), c.ch.core.lim.get(SHOULDER()[0]).map(|t| t.live)) {
             self.say(11, format!("#say iog body has arm friction {f} and shoulder limit floors {g:?}"));
         }
         for i in 0..2 {

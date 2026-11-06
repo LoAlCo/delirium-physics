@@ -149,6 +149,19 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "flatStiffness", kind: Kind::Float, used: true, doc: "the turn's strength, N m per rad (12; 0: off)" },
     ] },
     Message { name: "setFallingReaction", params: &[
+        Param { name: "stopManual", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: a floor on the slope factor, over 0 turning the slope block on (0)" },
+        Param { name: "stopOnSlopes", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the time after which slopes count (10000)" },
+        Param { name: "blendkneerate", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the knees' rate (10000)" },
+        Param { name: "antiPropClav", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: falling backward, no clavicle (false)" },
+        Param { name: "antiPropWeak", kind: Kind::Float, used: false, doc: "RDR2 core: +0xc2: no reader in the game's code" },
+        Param { name: "riflePose", kind: Kind::Float, used: false, doc: "RDR2 core: +0xc0: an arm pose while the arm's weapon state is 2; no weapon states here" },
+        Param { name: "?7dad7aaf", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the arm's swing circle (0)" },
+        Param { name: "?dcd030d5", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x1068: the knee and foot tweak (0)" },
+        Param { name: "zmpgroundcollision", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x105c: how far the tweaked knee may fold (3)" },
+        Param { name: "?7579162f", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x1060: its limit comes back at this rate (1)" },
+        Param { name: "?4fe4ab89", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x1064: a bent knee's foot's friction, lying down (0)" },
+        Param { name: "?5be84846", kind: Kind::Float, used: false, doc: "RDR2 core: +0x88: hands and knees' hand friction window; the port's hands and knees is setFallingReaction's own" },
+        Param { name: "?c3e9ccc1", kind: Kind::Float, used: false, doc: "RDR2 core: +0xa8: hands and knees' time window; the same" },
         Param { name: "comVelRDSThresh", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
         Param { name: "inhibitRollingTime", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
         Param { name: "changeFrictionTime", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
@@ -3331,7 +3344,7 @@ impl Extra for FallingReaction {
         if c.ch.rdr2 && !self.read {
             self.read = true;
             // what catchFall reads of it (a start=true is its registered defaults, then these)
-            let mut fall = crate::extras_core_rdr2::FallCfg::default();
+            let mut fall = crate::extras_core_rdr2::FallCfg::message_defaults();
             for (n, v) in self.fall.drain(..) {
                 fall.set(n, v);
             }
@@ -6263,6 +6276,11 @@ impl Extra for BulletImpulse {
             self.recs.push(BulletRec { k, local, imp: imp_kept, left: t.period, wait: t.delay, t, air, one_leg, period: t.period, torque });
             c.ch.core.bullet = Some(imp);
             c.ch.core.bullet_new = Some((k, at.unwrap_or(f[k].translation), imp));
+            // 0x2a40518 at 0x2a4057a: the bullet's spin limiter is armed, if slow enough
+            let spin = &mut c.ch.core.cfg.spin;
+            if spin.time > 0.0 && c.vel.length() < spin.speed {
+                spin.left = spin.time;
+            }
         }
         let feet = (c.b.doll.collided(&[3]), c.b.doll.collided(&[6]));
         let on_feet = if feet.0 && feet.1 { 1.0 } else { 0.0 };
