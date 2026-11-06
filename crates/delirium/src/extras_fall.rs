@@ -2865,6 +2865,10 @@ impl SfRdr2 {
                 if !p.balance {
                     c.ch.set_stiffness(6.0, 1.0, "fb", Some(0.5));
                 }
+                // rollDownStairs' fields, for the one catchFall may start (0x2a82dc0; a running one keeps what it started with [P])
+                let force = if v.length() < p.rds_force_vel { p.rds_force_mag } else { 0.0 };
+                let tlv = if p.rds_tlv >= 0.0 { p.rds_tlv } else { v.length() };
+                c.ch.core.cfg.fall.rds_smart = Some([p.body_stiffness, force, tlv, p.rds_tlv_decay]);
                 if v.length() < 0.075 {
                     self.feedback(c, false);
                 }

@@ -920,6 +920,18 @@ impl Agent {
         }
     }
 
+    /// RDR2 core: a thrown or dropped thing touched a part. The room's props are another physics world and push him by
+    /// impulses, so they never were the ragdoll's contacts (`hit_out`), and BCR never saw one; it reads them from here.
+    pub fn prop_contact(&mut self, k: usize, at: Vec3, n: Vec3, id: i32, mass: f32, volume: f32) {
+        if self.rdr2_core.is_none() {
+            return;
+        }
+        if let Some(ch) = self.ch.as_mut() {
+            ch.core.prop_hit[k % 4] = (k as i32, at, n, id);
+            ch.core.props[id as usize % 8] = (id, mass, volume);
+        }
+    }
+
     pub fn shot_relax(&mut self, period: f32) {
         self.nm_relax = Some(period);
     }

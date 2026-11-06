@@ -266,11 +266,13 @@ pub struct FallCfg {
     pub hand_window: f32,
     /// smartFall's forceHeadAvoid for a catchFall it starts (+0x2b8)
     pub force_head: bool,
+    /// smartFall's state 6 writes rollDownStairs' fields whether it runs or not: stiffness, forcemag, targetLinearVelocity, its decay
+    pub rds_smart: Option<[f32; 4]>,
 }
 
 impl Default for FallCfg {
     fn default() -> FallCfg {
-        FallCfg { stop_manual: 0.0, stop_on_slopes: f32::MAX, knee_rate: 10000.0, anti_prop_clav: 0.0, swing_circle: 1.0, knee_tweak: 1.0, knee_limit: 3.0, limit_rate: 1.0, foot_friction: 0.0, hk: false, hk_head: true, hk_window: 0.0, hand_window: 100000.0, force_head: false, com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
+        FallCfg { stop_manual: 0.0, stop_on_slopes: f32::MAX, knee_rate: 10000.0, anti_prop_clav: 0.0, swing_circle: 1.0, knee_tweak: 1.0, knee_limit: 3.0, limit_rate: 1.0, foot_friction: 0.0, hk: false, hk_head: true, hk_window: 0.0, hand_window: 100000.0, force_head: false, rds_smart: None, com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
     }
 }
 

@@ -5205,6 +5205,11 @@ impl Sim {
     }
 
     fn obj_hit(&mut self, i: usize, j: usize, k: usize, at: Vec3, imp: Vec3) {
+        if i == 0 {
+            let (_, s, kg, _) = (*world::KINDS())[self.room.objs[j].kind];
+            let m = kg * self.room.weight;
+            self.agent.prop_contact(k, at, imp.normalize_or_zero(), 20000 + j as i32, m, 8.0 * s * s * s);
+        }
         if !self.room.objs[j].hit[i] && imp.length() > 1.0 {
             self.room.objs[j].hit[i] = true;
             self.say(format!("{}  {} hits {} ({:.1} N s)", WHO[i], (*world::KINDS())[self.room.objs[j].kind].0,
@@ -10203,9 +10208,11 @@ fn headless(mut sim: Sim, n: usize) {
             sim.button("shot");
         }
         for (_, l) in sends.iter().filter(|(f, _)| *f == i) {
-            match l.starts_with("rdr2 task ") {
-                true => sim.button(l),
-                false => sim.send(l),
+            // (a line "press <button>" presses a button at that frame)
+            match (l.starts_with("rdr2 task "), l.strip_prefix("press ")) {
+                (true, _) => sim.button(l),
+                (_, Some(b)) => sim.button(b),
+                _ => sim.send(l),
             }
         }
         // test hook: RDR2_HOLD_INCOMING=<frame> makes the pose at that frame the incoming animation from then on

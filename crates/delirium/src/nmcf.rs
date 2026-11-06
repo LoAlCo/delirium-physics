@@ -560,7 +560,13 @@ impl CatchFall {
             && (fall.resist_rolling == 0.0 || c.b.doll.collided(&parts))
         {
             r.rolling = true;
-            c.out.rds = Some((crate::nmrds::RollDownStairs::rdr2_defaults(), None));
+            let mut rds = crate::nmrds::RollDownStairs::rdr2_defaults();
+            if let Some([stiffness, force, tlv, decay]) = fall.rds_smart {
+                (rds.stiffness, rds.forcemag) = (stiffness, force);
+                (rds.rdr2.limit_spin_reduction, rds.rdr2.target_linear_velocity, rds.rdr2.target_linear_velocity_decay_time) = (true, tlv, decay);
+                crate::extras_core_rdr2::trace(|| format!("rollDownStairs from smartFall's fields: force {force}, target speed {tlv} decaying over {decay}"));
+            }
+            c.out.rds = Some((rds, None));
             crate::extras_core_rdr2::trace(|| format!("catchFall: rolling at {:.2} m/s over {}", c.vel.length(), fall.com_vel_rds));
         }
         // the ground's normal: the arms' probes' mean once down

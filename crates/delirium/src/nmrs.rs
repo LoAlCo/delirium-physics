@@ -619,6 +619,10 @@ pub struct CoreState {
     pub ftk: crate::nmftk_rdr2::Ftk,
     /// what RDR2's core messages hold (extras_core_rdr2.rs)
     pub cfg: crate::extras_core_rdr2::CoreCfg,
+    /// the room's props that have touched him lately: id (-1 none), kg, m^3
+    pub props: [(i32, f32, f32); 8],
+    /// a prop's contact since BCR last looked: part (-1 none), point, normal, id
+    pub prop_hit: [(i32, bevy_math::Vec3, bevy_math::Vec3, i32); 4],
     /// the foot yaw hold runs (ctx+0x47fd), and its latches are let go this step (ctx+0x4800, +0x4801)
     pub foot_hold: bool,
     pub foot_unlatch: bool,
@@ -663,7 +667,7 @@ impl CoreState {
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
+        CoreState { props: [(-1, 0.0, 0.0); 8], prop_hit: [(-1, bevy_math::Vec3::ZERO, bevy_math::Vec3::ZERO, -1); 4], lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 
