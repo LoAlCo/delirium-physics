@@ -2296,6 +2296,20 @@ impl Agent {
             // RDR2 core: headLook and pointArm's arms yield to animPose when its override is set and it holds them
             let ap = self.extras.on.iter().filter(|_| c.ch.rdr2).find(|(n, _)| *n == "animPose").and_then(|(_, e)| e.anim_pose_yield());
             let ap = ap.unwrap_or_default();
+            if let Some(s) = c.out.stg_head.take() {
+                // (what holds it on till the next tick, outliving the walk of this one)
+                self.head_look = vec![(s.at.map_or(Vec3::ZERO, |a| a.0), 2.5 * dt)];
+                let h = &mut self.nm_head;
+                if !h.active {
+                    *h = crate::nmhl::HeadLook::default();
+                    h.activate(c.ch, &body);
+                }
+                (h.stiffness, h.damping, h.always_look) = (s.gains.0, s.gains.1, false);
+                h.twist_spine = h.twist_spine && !s.no_twist;
+                for (pos, vel) in [s.at, s.along].into_iter().flatten() {
+                    h.look(crate::nmhl::PRIO_STAGGER, pos, vel, true);
+                }
+            }
             if (hl_was || (shot_out.head_look_start.is_none() && !shot_out.head_look_activate)) && !waits(walk_actives!(self), W_HEAD()) && !ap[0] {
                 self.nm_head.tick(c.ch, &body, dt);
             }

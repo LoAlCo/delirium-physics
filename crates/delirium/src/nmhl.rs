@@ -63,6 +63,7 @@ pub(crate) struct Rdr2Hl {
 }
 
 /// RDR2's look priorities (headLook's target setter): the highest each tick wins.
+pub const PRIO_STAGGER: u8 = 4;
 pub const PRIO_BODY_BALANCE: u8 = 0xc;
 pub const PRIO_SHOT: u8 = 0xd;
 pub const PRIO_CATCH_FALL: u8 = 0x14;

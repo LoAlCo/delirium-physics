@@ -142,6 +142,8 @@ pub struct Out {
     /// bal+0x338: staggerFall's fall has begun
     pub dbm_falling: bool,
     pub dbm_lead: Option<f32>,
+    /// RDR2 core: staggerFall's head look this tick (0x2a78100), read before the head look's own tick
+    pub stg_head: Option<StgHead>,
     /// RDR2 core: teeter's addition to the balancer's prediction time this step (bal+0x6bc with +0x6c0 on)
     pub dbm_lead_add: f32,
     /// RDR2 core: the balancer's taperKneeStrength (bal+0x654) from now on, as teeter and highFall set it
@@ -2491,4 +2493,13 @@ impl Shot {
         aw.tick(c, &p, dt);
         self.da.aw = Some(aw);
     }
+}
+
+/// staggerFall's head look: gains, spine twist off with upperBodyReaction, targets at its priority (pos, vel)
+#[derive(Clone, Copy, Debug)]
+pub struct StgHead {
+    pub gains: (f32, f32),
+    pub no_twist: bool,
+    pub at: Option<(Vec3, Vec3)>,
+    pub along: Option<(Vec3, Vec3)>,
 }

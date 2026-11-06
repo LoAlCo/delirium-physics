@@ -646,12 +646,13 @@ impl Extra for StaggerFall {
             let first = self.rd.is_none();
             let rd = self.rd.get_or_insert_with(|| StgRdr2::new(c, rp, &mut self.out));
             rd.tick(c, &rp, &mut self.out, dt);
-            // Its activation starts the head look itself (0x2a78100: stiffness 11, damping 1), which ticks the same step: recorded
-            // 121 / 22. Ours arrives by message, next tick, so its gains are written here; its targets still come a tick late
+            // Its activation starts the head look with stiffness 11, damping 1, which ticks the same step: recorded 121 / 22
             if first && rp.head {
-                for j in (*NECK()).iter().copied() {
-                    c.ch.eff[j].set_stiffness(STG_HEAD, 1.0, None);
+                if let Some(h) = c.out.stg_head.as_mut() {
+                    h.gains = (STG_HEAD, 1.0);
                 }
+                // (it waits a tick here, activated this tick, so its gains are written for it)
+                c.ch.set_stiffness(STG_HEAD, 1.0, "un", None);
             }
             return;
         }
@@ -773,6 +774,7 @@ struct StgParams {
     force_thresh: f32,
     head_vel_prob: f32,
     head: bool,
+    head_pos: Vec3,
     time_to_fall: f32,
     fall_type: i32,
     firing: bool,
@@ -805,12 +807,13 @@ impl StgParams {
         let force_thresh = p.f("forcebalancethresh", 1.0)?;
         let head_vel_prob = p.f("headLookAtVelProb", 1.0)?;
         let head = p.b("useHeadLook", true)?;
+        let head_pos = p.v("headLookPos", Vec3::ZERO)?;
         let (time_to_fall, fall_type) = (p.f("timeToFall", 2.0)?, p.i("fallType", 4)?);
         let firing = p.b("firingInputOutput", false)?;
         let upper_body = p.b("upperBodyReaction", true)?;
         let fall_red = p.f("fallreduction", 0.0)?;
         Ok(StgParams { arm, spine, arm_start, spine_start, hold, ramp, steps_end, legs, legs_end, strike, per_step, legs_back, prediction, lean_rate, com, hip,
-                       total: STG_TOTAL, bonus: STG_BONUS, push_dist, push_knee, push_vel, force_thresh, head_vel_prob, head,
+                       total: STG_TOTAL, bonus: STG_BONUS, push_dist, push_knee, push_vel, force_thresh, head_vel_prob, head, head_pos,
                        time_to_fall, fall_type, firing, upper_body, fall_red })
     }
 }
@@ -851,6 +854,10 @@ struct StgRdr2 {
     leg_len: f32,
     /// the armsWindmillAdaptive it started (0x2a7af24)
     wm: bool,
+    /// the look along his velocity (+0x1b8, +0x1d4); the per-activation draw for a probability under -0.001 (+0x1bc)
+    head_timer: f32,
+    head_along: bool,
+    head_u: f32,
 }
 
 impl StgRdr2 {
@@ -872,12 +879,9 @@ impl StgRdr2 {
         if c.dbm.is_none() && c.upright {
             out.push("bodyBalance start=true".into());
         }
-        if p.head {
-            out.push(format!("headLook start=true vel={},{},{} stiffness={STG_HEAD} damping=1", c.vel.x, c.vel.y, c.vel.z));
-        }
         let leg_len = (c.b.joint_pos((*HIP())[0]) - c.b.joint_pos((*ANKLE())[0])).length().max(0.1);
         StgRdr2 { t: 0.0, seed, last: 0, steps: 0, just: [0.0; 2], leg: [0; 2], force: false, latch: false, fell: false, handed: false, wm: false,
-                  leg_len }
+                  leg_len, head_timer: 0.0, head_along: false, head_u: c.ch.random() }
     }
 
     fn foot(c: &Ctx, i: usize) -> usize {
@@ -916,9 +920,6 @@ impl StgRdr2 {
         if bal.stepping != 0 && bal.stepping != self.last {
             self.steps += 1;
             self.just[bal.stepping as usize - 1] = STG_JUST;
-            if p.head && (p.head_vel_prob >= 1.0 || c.ch.random() < p.head_vel_prob) {
-                out.push(format!("headLook start=true vel={},{},{} stiffness={STG_HEAD} damping=1", v.x, v.y, v.z));
-            }
         }
         self.last = bal.stepping;
         for j in &mut self.just {
@@ -1074,6 +1075,25 @@ impl StgRdr2 {
         }
         c.ch.set_stiffness(spine[0], spine[1], "us", None);
         c.ch.set_stiffness(spine[0], spine[1], "un", None);
+        // 0x2a78100, each tick: the head look's gains are the spine's, plus twice the scale; along his velocity on a timer
+        // while a foot is stepping. All at priority 4, so bodyBalance's look (0xc) wins while that runs
+        if bal.stepping == 0 {
+            self.head_timer = 0.0;
+        } else {
+            self.head_timer -= dt;
+            if self.head_timer < 0.0 {
+                self.head_timer = 0.2 * c.ch.random() + 0.2;
+                let prob = if p.head_vel_prob < -0.001 { self.head_u } else { p.head_vel_prob };
+                self.head_along = c.ch.random() < prob;
+            }
+        }
+        let head = c.b.part(c.ch.joints[(*NECK())[1]].child);
+        c.out.stg_head = Some(crate::nmshot::StgHead {
+            gains: (2.0 + spine[0], spine[1]),
+            no_twist: p.upper_body,
+            at: p.head.then_some((p.head_pos, Vec3::ZERO)),
+            along: (p.head && bal.stepping != 0 && self.head_along).then(|| (head.m.d + hz(v).normalize_or_zero(), head.v)),
+        });
         self.arms(c, p, u, out);
         // fall types (timeToFall)
         let elapsed = self.t > p.time_to_fall;
