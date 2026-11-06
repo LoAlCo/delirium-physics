@@ -503,6 +503,26 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     let target_a = (c * sdot(c, dir_b, b"zyx") * sdot(a, dir_b, b"zyx")).mul_add(Vec3::splat(-sa), pc) - a * sa;
     let dir_a = vnorm(shz(pc - lpos, up, b"yxz"));
     let target_b = a.mul_add(Vec3::splat(sb), (c * sdot(c, dir_a, b"zyx") * sdot(a, dir_a, b"zyx")).mul_add(Vec3::splat(sb), pc));
+    // RDR2's avoidLeg (0x2ab127c): each target stays on its side of the other foot, by the corridor's half width, half a
+    // foot ahead of it; the two lines crossing push the targets apart by avoidFeedback (the running case's extra isn't here)
+    let (target_a, target_b) = match p.rdr2.filter(|r| r.p.avoid_leg) {
+        Some(r) => {
+            let n = horizontal(s.legs[1].hip.m.d - s.legs[0].hip.m.d, up).normalize_or_zero();
+            let w = if s.vel.dot(horizontal(-s.m.c, up)) > 0.0 { r.p.avoid_foot_width_fwd } else { r.p.avoid_foot_width };
+            let ahead = |i: usize| horizontal(-s.legs[i].foot.m.c, up).normalize_or_zero() * 0.15;
+            let (cl, cr) = (rpos + ahead(1) - n * w, lpos + ahead(0) + n * w);
+            let (mut ta, mut tb) = (target_a, target_b);
+            ta -= n * (ta - cl).dot(n).max(0.0);
+            tb -= n * (tb - cr).dot(n).min(0.0);
+            let e = (cl - cr).dot(n);
+            if e < 0.0 {
+                ta += n * (r.p.avoid_feedback * e);
+                tb -= n * (r.p.avoid_feedback * e);
+            }
+            (ta, tb)
+        }
+        None => (target_a, target_b),
+    };
     f.dist = [slen(shz(target_a - lpos, up, b"yxz"), b"zyx"), slen(shz(target_b - rpos, up, b"yzx"), b"zyx")];
     // RDR2, moving sideways: after each step the other foot leads the decision
     if let Some(r) = p.rdr2.filter(|r| r.sideways || r.stagger) {

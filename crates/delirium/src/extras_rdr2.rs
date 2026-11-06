@@ -149,6 +149,18 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "flatStiffness", kind: Kind::Float, used: true, doc: "the turn's strength, N m per rad (12; 0: off)" },
     ] },
     Message { name: "setFallingReaction", params: &[
+        Param { name: "comVelRDSThresh", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "inhibitRollingTime", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "changeFrictionTime", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "groundFriction", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "armFriction", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "frictionMin", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "frictionMax", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "kTime", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "spineLeanGain", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "successStrength", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "callRDS", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
+        Param { name: "resistRolling", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's, by setFallingReaction" },
         Param { name: "handsAndKnees", kind: Kind::Bool, used: true, doc: "end a forward fall on all fours (true; false: nothing happens)" },
         Param { name: "hkHoldTime", kind: Kind::Float, used: true, doc: "s he stays on hands and knees (1.5)" },
         Param { name: "stoppedStrengthDecay", kind: Kind::Float, used: true, doc: "then his strength fades by this per s (1)" },
@@ -3128,6 +3140,8 @@ impl Extra for WallCollision {
 /// stumble forwards).
 pub struct FallingReaction {
     on: bool, hold: f32, decay: f32, arm_k: f32, leg_k: f32, spine_k: f32, push: f32, head_up: bool,
+    /// the values for catchFall, the first tick (core)
+    fall: Vec<(&'static str, f32)>,
     /// the message gave these: on, decay, arm, leg, spine, head (the RDR2 core's defaults fill the rest, first tick)
     given: [bool; 6], read: bool,
     t: f32, phase: u8, since: f32, ground: Option<f32>, arm: [Option<[f32; 6]>; 2], strength: f32,
@@ -3135,8 +3149,15 @@ pub struct FallingReaction {
 
 impl FallingReaction {
     fn new(p: &mut P) -> Result<FallingReaction, Error> {
+        let mut fall = vec![];
+        for n in crate::extras_core_rdr2::FallCfg::NAMES {
+            if p.get(n).is_some() {
+                fall.push((n, p.f(n, 0.0)?));
+            }
+        }
         let given = ["handsAndKnees", "stoppedStrengthDecay", "minArmStiffness", "minLegStiffness", "minSpineStiffness", "hkHeadAvoid"].map(|n| p.get(n).is_some());
         Ok(FallingReaction {
+            fall,
             given, read: false,
             on: p.b("handsAndKnees", true)?, hold: p.f("hkHoldTime", 1.5)?.max(0.0), decay: p.f("stoppedStrengthDecay", 1.0)?.max(0.01),
             arm_k: p.f("minArmStiffness", 14.0)?, leg_k: p.f("minLegStiffness", 12.0)?, spine_k: p.f("minSpineStiffness", 9.0)?,
@@ -3229,6 +3250,16 @@ impl Extra for FallingReaction {
         // RDR2 core: setfallingreaction's registered defaults: no hands and knees unless asked
         if c.ch.rdr2 && !self.read {
             self.read = true;
+            // what catchFall reads of it (a start=true is its registered defaults, then these)
+            let mut fall = crate::extras_core_rdr2::FallCfg::default();
+            for (n, v) in self.fall.drain(..) {
+                fall.set(n, v);
+            }
+            if self.given[1] {
+                fall.k_rate = self.decay;
+            }
+            c.ch.core.cfg.fall = fall;
+            crate::extras_core_rdr2::trace(|| format!("falling reaction: {fall:?}"));
             let g = self.given;
             (self.on, self.decay) = (g[0] && self.on, if g[1] { self.decay } else { 2.0 });
             (self.arm_k, self.leg_k, self.spine_k) = (if g[2] { self.arm_k } else { 7.0 }, if g[3] { self.leg_k } else { 3.0 }, if g[4] { self.spine_k } else { 4.5 });
