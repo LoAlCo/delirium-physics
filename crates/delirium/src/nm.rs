@@ -339,6 +339,7 @@ pub struct Agent {
     pub(crate) balance: Option<Balance>,
     /// The RDR2 core's balancer (nmdbm_rdr2.rs) with these parameters; None: GTA IV's. Experimental.
     pub rdr2_core: Option<crate::nmdbm_rdr2::Params>,
+    core_bank: f32,
     /// RDR2 core: what configureBalance has set of the balancer's parameters, over the room's each tick
     pub core_cb: Vec<(&'static str, f32)>,
     /// the room's balancer parameters before any message, for configureBalance's start=true
@@ -467,7 +468,7 @@ impl Agent {
             .map(|(i, p)| p.parent.map_or(frames[i].rotation, |j| frames[j].rotation.inverse() * frames[i].rotation)).collect();
         let roles = Roles::new(build);
         let pelvis_up = facing.inverse() * frames[roles.pelvis].rotation;
-        let mut a = Agent { core_cb: vec![], core_base: None, locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
+        let mut a = Agent { core_bank: 0.0, core_cb: vec![], core_base: None, locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
                 stiffness: (delirium_data::kv!(31), 1.0), relax: None, config: ConfigureBalance::default(), feedback: vec![], balance: None, lean: None,
                 shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_relax_lower: None, bb_brace: Default::default(), nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, cf_arms_only: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, fow_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
                 brace: None, head_look: vec![], shot_look: false, eff_override: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(200), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0 * build.parts[0].grown, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
@@ -1621,11 +1622,11 @@ impl Agent {
     pub fn step_pre(&mut self, build: &Build, world: &Collision, dt: f32, obstacles: &[Obstacle], others: &[Capsule], pre: &mut dyn FnMut(&mut Ragdoll, f32)) {
         self.feedback.clear();
         (self.doll.ob_hits.clear(), self.doll.ob_hit_left.clear(), self.doll.ob_push.clear(), self.doll.contact.clear());
-        let n = substeps(dt);
+        let (n, h) = if self.rdr2_core.is_some() { self.core_steps(dt) } else { let n = substeps(dt); (n, dt / n as f32) };
         for k in 0..n {
-            pre(&mut self.doll, dt / n as f32);
-            self.substep(build, world, dt / n as f32, obstacles, others);
-            let left = (n - k) as f32 * (dt / n as f32);
+            pre(&mut self.doll, h);
+            self.substep(build, world, h, obstacles, others);
+            let left = (n - k) as f32 * h;
             let d = &mut self.doll;
             d.ob_hit_left.resize(d.ob_hits.len(), left);
         }
@@ -1634,11 +1635,24 @@ impl Agent {
     pub fn step_follow(&mut self, build: &Build, world: &Collision, dt: f32, obstacles: &[Obstacle], others: &[Capsule]) {
         self.feedback.clear();
         (self.doll.ob_hits.clear(), self.doll.ob_hit_left.clear(), self.doll.ob_push.clear(), self.doll.contact.clear());
-        let n = substeps(dt);
+        let (n, h) = if self.rdr2_core.is_some() { self.core_steps(dt) } else { let n = substeps(dt); (n, dt / n as f32) };
         for _ in 0..n {
-            self.behave(build, world, dt / n as f32, obstacles);
-            self.physics(build, world, dt / n as f32, obstacles, others);
+            self.behave(build, world, h, obstacles);
+            self.physics(build, world, h, obstacles, others);
         }
+    }
+
+    /// RDR2's physics and NM run three steps per 1/30 s: ctx+0x47b8 += dt with the dt of each step, read .0102, .0102, .0129 across a 1/30 s (`rdr2_core3.md` 1.3). So the core's per-step laws (twist follows .2 a step,
+    /// a contact goes a step, a limit row's 5%, the limb rates) run at 90 a second, whatever the caller's step. The caller's dt is banked: at 1/60 that's one step, then two. Their dt is a fixed 1/90; the muscle's softness stays 1/60 (0x2a4e944).
+    pub(crate) fn core_steps(&mut self, dt: f32) -> (usize, f32) {
+        if env_90_off() {
+            let n = substeps(dt);
+            return (n, dt / n as f32);
+        }
+        self.core_bank += dt * 90.0;
+        let n = (self.core_bank + 1e-3).floor();
+        self.core_bank -= n;
+        (n as usize, 1.0 / 90.0)
     }
 
     pub(crate) fn substep(&mut self, build: &Build, world: &Collision, dt: f32, obstacles: &[Obstacle], others: &[Capsule]) {
@@ -1661,8 +1675,9 @@ impl Agent {
     pub fn step_group(agents: &mut [(&mut Agent, usize, &Build, &[Obstacle], &[Capsule])], world: &Collision, dt: f32, group: &mut crate::ragdoll::Group,
                       pre: &mut dyn FnMut(usize, &mut Ragdoll, f32)) {
         agents.iter_mut().for_each(|a| { a.0.feedback.clear(); a.0.doll.ob_hits.clear(); a.0.doll.ob_hit_left.clear(); a.0.doll.ob_push.clear(); a.0.doll.contact.clear(); });
-        let n = substeps(dt);
-        let h = dt / n as f32;
+        // RDR2 core: three steps per 1/30 s (`core_steps`)
+        let core = agents.iter_mut().find(|a| a.0.rdr2_core.is_some()).map(|a| a.0.core_steps(dt));
+        let (n, h) = core.unwrap_or_else(|| { let n = substeps(dt); (n, dt / n as f32) });
         for k in 0..n {
             let last = k + 1 == n;
             for (i, (a, ..)) in agents.iter_mut().enumerate().filter(|(_, a)| last || !a.0.contact_wake) {
@@ -1838,6 +1853,7 @@ impl Agent {
                 if let (Some(l), Some(r)) = (ch.core.side_lever.take(), dbm.p.rdr2.as_mut()) {
                     r.lever = (l, r.steps);
                 }
+                if std::env::var_os("NMX_LEAN").is_some() { eprintln!("LEAN {:?} shot {} hl {:?}", self.lean.map(|l| (l.1, l.2, l.3, matches!(l.0, crate::nmdbm::LeanMode::Dir(_)))), self.nm_shot.is_some(), dbm.p.rdr2.map(|r| r.time)); } // NMXHOOK
                 let c = dbm_config(self.config, &b.params, self.lean_bias, self.hip_yaw, self.legs);
                 dbm.lean = match self.lean {
                     Some((mode, amount, _, as_force)) => crate::nmdbm::Lean { mode, amount, as_force },
@@ -3319,6 +3335,11 @@ macro_rules! walk_actives {
 use walk_actives;
 
 pub static TWO_SUBSTEPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn env_90_off() -> bool {
+    static O: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *O.get_or_init(|| std::env::var_os("NMX_90").is_none())
+}
 
 fn substeps(dt: f32) -> usize {
     if TWO_SUBSTEPS.load(std::sync::atomic::Ordering::Relaxed) {

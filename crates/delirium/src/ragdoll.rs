@@ -1577,9 +1577,11 @@ fn rage_refresh(world: &Collision, held: &mut Vec<Held>, shape: gjk::Shape, tm: 
             insts.push(r.inst);
         }
     }
-    for inst in insts {
+    let age_lim: u16 = std::env::var("NMX_AGE").ok().and_then(|v| v.parse().ok()).unwrap_or(4); // NMXHOOK
+    let drops: usize = std::env::var("NMX_DROP").ok().and_then(|v| v.parse().ok()).unwrap_or(1); // NMXHOOK
+    for inst in insts.iter().copied().flat_map(|i| std::iter::repeat(i).take(drops)) {
         let (mut slid, mut far): ((Option<usize>, f32), (Option<usize>, f32)) = ((None, 0.0), (None, 0.0));
-        for (k, r) in held.iter().enumerate().filter(|(_, r)| r.inst == inst && r.age > 4) {
+        for (k, r) in held.iter().enumerate().filter(|(_, r)| r.inst == inst && r.age > age_lim) {
             let a = crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local);
             let d = (r.ground + r.n * WORLD_MARGIN()) - (a - r.n * r.gap);
             let d = d.vd(d);
@@ -1590,6 +1592,7 @@ fn rage_refresh(world: &Collision, held: &mut Vec<Held>, shape: gjk::Shape, tm: 
                 far = (Some(k), r.gap);
             }
         }
+        if std::env::var_os("NMX_RF").is_some() && matches!(shape, gjk::Shape::Box(..)) { eprintln!("RF n{} ages {:?} gaps {:?} slid {:.3} far {:.3} x {:.2}", held.len(), held.iter().map(|r| r.age).collect::<Vec<_>>(), held.iter().map(|r| (r.gap * 1000.0) as i32).collect::<Vec<_>>(), slid.1.sqrt(), far.1, bw.x); } // NMXHOOK
         if let (Some(k), true) = (slid.0, slid.1 > 0.0004) {
             let a = crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, held[k].local);
             let n = held[k].n;
@@ -2560,7 +2563,9 @@ impl Ragdoll {
     fn bound_world(&self, i: usize) -> Vec3 {
         let r = self.inst();
         let ip = self.inst_place(&r);
-        Self::chain(self.bound_local(i, &r, ip), &r, ip)
+        let base = Self::chain(self.bound_local(i, &r, ip), &r, ip);
+        if (i == 3 || i == 6) && self.nm_first { if let Some(z) = std::env::var("NMX_FOOTOFF").ok().and_then(|v| v.parse::<f32>().ok()) { return base + self.turns()[i].z_axis * z; } } // NMXHOOK
+        base
     }
 
     pub fn inst_mat(&self) -> [Vec3; 4] {
@@ -2595,7 +2600,7 @@ impl Ragdoll {
     /// NMX_POSE: the doll was moved outright, so the contacts it held (anchored where it stood) and the twists the last
     /// step read go.
     pub fn nmx_forget_contacts(&mut self) {
-        if std::env::var_os("NMX_FORGET").is_some() { self.held.iter_mut().for_each(|h| h.clear()); }
+        if std::env::var_os("NMX_FORGET").is_some() { self.held.iter_mut().for_each(|h| h.clear()); self.seen.clear(); self.seen_w.clear(); self.seen_r.clear(); self.age = 0.0; }
         self.prep_twist.iter_mut().for_each(|t| *t = None);
         crate::nmdbm::NMX_RELATCH.store(true, std::sync::atomic::Ordering::Relaxed);
         self.touch.iter_mut().for_each(|t| *t = 0);

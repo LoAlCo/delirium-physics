@@ -5557,7 +5557,8 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
     let frames: Vec<Transform> = frames.iter().map(|f| Transform { translation: f.translation + shift, ..*f }).collect();
     let mut world = Collision::default();
     let concrete = room.surfaces.iter().position(|s| s.0 == "CONCRETE").unwrap_or(0) as u8;
-    let (fp, ft) = world::floor_tris(room.pool, 50.0);
+    let (fp, ft) = if let Some(s) = std::env::var("NMX_BIGFLOOR").ok().and_then(|v| v.parse::<f32>().ok()) { let (mut p, mut t) = (vec![], vec![]); for i in -10..10 { for j in -10..10 { let (a, b, k) = (s * (i as f32 - 0.7), s * (j as f32 - 0.3), p.len() as u32); p.extend([[a, b, 0.0], [a + s, b, 0.0], [a + s, b + s, 0.0], [a, b + s, 0.0]]); t.extend([[k, k + 1, k + 2], [k, k + 2, k + 3]]); } } (p, t) } else { world::floor_tris(room.pool, 50.0) }; // NMXHOOK
+    if std::env::var_os("NMX_KV").is_some() { eprintln!("KV 134 {} 50 {} 118 {} 566 {} 72 {} 51 {} 41 {}", delirium_data::kv!(134), delirium_data::kv!(50), delirium_data::kv!(118), delirium_data::kv!(566), delirium_data::kv!(72), delirium_data::kv!(51), delirium_data::kv!(41 int)); } // NMXHOOK
     world.add(&fp, &ft, &vec![concrete; ft.len()]);
     let (p, t, m) = room.triangles();
     // comparison hook: NMX_CLEAR=1 leaves only the floor, so a long stagger meets no furniture
