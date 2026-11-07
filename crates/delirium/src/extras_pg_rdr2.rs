@@ -2118,7 +2118,11 @@ impl Extra for PointGun {
     /// either hand's weapon state is 0; Delirium's left hand rarely holds a weapon, see `states`).
     fn pg_set(&mut self, time_warp_scale: f32) {
         self.p.time_warp.1 = time_warp_scale;
-        self.p.enable[0] = false;
+        // (controlledFall's 5: with either arm's state 0)
+        if self.ws[0] == 0 || self.ws[1] == 0 {
+            self.p.enable[0] = false;
+            crate::extras_core_rdr2::trace_first("controlledFall: an arm in state 0: pointGun's enableLeft off");
+        }
     }
 
     fn fire(&mut self) {

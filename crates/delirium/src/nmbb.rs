@@ -391,7 +391,8 @@ impl BodyBalance {
         let grounded = down(foot(0)) || down(foot(1));
         let mut f30 = 0.0;
         for side in 0..2 {
-            if ch.busy[side] || !grounded {
+            // (RDR2, §3.9: an arm in weapon state 2 doesn't take the arm brace)
+            if ch.busy[side] || !grounded || (ch.rdr2 && ch.core.arm_state[side] == 2) {
                 continue;
             }
             let other = 1 - side;
@@ -801,7 +802,11 @@ impl BodyBalance {
         // the arm swing
         let mut push_l = 0.0;
         for s in 0..2 {
-            if ch.busy[s] || self.rd.airborne > r.airborne_arms {
+            // (§3.10: the swing runs for an arm whose state isn't 2)
+            if ch.busy[s] || self.rd.airborne > r.airborne_arms || ch.core.arm_state[s] == 2 {
+                if ch.core.arm_state[s] == 2 {
+                    crate::extras_core_rdr2::trace_first("bodyBalance: the arm in weapon state 2 doesn't swing");
+                }
                 continue;
             }
             let o = 1 - s;
