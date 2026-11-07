@@ -517,11 +517,15 @@ impl Flinch {
             return;
         }
         let n = crate::rigid::nrm_or_y(c.b.at(SPINE3()) - self.pos);
-        if self.use_left_arm && !c.ch.busy[0] {
+        // (RDR2: an arm in a weapon state of 2 or more doesn't protect the head)
+        if c.ch.core.arm_state.iter().any(|s| *s >= 2) {
+            crate::extras_core_rdr2::trace_first("upperBodyFlinch: an arm in a weapon state stays out");
+        }
+        if self.use_left_arm && !c.ch.busy[0] && c.ch.core.arm_state[0] < 2 {
             Self::reach_rdr2(c, 0, tl, n, 0.05, if self.right { -0.3 } else { -0.5 }, 1.0);
             self.posed[0] = true;
         }
-        if self.use_right_arm && !c.ch.busy[1] {
+        if self.use_right_arm && !c.ch.busy[1] && c.ch.core.arm_state[1] < 2 {
             let twist = if self.right && !self.posed[0] { 0.05 } else { -0.1 };
             Self::reach_rdr2(c, 1, tr, n, twist, if self.right { -0.5 } else { -0.3 }, -1.0);
             self.posed[1] = true;

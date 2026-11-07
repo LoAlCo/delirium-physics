@@ -236,6 +236,8 @@ pub static MESSAGES: [Message; 15] = [
         Param { name: "dampenSideMotionInstanceHandle", kind: Kind::Int, used: false, doc: "RDR2 core: an obstacle's id, or -1 the world (ours), holds his COM near the plane through it and his side axis at the start (0: off)" },
     ] },
     Message { name: "armsWindmill", params: &[
+        Param { name: "?5e7f11cc", kind: Kind::Int, used: false, doc: "RDR2: an object handle for the left circle: the chest here" },
+        Param { name: "?7ec5afa3", kind: Kind::Int, used: false, doc: "RDR2: an object handle for the right circle: the chest here" },
         Param { name: "leftNormal", kind: Kind::Vec3, used: true, doc: "the circle's plane normal, his frame: x forward, y left, z up (0 1 0); RDR2 core: the circle's turns about the chest's X, Y, Z, rad (0 0.2 0.2)" },
         Param { name: "leftCentre", kind: Kind::Vec3, used: true, doc: "the circle's centre from the part, his frame (0.15 0.25 0.05); RDR2 core: in the chest's frame (0 0.5 -0.1)" },
         Param { name: "leftPartID", kind: Kind::Int, used: true, doc: "the part the circle is from (10, the chest); RDR2 core: always the chest" },

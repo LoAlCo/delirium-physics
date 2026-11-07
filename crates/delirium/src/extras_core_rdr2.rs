@@ -11,7 +11,100 @@ use bevy_math::Vec3;
 /// A message line can say start=false: on=false here, since an extra only starts with start=true.
 const ON: Param = Param { name: "on", kind: Kind::Bool, used: true, doc: "false: RDR2's start=false for this record (true)" };
 
-pub static MESSAGES: [Message; 22] = [
+pub static MESSAGES: [Message; 23] = [
+    Message { name: "quadrupedbase", params: &[
+        Param { name: "?23141dcc", kind: Kind::Float, used: false, doc: "sent by the horse task, not in the handler: no reader" },
+        Param { name: "?0a364789", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?1179b8be", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?1689ff1e", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?18b9c869", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?1f3617d5", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?2128bd54", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?33a9d629", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?3ba69a5e", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?463334cb", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?491b9b33", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?60b32079", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?65b9a730", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?6ce93cc5", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?6ded80a2", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?741b990a", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?75a875d8", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?78748c58", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?839ff632", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?84cf43be", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?8c66dab4", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?bda62333", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?bf41a9ff", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?c55d4193", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?cdd11768", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?d5842c66", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?dcaa8fcc", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?df7a800d", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?e4adac13", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?e6200ae9", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "?f08a586f", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "WRITHE", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "alwayslifthead", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "angVelScale", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "angVelScaleMask", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "anklestrengthscale", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "bulletVel", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "failangle", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "floorJointStrength", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "floorJointWeaknessTime", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "floorStrength", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "floorWeaknessTime", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "footslipcompensation", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "forcescrabble", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "frictionScale", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "frictionscaleend", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "gaitphase", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "gaitstate", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "height", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "hitPoint", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "ignoredepth", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "initialWeaknessRampDuration", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "initialWeaknessZeroDuration", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "initialstep", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "leanAgainstVelocity", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "legDamping", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "legStiffness", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "legStiffnessMin", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "localHitPointInfo", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "lookahead", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "maxBalanceTime", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "maxscrabblespeed", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "maxsteplength", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "maxsupporttime", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "measuresupport", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "minscrabblespeed", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "newHit", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "normal", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "onFire", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "pitchoffset", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "rampheighttime", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "restepdistance", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "rightingTorque", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "rolloffset", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "rollonground", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "rollpredictiontime", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "rollscale", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "rollvelocity", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "scrabbleonside", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "snap", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "snapMag", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "spineDamping", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "spineStiffness", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "spinestiffnessmin", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "step", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "stepheightscale", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "stepthreshold", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "steptimescale", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "strengthdecay", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "writheonground", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+        Param { name: "writhespeed", kind: Kind::Float, used: false, doc: "the horse's: its handler is horse.rs's `Params::message`, through `Horse::task`; on a person nothing" },
+    ] },
     Message { name: "setCharacterHealth", params: &[
         Param { name: "characterHealth", kind: Kind::Float, used: true, doc: "ctx+0x1030: 0 or less, smartFall and catchFall's reads take him for dead (1)" },
     ] },
@@ -20,6 +113,16 @@ pub static MESSAGES: [Message; 22] = [
     ] },
     Message { name: "registerWeapon", params: &[
         Param { name: "hand", kind: Kind::Int, used: true, doc: "0 left, 1 right: that hand has a weapon, state 0 until setWeaponMode (1)" },
+        Param { name: "gunToHandA", kind: Kind::Vec3, used: true, doc: "the gun in the hand's frame, first row (x), ctx+0x2d00: the recoil's direction goes through it" },
+        Param { name: "gunToHandB", kind: Kind::Vec3, used: true, doc: "second row (y)" },
+        Param { name: "gunToHandC", kind: Kind::Vec3, used: true, doc: "third row (z)" },
+        Param { name: "gunToHandD", kind: Kind::Vec3, used: false, doc: "the fourth row, the gun's place in the hand: nothing reads it here" },
+        Param { name: "weaponMass", kind: Kind::Float, used: true, doc: "ours: the gun's mass, kg, on the hand by the constraint's strength (2) [G]" },
+        Param { name: "type", kind: Kind::Int, used: false, doc: "the game's weapon type: no reader in the room" },
+        Param { name: "Handle", kind: Kind::Int, used: false, doc: "the game's handle: partner to the room's no-body weapon" },
+        Param { name: "constraintHandle", kind: Kind::Int, used: false, doc: "the game's handle" },
+        Param { name: "gunToMuzzleInGun", kind: Kind::Vec3, used: false, doc: "pointGun's muzzle: the gun's own offset is taken as the hand's line" },
+        Param { name: "?5a4c1887", kind: Kind::Vec3, used: false, doc: "no reader" },
     ] },
     Message { name: "fireWeapon", params: &[
         Param { name: "gunHandEnum", kind: Kind::Int, used: true, doc: "the hand that fires (0)" },
@@ -698,6 +801,7 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "setCharacterDamping" => damping(p),
         "quadLimbLimit" => limb_limit(p),
         "setCharacterHealth" => health(p),
+        "quadrupedbase" => Ok(once(move |_| trace(|| "quadrupedbase: the horse's message, nothing on a person".to_string()))),
         "setWeaponMode" => weapon_mode(p),
         "registerWeapon" => register_weapon(p),
         "fireWeapon" => fire_weapon(p),
@@ -731,12 +835,15 @@ fn weapon_mode(p: &mut P) -> Result<Box<dyn Extra>, Error> {
 /// The weapon bits are the game task's (0x2a27f28, no message of its own here) [P]: registering sets them.
 fn register_weapon(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     let hand = p.i("hand", 1)?.clamp(0, 1) as usize;
-    for n in ["type", "Handle", "constraintHandle", "gunToMuzzleInGun", "?5a4c1887"] {
+    for n in ["type", "Handle", "constraintHandle", "gunToMuzzleInGun", "?5a4c1887", "gunToHandD"] {
         let _ = p.get(n);
     }
+    let rows = [p.v("gunToHandA", Vec3::X)?, p.v("gunToHandB", Vec3::Y)?, p.v("gunToHandC", Vec3::Z)?];
+    let mass = p.f("weaponMass", 2.0)?;
     Ok(once(move |c| {
         c.ch.core.weapon_bits |= if hand == 0 { 0x10000 } else { 0x80000 };
         c.ch.core.arm_state[hand] = 0;
+        c.ch.core.weapon[hand] = crate::nmrs::WeaponRec { on: true, to_hand: rows, mass, ..Default::default() };
         trace(|| format!("registerWeapon: hand {hand}, bits {:#x}", c.ch.core.weapon_bits));
     }))
 }

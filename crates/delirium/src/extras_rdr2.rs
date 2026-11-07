@@ -151,6 +151,7 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "flatStiffness", kind: Kind::Float, used: true, doc: "the turn's strength, N m per rad (12; 0: off)" },
     ] },
     Message { name: "setFallingReaction", params: &[
+        Param { name: "reachLengthMultiplier", kind: Kind::Float, used: false, doc: "RDR2: sent; no handler takes it" },
         Param { name: "stopManual", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: a floor on the slope factor, over 0 turning the slope block on (0)" },
         Param { name: "stopOnSlopes", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the time after which slopes count (10000)" },
         Param { name: "blendkneerate", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the knees' rate (10000)" },
@@ -207,13 +208,14 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "his stiffness (10)" },
     ] },
     Message { name: "reachForWound", params: &[
+        Param { name: "?0a09aa12", kind: Kind::Float, used: false, doc: "RDR2: sent; no handler takes it" },
         Param { name: "moveInjuredArm", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x80: a hit arm goes to a random place on the spine itself (false)" },
         Param { name: "alwaysReach", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x165: no distance limit on a leg wound, and lying on a side doesn't keep a hand away (false)" },
         Param { name: "movablegeneralscales", kind: Kind::Float, used: true, doc: "RDR2 core: +0x5c: with the next, how long a reach lasts on the ground; the name misleads (0.2)" },
         Param { name: "recoveredinjuredreturnring", kind: Kind::Float, used: true, doc: "RDR2 core: +0x54: the same; the name misleads (2)" },
         Param { name: "headzone", kind: Kind::Float, used: true, doc: "RDR2 core: +0xec: head and neck wounds: the angle round the head that keeps each hand out; below 0 mirrored for the back (0.5)" },
-        Param { name: "allowLeftPistolRFW", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x7d: this hand may reach while holding a pistol; no weapon states here" },
-        Param { name: "allowRightPistolRFW", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x7e: the same" },
+        Param { name: "allowLeftPistolRFW", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x7d: this hand may reach while its arm's weapon state isn't 0 (true)" },
+        Param { name: "allowRightPistolRFW", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x7e: the same (false)" },
         Param { name: "rfwWithPistol", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x7f: pointGun's hold on that hand; no weapon states here" },
         Param { name: "bust", kind: Kind::Bool, used: false, doc: "RDR2 core: +0x83: another hand layout; no set for these shots asks" },
         Param { name: "cupSize", kind: Kind::Float, used: false, doc: "RDR2 core: +0x64: with bust" },
@@ -2424,6 +2426,8 @@ pub struct ReachForWound {
 /// ground). Rates are [knee, hip, spine].
 #[derive(Clone, Copy)]
 struct RfwRdr2 {
+    /// +0x7d, +0x7e, a hand's R+0xd6
+    pistol: [bool; 2],
     falling: i32, floor: i32, falling_one: i32, new_hit_reset: bool, rate_up: [f32; 3], rate_down: [f32; 3],
     bend_before: f32, twist_time: f32, leg_stiffness: f32, arm_stiffness: f32,
     move_arm: bool, always: bool, floor_delay: f32, floor_hold: f32, head_zone: f32,
@@ -2444,6 +2448,7 @@ impl ReachForWound {
             stiffness: p.f("spineStiffness", 12.0)?,
             t: 0.0, wound: None, hands: [false; 2], sign: [1.0; 2], bends: None, arm: [None; 2],
             rdr2: RfwRdr2 {
+                pistol: [p.b("allowLeftPistolRFW", true)?, p.b("allowRightPistolRFW", false)?],
                 falling: p.i("reachFalling", 0)?, floor: p.i("reachOnFloor", 0)?, falling_one: p.i("reachFallingWithOneHand", 3)?,
                 new_hit_reset: p.b("newHitReset", true)?,
                 rate_up: [p.f("legRateUp", 0.35)?, p.f("hipRateUp", 0.25)?, p.f("spineRateUp", 0.3)?],
@@ -2764,7 +2769,12 @@ impl ReachForWound {
             *t += dt;
         }
         for i in 0..2 {
-            let free = !c.ch.busy[i];
+            // canStart's arm free: state not 2, 3, 4, and state 0 or this hand's +0xd6
+            let st = c.ch.core.arm_state[i];
+            let free = !c.ch.busy[i] && !(2..=4).contains(&st) && (st == 0 || self.rdr2.pistol[i]);
+            if st != 0 && !free {
+                crate::extras_core_rdr2::trace_once("rfw weapon", || format!("reach for wound: arm {i} in weapon state {st} isn't free"));
+            }
             let a = s.act[i];
             if s.reaching[i] && (a.fresh || a.clock > window || a.floor > floor_window || !free) {
                 if a.floor > floor_window && a.floor < 1e4 && !a.fresh {
@@ -2873,9 +2883,19 @@ impl ReachForWound {
             let left = std::env::var("NMX_RFW").ok().and_then(|v| v.split(' ').nth(1).map(|x| x == "1")).unwrap_or(left);
             ok = [left, !left];
         }
+        // 2.: a hand whose arm is in state 4 isn't eligible
+        let st = c.ch.core.arm_state;
+        ok = [ok[0] && st[0] != 4, ok[1] && st[1] != 4];
         let spread = ok == [true; 2] && !leg && !arm && !head;
         if ok == [true; 2] {
             s.one_left = c.ch.random_bits() & 1 != 0;
+            // 8.: forced to the left if the left arm holds something, the right if the right does
+            if st[0] != 0 {
+                s.one_left = true;
+            }
+            if st[1] != 0 {
+                s.one_left = false;
+            }
         }
         // the right hand's clocks start a tenth behind (+0x4bc, +0x4c0)
         let clock = [0.0, -0.1];

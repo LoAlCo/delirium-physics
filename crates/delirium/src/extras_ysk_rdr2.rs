@@ -701,7 +701,7 @@ impl YankedRdr2 {
             self.ran(7, "feet lassoed: the right hand grabs again");
         }
         for i in 0..2 {
-            if (2..=4).contains(&self.arm[i]) && c.ch.busy[i] {
+            if (2..=4).contains(&self.arm[i]) && (c.ch.busy[i] || c.ch.core.arm_state[i] != 0) {
                 self.arm[i] = 0;
             }
         }
@@ -1216,7 +1216,7 @@ impl YankedRdr2 {
             self.grab_latch = true;
         }
         for i in 0..2 {
-            if (2..=4).contains(&self.arm[i]) && c.ch.busy[i] {
+            if (2..=4).contains(&self.arm[i]) && (c.ch.busy[i] || c.ch.core.arm_state[i] != 0) {
                 self.arm[i] = 0;
             }
         }

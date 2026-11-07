@@ -64,7 +64,8 @@ const PARAMS: &[Param] = &[
     p!("gravityOpposition", Float, "(1)"),
     p!("gravOppDetachedSupport", Float, "(0.5)"),
     p!("massMultDetachedSupport", Float, "the gun's mass with the support off; no gun here, read only (0.1)"),
-    p!("weaponStrengthDetached", Float, "RDR2's uncracked 5274f454, the gun attachment's strength with the support off; no gun here, read only (0.3)"),
+    p!("weaponStrengthDetached", Float, "RDR2's uncracked 5274f454, the gun attachment's strength with the support off (0.3)"),
+    p!("weaponStrengthHolster", Float, "RDR2's uncracked c53bbf28, the attachment's strength in state 3 (0.5)"),
     p!("weaponStrengthAway", Float, "RDR2's uncracked c53bbf28, with the weapon put away; no gun here, read only (0.5)"),
     p!("constrainRifle", Bool, "the rifle hand held near the chest by a constraint (true)"),
     p!("rifleConstraintMinDistance", Float, "m (0.2)"),
@@ -221,6 +222,8 @@ struct Params {
     use_incoming: bool,
     measure_parent: bool,
     relax: (f32, f32, f32),
+    /// +0x120, +0x124: the gun attachment's strength factors
+    weapon_strength: [f32; 2],
     grav: (f32, f32),
     constrain_rifle: bool,
     rifle_min: f32,
@@ -294,6 +297,7 @@ impl Params {
             clav_blend: [p.f("clavicleBlend", 0.0)?, p.f("clavicleblendsupport", 1.0)?],
             elbow: [p.f("elbowAttitude", 0.3)?, p.f("elbowattitudesupport", 0.1)?],
             use_incoming: p.b("useIncomingTransforms", true)?, measure_parent: p.b("measureParentOffset", true)?,
+            weapon_strength: [p.f("weaponStrengthDetached", 0.3)?, p.f("weaponStrengthHolster", 0.5)?],
             relax: (p.f("fireWeaponRelaxTime", 0.4)?, p.f("fireWeaponRelaxAmount", 0.5)?, p.f("fireWeaponRelaxDistance", 0.05)?),
             grav: (p.f("gravityOpposition", 1.0)?, p.f("gravOppDetachedSupport", 0.5)?),
             constrain_rifle: p.b("constrainRifle", true)?, rifle_min: p.f("rifleConstraintMinDistance", 0.2)?,
@@ -480,7 +484,7 @@ impl PointGun {
 
     /// The hands' weapon states (left, right): 0 none, 1 pistol, 2 rifle, 3, 4.
     /// 0x2accc7c: fireWeapon on the arm. States 0 and 4 hold nothing to fire. Past its inhibit clock the recoil goes on the hand, or on the clavicle and the
-    /// hand by split, in the hand's space [P: the weapon's matrix ctx+0x2d00 is the hand's own; no weapon body], and on the other hand when it grips too. Then the
+    /// hand by split, in the hand's space (through registerWeapon's gunToHand, ctx+0x2d00), and on the other hand when it grips too. Then the
     /// arm relaxes, and a gripping other arm's four joints take the arm's stiffness by .7, .6, .5, .3. Whatever the clock, the relax restarts.
     fn fire_rdr2(&mut self, c: &mut Ctx, r: crate::nmrs::FireRec) {
         let i = r.hand;
@@ -494,7 +498,10 @@ impl PointGun {
         if self.inhibit[i] <= 0.0 {
             self.inhibit[i] = r.inhibit;
             let hand = c.b.part(l.p[3]);
-            let d = (hand.m.a * r.direction.x + hand.m.b * r.direction.y + hand.m.c * r.direction.z) * c.dt;
+            // the hand's matrix times the gun's (ctx+0x2d00: gunToHand), then the message's direction in the gun
+            let g = c.ch.core.weapon[i].to_hand;
+            let dg = g[0] * r.direction.x + g[1] * r.direction.y + g[2] * r.direction.z;
+            let d = (hand.m.a * dg.x + hand.m.b * dg.y + hand.m.c * dg.z) * c.dt;
             let other = c.b.part(lo.p[3]).m.d;
             let other_gets = |f: Vec3| -> Option<Vec3> {
                 if !two { None } else if r.other > 0.0 && r.other <= 1.0 { Some(f * r.other) } else if r.other < 0.0 { Some(-f * r.other) } else { None }
@@ -516,6 +523,7 @@ impl PointGun {
         let k = (1.0 - self.p.relax.1) * self.p.arm_k;
         c.ch.set_stiffness(k, self.p.arm_d, ["ul", "ur"][i], None);
         if two {
+            crate::extras_core_rdr2::trace_first("fireWeapon: the other arm's four joints softened, .7, .6, .5, .3");
             let f = self.arms[1 - i].relax * self.p.arm_k;
             for (j, m) in lo.e.iter().zip([0.7, 0.6, 0.5, 0.3]) {
                 let (s, d) = (f * m, self.p.arm_d);
@@ -626,6 +634,16 @@ impl PointGun {
 
     /// Activate (§4).
     fn start(&mut self, c: &mut Ctx) {
+        // 4.: each weapon's attachment softened (0x2a47288), state 3 at the factor (0x2a4b400)
+        for i in 0..2 {
+            c.ch.core.weapon[i].soften();
+            if c.ch.core.arm_state[i] == 3 {
+                c.ch.core.weapon[i].scale(self.p.weapon_strength[1]);
+            }
+            if c.ch.core.weapon[i].on {
+                crate::extras_core_rdr2::trace_once("weapon soft", || format!("pointGun: the weapon's attachment softened on hand {i}: {:.2}, saved {:.2}", c.ch.core.weapon[i].strength, c.ch.core.weapon[i].saved));
+            }
+        }
         self.ws = self.states(c);
         (self.g, self.s) = Self::hands(self.ws);
         let l = limb(0);
@@ -1559,6 +1577,8 @@ impl PointGun {
             if !(self.gripped(1 - i) && self.arms[1 - i].state == 4) {
                 (k, og) = (self.p.arm_k_det, self.p.grav.1);
                 self.ran(30, "the arm's gains with the support detached");
+                // 0x2a4b400 with +0x120 (5274f454)
+                c.ch.core.weapon[i].scale(self.p.weapon_strength[0]);
             }
         }
         let tw = self.tw;
@@ -2118,7 +2138,11 @@ impl Extra for PointGun {
     /// either hand's weapon state is 0; Delirium's left hand rarely holds a weapon, see `states`).
     fn pg_set(&mut self, time_warp_scale: f32) {
         self.p.time_warp.1 = time_warp_scale;
-        self.p.enable[0] = false;
+        // (controlledFall's 5: with either arm's state 0)
+        if self.ws[0] == 0 || self.ws[1] == 0 {
+            self.p.enable[0] = false;
+            crate::extras_core_rdr2::trace_first("controlledFall: an arm in state 0: pointGun's enableLeft off");
+        }
     }
 
     fn fire(&mut self) {
@@ -2146,6 +2170,10 @@ impl Extra for PointGun {
     }
 
     fn stop(&mut self, c: &mut Ctx) {
+        // release: the attachments back (0x2a47208)
+        for i in 0..2 {
+            c.ch.core.weapon[i].restore();
+        }
         if self.fallback.is_some() {
             self.out.push("pointArm start=false".into());
             return;

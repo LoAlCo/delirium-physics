@@ -375,7 +375,8 @@ impl Brace {
                 let a = crate::nmdbm::acos(a);
                 let x = if i == 0 { delirium_data::kv!(232) - a } else { a - delirium_data::kv!(17) };
                 if !self.arm[i] {
-                    if x > delirium_data::kv!(60) && !c.ch.busy[i] {
+                    // (RDR2: an arm in weapon state 2 doesn't brace, rdr2_brace.md)
+                    if x > delirium_data::kv!(60) && !c.ch.busy[i] && !(c.ch.rdr2 && c.ch.core.arm_state[i] == 2) {
                         self.arm[i] = true;
                     }
                 } else if x < -delirium_data::kv!(60) {
@@ -564,7 +565,12 @@ impl Brace {
             if !self.arm[i] {
                 continue;
             }
-            let wait = if i == 0 { self.left_farther } else { !self.left_farther };
+            // (RDR2: with one arm holding a weapon, state not 0, the other goes first; else the farther wrist waits)
+            let (me, other) = (c.ch.core.arm_state[i], c.ch.core.arm_state[1 - i]);
+            let wait = if c.ch.rdr2 && (me != 0) != (other != 0) {
+                crate::extras_core_rdr2::trace_first("brace: the arm with the weapon waits");
+                me != 0
+            } else if i == 0 { self.left_farther } else { !self.left_farther };
             if self.delay >= 0.0 && wait && !c.ch.busy[1 - i] {
                 continue;
             }

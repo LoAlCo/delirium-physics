@@ -602,8 +602,7 @@ impl Horse {
     }
 
     /// A set from the player's physicstasks, for RDR2's core: `quadrupedbase` (a start reloads the defaults first; the
-    /// handler 0x2a6bcd8), ?e35a5d1a and stayUpright. Says what it took and what's left; setOpposeGravity does nothing on
-    /// a quadruped (0x2a45344).
+    /// handler 0x2a6bcd8), ?e35a5d1a and stayUpright. Says what it took and what's left; setOpposeGravity reaches the gravity solver.
     pub fn task(&mut self, messages: &[crate::gametask::SentMessage]) -> Vec<String> {
         use crate::gametask::{joaat, Val};
         let num = |m: &crate::gametask::SentMessage, h: u32| m.params.iter().find(|p| p.hash == h).and_then(|p| match p.val { Val::Float(f) => Some(f), Val::Int(i) => Some(i as f32), _ => None });
@@ -613,9 +612,9 @@ impl Horse {
         for m in messages {
             if m.hash == joaat("quadrupedbase") {
                 if flag(m, joaat("start")) == Some(true) {
-                    let (limits, stay) = (self.r.limits, self.r.stay);
+                    let (limits, stay, oppose) = (self.r.limits, self.r.stay, self.r.oppose);
                     self.r = Default::default();
-                    (self.r.limits, self.r.stay) = (limits, stay);
+                    (self.r.limits, self.r.stay, self.r.oppose) = (limits, stay, oppose);
                 }
                 let list: Vec<(u32, Val)> = m.params.iter().map(|p| (p.hash, p.val.clone())).collect();
                 let left = self.r.message(&list);
@@ -630,6 +629,10 @@ impl Horse {
                                           a38: num(m, 0x7fb46a89).unwrap_or(0.0), a3c: num(m, 0xd2e95bdb).unwrap_or(0.0) };
                 self.limb_message(limb as usize, l);
                 said.push(format!("quadLimbLimit: limb {limb} type {} [{}, {}]", l.kind, l.min, l.max));
+            } else if m.hash == joaat("setOpposeGravity") {
+                // 0x2a572a0 on each joint's +0x150; the mask's hash isn't named [P: all]. It's what 0x2a5ce00 copies for the gravity solver
+                self.r.oppose = num(m, joaat("oppose")).or(num(m, joaat("gravityCompensation"))).unwrap_or(1.0);
+                said.push(format!("setOpposeGravity: {}", self.r.oppose));
             } else if m.hash == joaat("stayUpright") {
                 if flag(m, joaat("useTorques")) == Some(true) {
                     self.r.stay = Some(rdr2::Stay { strength: vect(m, joaat("torqueStrength")).unwrap_or(Vec3::ZERO), damping: vect(m, joaat("torqueDamping")).unwrap_or(Vec3::ZERO),

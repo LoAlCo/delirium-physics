@@ -117,6 +117,66 @@ pub struct Poly {
 }
 
 impl Poly {
+    /// RDR2 core: 0x2821184's tail, for one contact on this triangle (point `p`, normal `n`). None drops the contact (+0x48 bit 0 cleared).
+    /// The game's triangles store each edge's angle as a byte through the table at .data 0x364d580 (cos(i pi/2/127); 0xff: no data), and an edge's normal is the face's times that
+    /// cosine plus the edge's outward times the sine. Here those come from the room's adjacency [G for the data, C for the law]: an edge with a convex neighbour has the neighbour's
+    /// normal, unrounded, a concave one the face's (a byte can only lean outward), a free edge no data.
+    /// A point counts as on an edge within the margin squared times 1.0404 of its line. Normals against the face go. On the physics pair path (0x284023e sets query +0x29, so +0xe1)
+    /// a normal off an edge it's on, by more than .01 in its cosine, drops the contact. On an edge without data the normal becomes the face's.
+    /// `planes`: bound +0x11 bit 0x10 takes 0x28416a8 instead of that test; the only physics code setting the bit is one model's in 0x113607f, so a ped's and the room's are clear [C], files aside.
+    pub fn edge_law(&self, t: [Vec3; 3], p: Vec3, n: Vec3, margin: f32, query_e1: bool, planes: bool) -> Option<Vec3> {
+        if self.edges[3].is_some() {
+            return Some(n);
+        }
+        if n.dot(self.n) < 0.0 {
+            return None;
+        }
+        let e = [t[1] - t[0], t[2] - t[1], t[0] - t[2]];
+        let (mut has, mut on) = (0u32, 0u32);
+        let mut en = [self.n; 3];
+        for k in 0..3 {
+            let u = e[k].normalize_or_zero();
+            let r = p - t[k];
+            if (r - u * r.dot(u)).length_squared() <= margin * margin * 1.0404 {
+                on |= 1 << k;
+            }
+            if let Some(m) = self.edges[k].map(|x| x.2) {
+                has |= 1 << k;
+                let out = u.cross(self.n).normalize_or_zero();
+                let c = if m.dot(out) > 0.0 { self.n.dot(m).clamp(-1.0, 1.0) } else { 1.0 };
+                en[k] = self.n * c + out * (1.0 - c * c).max(0.0).sqrt();
+            }
+        }
+        let mut n = n;
+        if query_e1 {
+            if planes {
+                match edge_planes(n, self.n, en, t, on & has) {
+                    (0, _) => return None,
+                    (2, v) => n = v,
+                    _ => {}
+                }
+            } else {
+                let mut off = 0u32;
+                for k in 0..3 {
+                    let u = e[k].normalize_or_zero();
+                    let across = (n - u * n.dot(u)).normalize_or_zero();
+                    if across.dot(self.n) < en[k].dot(self.n) - 0.01 {
+                        off |= 1 << k;
+                    }
+                }
+                if has & off & on != 0 {
+                    crate::extras_core_rdr2::trace_once("edge drop", || "contact on an edge, its normal outside the edge's: dropped (0x2821184)".to_string());
+                    return None;
+                }
+            }
+        }
+        if on & !has != 0 {
+            crate::extras_core_rdr2::trace_once("edge face", || "contact on an edge without data: the face's normal (0x2821184)".to_string());
+            n = self.n;
+        }
+        Some(n)
+    }
+
     pub fn clamp(&self, hits: &mut [(Vec3, Vec3)], margin: f32) {
         let tol = margin * margin * delirium_data::kv!(69);
         let own = self.frame.and_then(|f| f.own.map(|o| (f, o.0)));
@@ -147,6 +207,55 @@ fn to_frame(f: &Placed, p: Vec3) -> Vec3 {
 
 fn from_frame(f: &Placed, n: Vec3) -> Vec3 {
     Vec3::new(f.turn.row(0).vd(n), f.turn.row(1).vd(n), f.turn.row(2).vd(n))
+}
+
+/// 0x28416a8: the planes through the active edges along their edge normals, for those the normal leans out of. Past .02 behind one, or two, the normal moves onto it: 0 drops, 1 keeps, 2 replaces.
+fn edge_planes(n: Vec3, face: Vec3, en: [Vec3; 3], v: [Vec3; 3], active: u32) -> (u8, Vec3) {
+    let mut pl: Vec<(Vec3, Vec3)> = vec![];
+    for k in 0..3 {
+        let e = v[(k + 1) % 3] - v[k];
+        if active & 1 << k == 0 || e.cross(face).dot(n) <= 0.0 {
+            continue;
+        }
+        let w = en[k].cross(e);
+        let l = w.length();
+        if l >= 1e-6 {
+            pl.push((w / l, en[k]));
+        }
+    }
+    let m = match pl.len() {
+        0 => return (1, n),
+        1 => {
+            let d = -pl[0].0.dot(n);
+            if !(d - 0.02 >= 0.0) {
+                return (1, n);
+            }
+            n + pl[0].0 * d
+        }
+        2 => {
+            let c = pl[0].0.dot(pl[1].0);
+            let s = 1.0 - c * c;
+            if !(s > 1e-6) {
+                return (0, n);
+            }
+            let (a, b) = (-pl[0].0.dot(n), -pl[1].0.dot(n));
+            let (x, y) = (a - b * c, b - a * c);
+            let t = (c - 1.0) * 0.02;
+            if !(t + x > 0.0 && t + y > 0.0) {
+                return (1, n);
+            }
+            n + (pl[1].0 * y + pl[0].0 * x) / s
+        }
+        _ => return (0, n),
+    };
+    if !(face.dot(m) > 0.0 || pl.iter().any(|p| p.1.dot(m) > 0.0)) {
+        return (0, n);
+    }
+    let l = m.length();
+    if l <= 1e-6 {
+        return (0, n);
+    }
+    (2, m / l)
 }
 
 fn on_edge(a: Vec3, b: Vec3, p: Vec3, tol: f32) -> bool {
@@ -363,6 +472,11 @@ impl Collision {
 
     pub fn len(&self) -> usize {
         self.count
+    }
+
+    /// A triangle by the id `Poly::first` holds.
+    pub fn tri_of(&self, id: (u32, u32)) -> Option<[Vec3; 3]> {
+        self.chunks.get(id.0 as usize)?.as_ref()?.triangles.get(id.1 as usize).copied()
     }
 
     pub fn triangles(&self) -> Vec<[Vec3; 3]> {

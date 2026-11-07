@@ -817,10 +817,16 @@ impl Grab {
                 *left = p.use_left && th >= os - ra;
             }
         }
-        // weapon gates: a hand holding something (Delirium's busy hands) only with dropWeaponIfNecessary
+        // weapon gates: a hand holding something (Delirium's busy hands, a weapon state not 0) only with dropWeaponIfNecessary; state 4 never
+        let st = c.ch.core.arm_state;
         if !p.drop_weapon {
-            *left &= !c.ch.busy[0];
-            *right &= !c.ch.busy[1];
+            *left &= !c.ch.busy[0] && st[0] == 0;
+            *right &= !c.ch.busy[1] && st[1] == 0;
+        }
+        *left &= st[0] != 4;
+        *right &= st[1] != 4;
+        if st != [0, 0] {
+            crate::extras_core_rdr2::trace_once("grab weapon", || format!("grab: weapon states {st:?}: left {left} right {right}"));
         }
     }
 

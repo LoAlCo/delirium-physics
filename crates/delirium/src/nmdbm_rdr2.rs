@@ -293,6 +293,7 @@ impl Params {
             "slopeDrop2" => self.slope_drop[0] = v,
             "slopeDrop1" => self.slope_drop[1] = v,
             "ankleEquilibrium" => self.ankle_equilibrium = v,
+            "sidewaysmovefeet" | "predictionTimeHip" | "footslipdamping" => {}
             "footFriction" => self.foot_friction[0] = v,
             "footFrictionStagger" => self.foot_friction[1] = v,
             "movingFloor" => self.moving_floor = v != 0.0,
