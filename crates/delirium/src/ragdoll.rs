@@ -1383,7 +1383,8 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                     let across = if u.dot(n) == 0.0 { n } else { (n - u * u.dot(n)).normalize() };
                     dirs[k + 1].dot(across) >= dirs[0].dot(dirs[k + 1]).min(1.0 - delirium_data::kv!(50)) - delirium_data::kv!(134)
                 });
-                if careful && (leaving(h.local, dirs[0]) || !across_ok(h.ground + h.n * WORLD_MARGIN(), h.n)) {
+                // GTA IV's two filters. Rage has neither: 0x284038c, 0x28e9fbc and 0x2821184 keep a point within the query's reach whichever way the part moves, and the normal's own test is `edge_law`
+                if rage.is_none() && careful && (leaving(h.local, dirs[0]) || !across_ok(h.ground + h.n * WORLD_MARGIN(), h.n)) {
                     return None;
                 }
                 Some((Held { m, fl: world.poly_flags(poly.first), inst, tri: poly.first, ..h }, poly, rage.map(|_| (t0, tri, turn, pen))))
