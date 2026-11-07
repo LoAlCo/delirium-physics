@@ -1312,7 +1312,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
               seen_w: Option<&Vec3>, seen_r: Option<&[Vec3; 3]>, held: &mut Vec<Held>, careful: bool, rage: Option<RageMeet>) {
     let bw = xw;
     if rage.is_some() {
-        rage_refresh(held, tm, bw);
+        rage_refresh(world, held, tm, bw);
     }
     let met = std::cell::RefCell::new(Vec::<u32>::new());
         let last = seen.map_or(x, |s| s.0);
@@ -1473,7 +1473,7 @@ struct RageMeet { iters: u32, moving: bool }
 /// one contact a step: the one slid furthest if that's over 2 cm along the surface, else the most separated if that's over 4 cm. So a corner that
 /// lifts stays held, its row inactive, which GTA IV's (all past the margin go, at once) didn't. Whole manifolds go with their pair, by `met`.
 /// 0x285b248, which can spare a slid contact sitting on its triangle, isn't followed [P].
-fn rage_refresh(held: &mut Vec<Held>, tm: Mat3, bw: Vec3) {
+fn rage_refresh(world: &Collision, held: &mut Vec<Held>, tm: Mat3, bw: Vec3) {
     let mut insts: Vec<u32> = vec![];
     for r in held.iter_mut() {
         r.gap = (crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) - (r.ground + r.n * WORLD_MARGIN())).vd(r.n);
@@ -1496,6 +1496,15 @@ fn rage_refresh(held: &mut Vec<Held>, tm: Mat3, bw: Vec3) {
             }
         }
         if let (Some(k), true) = (slid.0, slid.1 > 0.0004) {
+            // 0x285b248 (on: 0x3c9f242): a slid contact stays when its element finds the point again: the triangle's closest point to the part's, under 2 cm off the part's
+            // along its normal, and the ground point moves there [P: the second side's query, for a part's own bound, and its normal test aren't here]
+            let a = crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, held[k].local);
+            let n = held[k].n;
+            if let Some(q) = world.tri_of(held[k].tri).map(|t| closest_on_tri(a, t)).filter(|q| (*q + n * (WORLD_MARGIN() + held[k].gap)).distance_squared(a) < 0.0004) {
+                held[k].ground = q;
+                crate::extras_core_rdr2::trace_once("rage spared", || "rage manifold: a slid contact stays on its triangle (0x285b248)".to_string());
+                continue;
+            }
             held.swap_remove(k);
             crate::extras_core_rdr2::trace_once("rage slid", || format!("rage manifold: a contact slid {:.3} m goes", slid.1.sqrt()));
         } else if let (Some(k), true) = (far.0, far.1 > 0.04) {
@@ -1539,7 +1548,62 @@ fn rage_hold(held: &mut Vec<Held>, new: Held) -> Option<usize> {
         held[k] = new;
         return Some(k);
     }
+    // 0x28480e4, all six new: in the largest group by normal: past four, the first that isn't an extreme along the plane's two axes goes; of four, the two farthest apart stay
+    // and of the others the one nearer their line goes. Under four, the area rule
+    let group: Vec<usize> = (0..held.len()).filter(|&k| held[k].n.vd(new.n) > 0.985).collect();
+    if group.len() + 1 >= 4 {
+        let mut pts: Vec<Vec3> = group.iter().map(|&k| held[k].local).collect();
+        pts.push(new.local);
+        let n = new.n;
+        let t1 = if n.z.abs() <= n.x.abs().max(n.y.abs()) { Vec3::new(n.y, -n.x, 0.0) } else { Vec3::new(0.0, n.z, -n.y) }.normalize_or_zero();
+        let t2 = t1.cross(n);
+        let out = if pts.len() > 4 {
+            let mean = pts.iter().sum::<Vec3>() / pts.len() as f32;
+            let by = |ax: Vec3, big: bool| (0..pts.len()).fold(0, |b, i| { let (x, y) = ((pts[i] - mean).dot(ax), (pts[b] - mean).dot(ax)); if (big && x > y) || (!big && x < y) { i } else { b } });
+            let ext = [by(t1, false), by(t1, true), by(t2, false), by(t2, true)];
+            (0..pts.len()).find(|i| !ext.contains(i))
+        } else {
+            let (mut a, mut b, mut d) = (0, 1, -1.0);
+            for i in 0..4 {
+                for j in i + 1..4 {
+                    let x = pts[i].distance_squared(pts[j]);
+                    if x > d {
+                        (a, b, d) = (i, j, x);
+                    }
+                }
+            }
+            let across = n.cross(pts[b] - pts[a]);
+            let rest: Vec<usize> = (0..4).filter(|&i| i != a && i != b).collect();
+            let off = |i: usize| (pts[i] - pts[a]).dot(across).abs();
+            Some(if off(rest[1]) <= off(rest[0]) { rest[1] } else { rest[0] })
+        };
+        if let Some(o) = out {
+            crate::extras_core_rdr2::trace_once("rage extremes", || "rage manifold: full and all new: the extremes stay (0x28480e4)".to_string());
+            return if o == group.len() { None } else { held[group[o]] = new; Some(group[o]) };
+        }
+    }
     replaced(held, new.local).map(|k| { held[k] = new; k })
+}
+
+/// The closest point of a triangle to p.
+fn closest_on_tri(p: Vec3, t: [Vec3; 3]) -> Vec3 {
+    let (ab, ac, ap) = (t[1] - t[0], t[2] - t[0], p - t[0]);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 { return t[0]; }
+    let bp = p - t[1];
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 { return t[1]; }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 { return t[0] + ab * (d1 / (d1 - d3)); }
+    let cp = p - t[2];
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 { return t[2]; }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 { return t[0] + ac * (d2 / (d2 - d6)); }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && d4 >= d3 && d5 >= d6 { return t[1] + (t[2] - t[1]) * ((d4 - d3) / ((d4 - d3) + (d5 - d6))); }
+    let k = 1.0 / (va + vb + vc);
+    t[0] + ab * (vb * k) + ac * (vc * k)
 }
 
 /// 0x282bf0c's axis, from this collide's contacts on the manifold, `dir` into the ground. One: the centre goes down past it. Two: about the line

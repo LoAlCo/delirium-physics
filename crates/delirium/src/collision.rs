@@ -365,6 +365,11 @@ impl Collision {
         self.count
     }
 
+    /// A triangle by the id `Poly::first` holds.
+    pub fn tri_of(&self, id: (u32, u32)) -> Option<[Vec3; 3]> {
+        self.chunks.get(id.0 as usize)?.as_ref()?.triangles.get(id.1 as usize).copied()
+    }
+
     pub fn triangles(&self) -> Vec<[Vec3; 3]> {
         self.chunks.iter().flatten().flat_map(|c| c.triangles.iter().copied()).collect()
     }
