@@ -578,6 +578,11 @@ enum Kind {
     Hinge { lo: f32, hi: f32 },
 }
 
+/// RDR2 core: a limit that isn't the joint's own: Rage's rotation limit constraint (0x2a3bc68 -> 0x288e264, type 0xb), its rows in 0x289c9d4 -> 0x28af29c: a twist window
+/// `lo..hi`, breaking strength (base +0x28), past the window the velocity row closes `k` of the error over the step (0: the joint limit's own law), the position row `soft` past .03 (.5 is the joint's too).
+#[derive(Clone, Copy, Debug)]
+pub struct LimitRow { pub lo: f32, pub hi: f32, pub strength: f32, pub soft: f32, pub k: f32 }
+
 #[derive(Clone, Copy, Debug)]
 struct Joint {
     parent: usize,
@@ -1927,6 +1932,10 @@ pub struct Ragdoll {
     pub contact_off: u32,
     /// RDR2 core: parts with no contacts at all this step (a hand whose arm state is 2, 0x2a7452c)
     pub ignore_parts: u32,
+    /// RDR2 core: per part, a limit by `LimitRow`
+    pub limit_row: Vec<Option<LimitRow>>,
+    /// parts whose `limit_row` broke (the row's impulse over the strength): off until asked again by the caller clearing this
+    pub limit_broken: u32,
     /// RDR2 core: an absolute cap on a part's contact friction this step (ctx+0x1110)
     pub fric_cap: Vec<(usize, f32)>,
     /// RDR2 core: the feet whose bound is short (0x2a483f8), part indices
@@ -2083,7 +2092,7 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { fric_cap: vec![], ignore_parts: 0, short_feet: 0, override_elastic: vec![], hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+        Ragdoll { limit_row: vec![], limit_broken: 0, fric_cap: vec![], ignore_parts: 0, short_feet: 0, override_elastic: vec![], hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
                   sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, lim_warm: vec![], early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
@@ -2804,6 +2813,7 @@ impl Ragdoll {
             // Direction into the stop, past it by, friction row's direction
             let mut dofs: Vec<(Vec3, f32, Option<Vec3>)> = vec![];
             let near = |u: Vec3, o: f32| o.max(o + h * rate(u)) >= -NEAR;
+            let window = self.limit_row.get(k).copied().flatten().filter(|_| self.limit_broken >> k & 1 == 0);
             match j.kind {
                 Kind::Hinge { lo, hi } => {
                     let (lo, hi) = hinge_limits(lo, hi);
@@ -2820,7 +2830,8 @@ impl Ragdoll {
                     prep.push((k, st.twist));
                     let l = (twist - LIMIT_MARGIN()).max(0.0);
                     let axis = crate::rigid::ldot(&cl.r, crate::rigid::col(&j.jc.cm, 2));
-                    for (u, o) in [(axis, st.twist - l), (-axis, -st.twist - l)] {
+                    let (over, under) = window.map_or((st.twist - l, -st.twist - l), |w| (st.twist - (w.hi - LIMIT_MARGIN()), (w.lo + LIMIT_MARGIN()) - st.twist));
+                    for (u, o) in [(axis, over), (-axis, under)] {
                         if near(u, o) {
                             dofs.push((u, o, None));
                         }
@@ -2862,6 +2873,7 @@ impl Ragdoll {
                 }
             }
             let mut dof = 0u32;
+            let window_rows = if matches!(j.kind, Kind::Ball { .. }) { dofs.iter().take_while(|d| d.0.dot(crate::rigid::ldot(&cl.r, crate::rigid::col(&j.jc.cm, 2))).abs() > 0.999).count().min(2) as u32 } else { 2 };
             for (u, o, across) in dofs {
                 let mut row = |u: Vec3, t: f32, mu: f32, tag: u32| {
                     let mut jr = vec![0.0; n];
@@ -2873,7 +2885,11 @@ impl Ragdoll {
                     found.push((jr, o, G11 { c: k, p: j.parent, u, t, k: -1.0 / q, mu, warm: Some((k as u32, tag)) }));
                 };
                 dof += 1;
-                row(u, rate(u) - allowed(o), 0.0, 2 * dof);
+                let b = match window {
+                    Some(w) if w.k > 0.0 && o >= 0.0 && dof <= window_rows => -(o * w.k / h),
+                    _ => allowed(o),
+                };
+                row(u, rate(u) - b, 0.0, 2 * dof);
                 if let Some(a) = across {
                     row(a, rate(a), 0.2, 2 * dof + 1);
                 }
@@ -3738,6 +3754,15 @@ impl Ragdoll {
         }
         // RDR2 core: the velocity pass's limit rows start the next step from these (0x28e1650's warm start, 0x28a9ca8)
         self.lim_warm = st.rows.iter().filter_map(|r| Some((r.g?.warm?, r.lambda as f32))).collect();
+        // the constraint's breaking strength, base +0x28 (10000 on the hock's): gone once a row's impulse over the step passes it [P: per second]
+        for ((k, _), l) in self.lim_warm.iter().map(|&(a, b)| (a, b)).collect::<Vec<_>>() {
+            if let Some(w) = self.limit_row.get(k as usize).copied().flatten() {
+                if l.abs() / st.h > w.strength {
+                    self.limit_broken |= 1 << k;
+                    crate::extras_core_rdr2::trace_once("limit broke", || format!("rotation limit constraint on part {k} broke: {:.0} over {}", l.abs() / st.h, w.strength));
+                }
+            }
+        }
         if !self.middle(&mut st) {
             return;
         }

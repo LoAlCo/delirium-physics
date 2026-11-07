@@ -64,6 +64,8 @@ const TAIL_FRICTION: f32 = 0.01;
 const HOLD: f32 = 0.025;
 /// The stiffness 0x2ae11f8 gives the chain in a flail (0x3321e28).
 const FLAIL_STIFF: f32 = 14.0;
+/// The knees' and hocks' lean half range on the rig (horse.xml's, which horse.rs called a hinge under HINGE_LEAN).
+const KNEE_LEAN: f32 = 0.07;
 /// ctx+0x2bfc on the reference horse (0x2a4e1dc).
 const LEG_LEN: f32 = 1.0;
 
@@ -1253,6 +1255,11 @@ impl Horse {
                     let a = angles(pf, cf, m.target);
                     (pf, cf, [(-lean[0], lean[0]), (-lean[1], lean[1]), (-twist, twist)], [a.x, -a.y, a.z], false)
                 }
+                // the rig's knees and hocks have a lean of +-.07 (3-DOF, the horse has no hinges): the Rage rows carry it
+                Limit::BoneHinge { pf, cf, lo, hi } if LEGS.iter().any(|l| l[1] == k || l[2] == k) => {
+                    let big = lo.abs().max(hi.abs());
+                    (pf, cf, [(-KNEE_LEAN, KNEE_LEAN), (-KNEE_LEAN, KNEE_LEAN), (-big, big)], [0.0, 0.0, hinge_of(pf, cf, m.target)], false)
+                }
                 Limit::BoneHinge { pf, cf, lo, hi } => (pf, cf, [(lo, hi), (0.0, 0.0), (0.0, 0.0)], [hinge_of(pf, cf, m.target), 0.0, 0.0], true),
                 Limit::Cone { swing, twist } => {
                     let z = Quat::from_rotation_x(-FRAC_PI_2);
@@ -1260,10 +1267,26 @@ impl Horse {
                 }
                 _ => (Quat::IDENTITY, Quat::IDENTITY, [(0.0, 0.0); 3], [0.0; 3], false),
             };
-            Rigid { frame, child, limits, max: self.rig_caps[k], blend, hinge, desired: target[0], jc: None, target, gain: [ks, ds], soft: Default::default(),
+            // (a hinge's cap is its one number; on the knees and hocks now of 3 DOF, both channels)
+            let leaned = LEGS.iter().any(|l| l[1] == k || l[2] == k) && !hinge && self.rig_caps[k][1] == 0.0;
+            let max = if leaned { [self.rig_caps[k][0]; 2] } else { self.rig_caps[k] };
+            Rigid { frame, child, limits, max, blend, hinge, desired: target[0], jc: None, target, gain: [ks, ds], soft: Default::default(),
                     cap: Some(if hinge { 27000.0 } else { 35000.0 }) }
         }).collect();
         self.doll.nm_first = true;
+        // the window on each knee and hock's twist. A hock with quadLimbLimit's type 3 is Rage's constraint, 0x2a3bc68's values: 10000, .5, .01
+        self.doll.limit_row = vec![None; n];
+        for l in LEGS.iter() {
+            for &k in &l[1..] {
+                if let Limit::BoneHinge { lo, hi, .. } = self.build.parts[k].limit {
+                    let hock = k == l[2] && (0..4).any(|i| LEGS[c.rig[i].row][2] == k && self.r.limits[i].is_some_and(|x| x.kind == 3));
+                    self.doll.limit_row[k] = Some(if hock { delirium::ragdoll::LimitRow { lo, hi, strength: 10000.0, soft: 0.5, k: 0.01 } } else { delirium::ragdoll::LimitRow { lo, hi, strength: f32::MAX, soft: 0.5, k: 0.0 } });
+                    if hock {
+                        say!(c, "0x2a3bc68", "hock part {k}: window {lo:.3}..{hi:.3}, strength 10000, softness .5, .01");
+                    }
+                }
+            }
+        }
         self.doll.sleep_tol = [0.0; 3];
         self.kept.force = force;
         self.kept.torque = torque;
