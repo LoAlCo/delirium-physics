@@ -24,6 +24,8 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "impulse", kind: Kind::Vec3, used: true, doc: "the bullet's impulse, N s, world (zero)" },
         Param { name: "hitPoint", kind: Kind::Vec3, used: true, doc: "where it hit, world (unset: the part's centre)" },
         Param { name: "equalizeAmount", kind: Kind::Float, used: true, doc: "0: the impulse as given, 1: scaled by the part's mass over the mean part's (RDR2's shot sends 0) (0)" },
+        Param { name: "localHitPointInfo", kind: Kind::Bool, used: true, doc: "hitPoint is in the part's space (false)" },
+        Param { name: "partBoundHandle", kind: Kind::Int, used: false, doc: "RDR2's part by a bound's handle; partIndex names the part here" },
         Param { name: "extraShare", kind: Kind::Float, used: true, doc: "a share also given to the trunk (Spine0): less than 0 adds |share| of it there on top, 0..1 splits it between the trunk and the part hit, more than 1 none. RDR2's shot sends minus COMImpulseScale on trunk hits (0)" },
     ] },
     Message { name: "rdr2Sit", params: &[
@@ -2967,7 +2969,7 @@ impl ReachForWound {
         // on the ground: only as reachFalling (or, lying, reachOnFloor) allows; then, both hands reaching, by
         // reachFallingWithOneHand or by how he lies 0.2 s on; then catchFall and bodyRollUp leave this arm alone
         // (riding isn't on the ground: reachForWound's +0x52e, sit running with its state at most 2)
-        // [not ported: all of it is skipped while the shot's fall to knees has its record's +0x74]
+
         if !c.upright && !c.sit_state.is_some_and(|s| s <= 2) {
             let body: Vec<usize> = std::iter::once(0).chain(7..21).collect();
             let lying = c.b.doll.collided(&body);
@@ -6252,6 +6254,8 @@ pub struct BulletImpulse {
     /// the trunk's extra share
     new: Vec<(usize, Option<Vec3>, Vec3, f32, bool)>,
     modifier: f32,
+    /// this message's hitPoint is in the part's space
+    local: bool,
 }
 
 /// One running record (ctx+0x1150): part, hit point in the part's frame (None: its centre), the whole impulse, s left,
@@ -6375,7 +6379,7 @@ const BULLET_RUN_SPEED: f32 = 1.5;
 
 impl BulletImpulse {
     fn new(p: &mut P) -> Result<BulletImpulse, Error> {
-        let mut b = BulletImpulse { recs: vec![], new: vec![], modifier: 1.0 };
+        let mut b = BulletImpulse { recs: vec![], new: vec![], modifier: 1.0, local: false };
         b.take(p)?;
         Ok(b)
     }
@@ -6385,6 +6389,8 @@ impl BulletImpulse {
         let imp = p.v("impulse", Vec3::ZERO)?;
         let at = p.v("hitPoint", Vec3::NAN)?;
         let at = (!at.is_nan()).then_some(at);
+        self.local = p.b("localHitPointInfo", false)?;
+        let _ = p.get("partBoundHandle");
         let equalize = p.f("equalizeAmount", 0.0)?;
         let s = p.f("extraShare", 0.0)?;
         let (extra, main) = if s < 0.0 { (-s, 1.0) } else if s <= 1.0 { (s, 1.0 - s) } else { (0.0, 1.0) };
@@ -6503,6 +6509,12 @@ impl Extra for BulletImpulse {
             if k >= f.len() {
                 continue;
             }
+            let at = if self.local {
+                crate::extras_core_rdr2::trace_once("bullet local", || "applyBulletImpulse: hitPoint in the part's space".to_string());
+                at.map(|a| f[k].translation + f[k].rotation * a)
+            } else {
+                at
+            };
             let cfg = &mut c.ch.core.cfg;
             let t = cfg.bullets[extra as usize];
             let imp = imp * self.modifier;

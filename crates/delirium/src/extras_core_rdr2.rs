@@ -11,7 +11,10 @@ use bevy_math::Vec3;
 /// A message line can say start=false: on=false here, since an extra only starts with start=true.
 const ON: Param = Param { name: "on", kind: Kind::Bool, used: true, doc: "false: RDR2's start=false for this record (true)" };
 
-pub static MESSAGES: [Message; 21] = [
+pub static MESSAGES: [Message; 22] = [
+    Message { name: "setCharacterHealth", params: &[
+        Param { name: "characterHealth", kind: Kind::Float, used: true, doc: "ctx+0x1030: 0 or less, smartFall and catchFall's reads take him for dead (1)" },
+    ] },
     Message { name: "setWeaponMode", params: &[
         Param { name: "weaponMode", kind: Kind::Int, used: true, doc: "RDR2's weapon mode: 0, 5 right, 1, 3 both, 2 the rifle on the right, 4 left (5)" },
     ] },
@@ -694,6 +697,7 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "spinLimit" => spin_limit(p),
         "setCharacterDamping" => damping(p),
         "quadLimbLimit" => limb_limit(p),
+        "setCharacterHealth" => health(p),
         "setWeaponMode" => weapon_mode(p),
         "registerWeapon" => register_weapon(p),
         "fireWeapon" => fire_weapon(p),
@@ -704,6 +708,15 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
 }
 
 const NOT_SENT: f32 = -1e30;
+
+/// setCharacterHealth (0x2a4d7c8), ctx+0x1030.
+fn health(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let h = p.f("characterHealth", 1.0)?;
+    Ok(once(move |c| {
+        c.ch.core.cfg.health = h;
+        trace(|| format!("character health {h}"));
+    }))
+}
 
 /// setWeaponMode (0x2a51a64 -> 0x2a51944).
 fn weapon_mode(p: &mut P) -> Result<Box<dyn Extra>, Error> {
