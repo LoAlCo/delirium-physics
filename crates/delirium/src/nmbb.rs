@@ -860,7 +860,7 @@ impl BodyBalance {
         let w = 0.2 + 0.8 * (1.0 - f);
         // blendToZeroPose: toward the rig's zero pose, every joint having one here, in place of the fixed rest below
         if r.zero_pose {
-            for j in Character::mask("ub").into_iter().chain(Character::mask("ua")) {
+            for j in Character::mask("uk").into_iter().chain(Character::mask("ua")) {
                 ch.eff[j].blend_to_zero(w);
             }
             crate::extras_core_rdr2::trace_first("bodyBalance: blend to the zero pose");
@@ -887,7 +887,8 @@ impl BodyBalance {
             let e = &mut ch.eff[(*ELBOW())[s]].desired[0];
             *e += (te - *e) * w;
         }
-        for i in Character::mask("ub") {
+        // spine, neck and head alone (rdr2_bodybalance.md 3.12 step 5): the arms had theirs above
+        for i in Character::mask("uk") {
             blend(&mut ch.eff[i].desired, [0.0; 3], w);
         }
         // RDR2's bodyBalance has no stayUpright step (rdr2_bodybalance.md): GTA IV's stabiliser stays off
