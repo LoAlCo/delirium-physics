@@ -7,8 +7,8 @@
 //! solver (`leg_ik`, 0x2a2c398): knee and hock tied as a Z with interior angles theta and k theta, Newton on the
 //! hip-to-sole distance, then the hip's shortest arc plus the hind legs' swivel. Hock limits follow the knee
 //! (`quadLimbLimit`, type 3). It steps when the look-ahead COM leaves the hooves' hull, by leg pairs per gait.
-//! The stayUpright torque (0x2a5a238) keeps row a up. The biped's gravity opposition doesn't run on a quadruped (0x2a45344), but the body's flush does run
-//! its own solver while state < 2 (0x2a5ce00 -> 0x2a37820 -> 0x2a1932c: weight shared among the feet, joint torques down each leg): not ported (rdr2_helpers.md).
+//! The stayUpright torque (0x2a5a238) keeps row a up. The biped's gravity opposition doesn't run on a quadruped (0x2a45344); the body's flush runs
+//! its own solver while state < 2 (0x2a5ce00 -> 0x2a37820 -> 0x2a1932c, `gravity_solver`).
 //!
 //! Where it isn't RDR2's: A joint's "request blend" (+0x48)
 //! blends stiffness to the rig's and the target from the last one sent ([P] of the limb layer). The knees and hocks
@@ -66,6 +66,95 @@ const HOLD: f32 = 0.025;
 const FLAIL_STIFF: f32 = 14.0;
 /// ctx+0x2bfc on the reference horse (0x2a4e1dc).
 const LEG_LEN: f32 = 1.0;
+
+/// 0x2a37820's working record of a part: mass moment, torque, mass, whether a planted limb is rooted here.
+#[derive(Clone, Copy, Default)]
+struct GravPart { moment: Vec3, torque: Vec3, mass: f32, fixed: bool }
+
+/// 0x2a422d8: the COM dropped along up onto the feet's plane, then, if outside the quad (edges 0-1, 1-3, 3-2, 2-0), to the nearest of the edges it's past.
+fn support_on(com: Vec3, up: Vec3, q: [Vec3; 4]) -> Vec3 {
+    let edge = |a: Vec3, b: Vec3| {
+        let n = up.cross(b - a).normalize_or_zero();
+        (com - a).dot(n)
+    };
+    let (d01, d13, d32, d20) = (edge(q[0], q[1]), edge(q[1], q[3]), edge(q[3], q[2]), edge(q[2], q[0]));
+    let mean = (q[0] + q[1] + q[2] + q[3]) * 0.25;
+    let on = com + up * (mean - com).dot(up);
+    if d01.min(d13).min(d32).min(d20) >= 0.0 {
+        return on;
+    }
+    let (a, b) = if d20 < 0.0 && d20 < d01 && d20 < d32 { (q[0], q[2]) }
+        else if d13 < 0.0 && d13 < d01 && d13 < d32 { (q[3], q[1]) }
+        else if d01 < 0.0 { (q[0], q[1]) }
+        else { (q[3], q[2]) };
+    let e = a - b;
+    let s = ((on - b).dot(e) / e.length_squared().max(1e-10)).clamp(0.0, 1.0);
+    b + e * s
+}
+
+/// 0x2a1932c: one limb's chain under acceleration `acc`. Each link's load (moment, mass) moves on towards where it's held. A hanging limb goes from its tip, a planted one from
+/// its root; the root chain from both ends up to the parts a planted limb holds, and the middle from its midpoint. At each joint the load's moment about it, clamped by
+/// the limb's oppose x (M - m) m / M x 5, comes off the part the load is on and goes on the next.
+#[allow(clippy::too_many_arguments)]
+fn gravity_chain(p: &mut [GravPart; 23], list: &[usize], root: bool, planted: bool, acc: Vec3, scale: f32, total: f32, joint: impl Fn(usize) -> Vec3) {
+    if acc.length_squared() < 1e-6 {
+        return;
+    }
+    let last = list.len() as i32 - 1;
+    let mut order: Vec<(i32, bool)> = vec![];
+    if root {
+        let (mut hi, mut found) = (last, false);
+        while hi > 0 {
+            if p[list[hi as usize]].fixed {
+                found = true;
+                break;
+            }
+            order.push((hi, true));
+            hi -= 1;
+        }
+        if found {
+            let mut lo = 0;
+            while lo < hi && !p[list[lo as usize]].fixed {
+                order.push((lo, false));
+                lo += 1;
+            }
+            let mid = (hi + lo) / 2;
+            for a in mid..hi {
+                order.push((a, false));
+            }
+            let mut a = mid;
+            while a > lo {
+                order.push((a, true));
+                a -= 1;
+            }
+        }
+    } else if !planted {
+        for a in (1..=last).rev() {
+            order.push((a, true));
+        }
+    } else {
+        for a in 0..last {
+            order.push((a, false));
+        }
+    }
+    for &(a, up) in &order {
+        let from = list[a as usize];
+        let to = list[(a + if up { -1 } else { 1 }) as usize];
+        // the joint is named by its child: the part itself going up the chain, the next going down it
+        let at = joint(if up { from } else { to });
+        let (m, moment) = (p[from].mass, p[from].moment);
+        let centre = moment / m.max(1e-6);
+        let t = (centre - at).cross(acc * m);
+        p[to].mass += m;
+        p[to].moment += moment;
+        if scale > 0.0 {
+            let lim = (total - m) * m / total.max(1e-3) * 5.0 * scale;
+            let t = t.clamp_length_max(lim.max(0.0));
+            p[from].torque -= t;
+            p[to].torque += t;
+        }
+    }
+}
 
 /// Our part for RDR2's link `l` (ours has the pelvis first and the neck's and head's second capsules after theirs).
 fn link_part(l: usize) -> usize {
@@ -141,6 +230,8 @@ macro_rules! p {
 /// The settings, as RDR2's message gives them.
 #[derive(Clone, Debug)]
 pub struct Params {
+    /// setOpposeGravity on the joints (3-DOF +0x150), which 0x2a5ce00 copies to the limb records' +0x30
+    pub oppose: f32,
     pub v: [f32; 86],
     pub mask: String,
     pub normal: Vec3,
@@ -177,7 +268,7 @@ pub struct Stay {
 
 impl Default for Params {
     fn default() -> Self {
-        Params { v: TABLE.map(|t| t.1), mask: "fb".into(), normal: Vec3::Z, hit_point: Vec3::ZERO, bullet_vel: Vec3::ZERO, local_hit: 0, limits: [None; 4], stay: None }
+        Params { oppose: 0.0, v: TABLE.map(|t| t.1), mask: "fb".into(), normal: Vec3::Z, hit_point: Vec3::ZERO, bullet_vel: Vec3::ZERO, local_hit: 0, limits: [None; 4], stay: None }
     }
 }
 
@@ -1088,6 +1179,10 @@ impl Horse {
         if !self.dead {
             self.stay_upright(&mut c, &pv, &fr, com, omega, rows, vel, dt, &mut torque);
         }
+        // 0x2adb528's last line, body+0x420 = state < 2: the flush 0x2a5ce00 then runs the solver
+        if c.state < 2 {
+            self.gravity_solver(&mut c, &fr, com, &mut torque);
+        }
         c.first = false;
 
         // the muscles: request stiffness blended by +0x48 to the rig's, the target from the last one sent
@@ -1630,6 +1725,117 @@ impl Horse {
             }
         }
         say!(c, "0x2a56ee8", "snap on part {rp}, magnitude {mag:.2}");
+    }
+
+    /// 0x2a37820 with 0x2a27790's limb lists: the quadruped's own gravity opposition. The world's gravity is shared: what's planted carries a force through
+    /// the support point (0x2a422d8), split among the planted legs by inverse distance from the COM; what isn't carries gravity itself or what the legs take.
+    /// Each limb's chain is walked by `gravity_chain`. The parts 0, 4, 10 count twice, in their own right and with part 1's load, as the code has it.
+    fn gravity_solver(&self, c: &mut Core, fr: &[Transform], com: Vec3, torque: &mut [Vec3]) {
+        // (0x2a27790) parts, RDR2's numbers: neck, spine, fore left, fore right, hind left, hind right; share +0x2c; limb +0x3d
+        const CHAINS: [&[usize]; 6] = [&[12, 15, 20, 21, 22], &[1, 5, 11, 12], &[12, 14, 18, 19], &[12, 13, 16, 17], &[1, 3, 8, 9], &[1, 2, 6, 7]];
+        const SHARE: [f32; 6] = [1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        const ROOT: usize = 1;
+        let g = Vec3::new(0.0, 0.0, -9.8);
+        let up = Vec3::Z;
+        let scale = self.r.oppose;
+        // the parts' moments and masses; ours has the neck's and head's second capsules on their own: they go with their parent's link
+        let mut p = [GravPart::default(); 23];
+        let mut mass = [0.0f32; 23];
+        for k in 0..self.build.parts.len().min(fr.len()) {
+            let mut o = k;
+            let l = loop {
+                match (0..23).find(|&l| link_part(l) == o) {
+                    Some(l) => break l,
+                    None => o = self.build.parts[o].parent.unwrap_or(0),
+                }
+            };
+            let m = self.doll.part_mass(k);
+            mass[l] += m;
+            p[l].moment += fr[k].translation * m;
+        }
+        let own = p;
+        for l in 0..23 {
+            p[l].mass = mass[l];
+        }
+        p[1].mass += mass[0] + mass[4] + mass[10];
+        p[1].moment += own[0].moment + own[4].moment + own[10].moment;
+        // the attached object, ctx+0x2b60.. [P: the rider's part, the saddle's]
+        if let Some((at, _, rm)) = self.rider.filter(|r| r.2 > 0.0) {
+            p[12].mass += rm;
+            p[12].moment += at * rm;
+        }
+        let total: f32 = p.iter().map(|x| x.mass).sum();
+        let com_s = p.iter().map(|x| x.moment).sum::<Vec3>() / total.max(1e-3);
+        let planted: [bool; 6] = [false, false, c.legs[0].planted, c.legs[1].planted, c.legs[2].planted, c.legs[3].planted];
+        let feet: [Vec3; 6] = [Vec3::ZERO, Vec3::ZERO, c.legs[0].sole, c.legs[1].sole, c.legs[2].sole, c.legs[3].sole];
+        let n = planted.iter().filter(|x| **x).count();
+        let k = 1.0 / (g.length_squared() + 1e-10);
+        let (mut weight, mut sum, mut foot_sum) = ([0.0f32; 6], 0.0, Vec3::ZERO);
+        for i in 0..6 {
+            if planted[i] {
+                let d = feet[i] - com_s;
+                foot_sum += feet[i];
+                p[CHAINS[i][0]].fixed = true;
+                let flat = d - g * (d.dot(g) * k);
+                weight[i] = scale / (flat.length() + 1e-10);
+                sum += weight[i];
+            }
+        }
+        let mut f = Vec3::ZERO;
+        if n != 0 {
+            let on = support_on(com, up, [feet[2], feet[3], feet[4], feet[5]]);
+            let a = on - com;
+            let a = a - up * a.dot(up);
+            let v = a + g * ((foot_sum / n as f32 - com_s).dot(g) * k);
+            f = v * (v.dot(g) / v.length_squared().max(1e-10));
+        }
+        let mut acc = [Vec3::ZERO; 6];
+        for i in 0..6 {
+            if planted[i] {
+                acc[i] = if sum != 0.0 { f * (weight[i] / sum) } else { f };
+            }
+        }
+        for i in (0..6).rev() {
+            if !planted[i] {
+                f += (g - f) * SHARE[i];
+                acc[i] = f;
+            }
+        }
+        for i in (0..6).filter(|&i| i != ROOT && !planted[i]) {
+            gravity_chain(&mut p, CHAINS[i], i == ROOT, planted[i], acc[i], scale, total, |j| self.joint_place(j, fr));
+        }
+        gravity_chain(&mut p, CHAINS[ROOT], true, planted[ROOT], acc[ROOT], scale, total, |j| self.joint_place(j, fr));
+        for i in (0..6).filter(|&i| i != ROOT && planted[i]) {
+            gravity_chain(&mut p, CHAINS[i], false, true, acc[i], scale, total, |j| self.joint_place(j, fr));
+        }
+        // each part's torque through its own joint: 0x2a13f34, on the child, against on the parent; the leg's lower joints (mask 0xf03c0) only about their axis
+        let mut most = 0.0f32;
+        for l in 1..23 {
+            let mut t = p[l].torque;
+            if t == Vec3::ZERO {
+                continue;
+            }
+            let k = link_part(l);
+            let Some(pa) = self.build.parts[k].parent else { continue };
+            if 0xf03c0u32 >> l & 1 == 1 {
+                let pf = match self.build.parts[k].limit {
+                    Limit::BoneHinge { pf, .. } | Limit::Bone { pf, .. } => pf,
+                    _ => Quat::IDENTITY,
+                };
+                let z = fr[pa].rotation * pf * Vec3::Z;
+                t = z * t.dot(z);
+            }
+            torque[k] += t;
+            torque[pa] -= t;
+            most = most.max(t.length());
+        }
+        say!(c, "0x2a37820", "gravity solver: oppose {scale}, {n} planted, mass {total:.0}, force {:.2?} on the planted, largest joint torque {most:.1} N m", f);
+    }
+
+    /// A joint's world place, by RDR2's child part.
+    fn joint_place(&self, l: usize, fr: &[Transform]) -> Vec3 {
+        let k = link_part(l);
+        fr[k].translation + fr[k].rotation * self.build.parts[k].anchor
     }
 
     /// stayUpright (0x2a59608 → 0x2a5a238): row a to the character's up, by the task's torques; spread by inertia with
