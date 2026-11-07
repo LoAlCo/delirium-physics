@@ -1924,6 +1924,12 @@ pub struct Ragdoll {
     /// The gaps last step, thighs and calves.
     leg_gap: [f32; 2],
     pub contact_off: u32,
+    /// RDR2 core: parts with no contacts at all this step (a hand whose arm state is 2, 0x2a7452c)
+    pub ignore_parts: u32,
+    /// RDR2 core: the feet whose bound is short (0x2a483f8), part indices
+    pub short_feet: u32,
+    /// RDR2 core: OverrideElasticity: the world contacts' elasticity, before the part's
+    pub override_elastic: Vec<f32>,
     pub hit: Vec<Option<(Vec3, Vec3, i32)>>,
     /// `hit` without his own parts: `hit`'s id is -1 for himself and for the static world alike (RDR2 core's BCR)
     pub hit_out: Vec<Option<(Vec3, Vec3, f32)>>,
@@ -2074,7 +2080,7 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+        Ragdoll { ignore_parts: 0, short_feet: 0, override_elastic: vec![], hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
                   sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, lim_warm: vec![], early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
@@ -2131,6 +2137,10 @@ impl Ragdoll {
     pub fn unpin(&mut self) {
         self.pins.iter_mut().for_each(|p| *p = None);
         self.age = 0.0;
+    }
+
+    pub fn part_spin(&self, k: usize) -> Vec3 {
+        self.bodies[k].w
     }
 
     pub fn com(&self) -> (Vec3, Vec3) {
@@ -3004,8 +3014,13 @@ impl Ragdoll {
                 touch_add(&mut acc, at, n, depth, inst);
             };
             let held = &mut self.held[i];
+            if self.ignore_parts >> i & 1 == 1 {
+                held.clear();
+                continue;
+            }
             let touch = if self.contact_off >> i & 1 == 0 { delirium_data::kv!(7 int) } else { 0 };
             let shape = match p.boxed {
+                Some(e) if self.short_feet >> i & 1 == 1 => gjk::Shape::Box(e * Vec3::new(1.0, 1.0, 0.8) - Vec3::splat(BOX_MARGIN()), BOX_MARGIN()),
                 Some(e) => gjk::Shape::Box(e - Vec3::splat(BOX_MARGIN()), BOX_MARGIN()),
                 None => gjk::Shape::Capsule(p.half, p.radius * self.radius_scale.get(i).copied().unwrap_or(1.0)),
             };
@@ -3020,7 +3035,7 @@ impl Ragdoll {
                 self.touch[i] |= touch;
                 add(at + o, r.n, -r.gap, -1);
                 hit_ob.push((hits.len(), world_id(r.inst), at + o, r.n));
-                hits.push((i, at, r.n, r.gap, clamp_fric(self.fric_clamp, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0)), Vec3::ZERO, (PART_ELASTICITY() * row[1]).min(1.0), Some((i, k)), at));
+                hits.push((i, at, r.n, r.gap, clamp_fric(self.fric_clamp, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0)), Vec3::ZERO, self.override_elastic.get(i).copied().unwrap_or((PART_ELASTICITY() * row[1]).min(1.0)), Some((i, k)), at));
             }
             let a_last = (last, self.seen.get(i).map_or(tm, |s| s.1));
             for ob in obstacles.iter().filter(|ob| !self.joins.iter().any(|j| j.2 == ob.id)) {

@@ -790,8 +790,8 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "supportPosition", kind: Kind::Float, used: true, doc: "RDR2 core: both feet this far behind the COM, noSupportForceMult applies, m (2)" },
         Param { name: "noSupportForceMult", kind: Kind::Float, used: true, doc: "RDR2 core: (1)" },
         Param { name: "stepUpHelp", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0)" },
-        Param { name: "stayUpAcc", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (0.7)" },
-        Param { name: "stayUpAccMax", kind: Kind::Float, used: true, doc: "RDR2 core: carried, not applied (5)" },
+        Param { name: "stayUpAcc", kind: Kind::Float, used: true, doc: "RDR2 core: the up every behaviour reads, by the floor's acceleration (0.7)" },
+        Param { name: "stayUpAccMax", kind: Kind::Float, used: true, doc: "RDR2 core: that acceleration at most (5)" },
         Param { name: "antigrav", kind: Kind::Float, used: true, doc: "RDR2 core: fall assist: the share of his weight pushed up while falling (0)" },
         Param { name: "antigravtime", kind: Kind::Float, used: true, doc: "RDR2 core: fall assist: only while the balancer is younger than this, s (0.5)" },
         Param { name: "antigravspeed", kind: Kind::Float, used: true, doc: "RDR2 core: fall assist: only over this horizontal speed, m/s (1.5)" },
@@ -1010,6 +1010,19 @@ pub fn find(name: &str) -> Option<&'static Message> {
 }
 
 pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg: &str, params: &[(&str, Value)]) -> Result<usize, Error> {
+    // RDR2 core: ctx+0x2bf0 on a body that isn't the rig's own male (0x2a4e1dc)
+    if let Some(t) = a.rdr2_core.is_some().then(|| crate::dims_rdr2::table(build)).flatten() {
+        if crate::dims_rdr2::SCALED.iter().any(|r| r.0 == msg.to_ascii_lowercase()) {
+            let scaled = crate::dims_rdr2::scale(&t, msg, params);
+            let view: Vec<(&str, Value)> = scaled.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
+            crate::extras_core_rdr2::trace_once("dims", || format!("ctx+0x2bf0: T {:.3} L {:.3} M {:.3}, on {msg}: {} parameters", t[1], t[3], t[7], scaled.len()));
+            return send_scaled(a, build, world, st, msg, &view);
+        }
+    }
+    send_scaled(a, build, world, st, msg, params)
+}
+
+fn send_scaled(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg: &str, params: &[(&str, Value)]) -> Result<usize, Error> {
     if let Some(r) = a.extras.send(msg, params) {
         return r;
     }

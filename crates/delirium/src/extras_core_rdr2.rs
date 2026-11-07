@@ -11,7 +11,35 @@ use bevy_math::Vec3;
 /// A message line can say start=false: on=false here, since an extra only starts with start=true.
 const ON: Param = Param { name: "on", kind: Kind::Bool, used: true, doc: "false: RDR2's start=false for this record (true)" };
 
-pub static MESSAGES: [Message; 16] = [
+pub static MESSAGES: [Message; 21] = [
+    Message { name: "setWeaponMode", params: &[
+        Param { name: "weaponMode", kind: Kind::Int, used: true, doc: "RDR2's weapon mode: 0, 5 right, 1, 3 both, 2 the rifle on the right, 4 left (5)" },
+    ] },
+    Message { name: "registerWeapon", params: &[
+        Param { name: "hand", kind: Kind::Int, used: true, doc: "0 left, 1 right: that hand has a weapon, state 0 until setWeaponMode (1)" },
+    ] },
+    Message { name: "fireWeapon", params: &[
+        Param { name: "gunHandEnum", kind: Kind::Int, used: true, doc: "the hand that fires (0)" },
+        Param { name: "firedWeaponStrength", kind: Kind::Float, used: true, doc: "the recoil's force, N (1000)" },
+        Param { name: "applyFireGunForceAtClavicle", kind: Kind::Bool, used: true, doc: "split it between the hand and the clavicle (false)" },
+        Param { name: "inhibitTime", kind: Kind::Float, used: true, doc: "no more recoil on this arm for this long, s (0.4)" },
+        Param { name: "direction", kind: Kind::Vec3, used: true, doc: "the recoil's direction in the hand's space (0)" },
+        Param { name: "split", kind: Kind::Float, used: true, doc: "the hand's share with applyFireGunForceAtClavicle (0.5)" },
+        Param { name: "?e9e30d92", kind: Kind::Float, used: true, doc: "the other hand's share, when it holds the gun too (0)" },
+        Param { name: "?fb138fe4", kind: Kind::Bool, used: true, doc: "the request context's mask is the whole body (false)" },
+    ] },
+    Message { name: "forceToBodyPart", params: &[
+        Param { name: "partIndex", kind: Kind::Int, used: true, doc: "RDR2's part (its handle's, here a number) (0, the pelvis)" },
+        Param { name: "force", kind: Kind::Vec3, used: true, doc: "the force, N" },
+        Param { name: "forceDefinedInPartSpace", kind: Kind::Bool, used: true, doc: "force is in the part's space (false)" },
+    ] },
+    Message { name: "OverrideElasticity", params: &[
+        Param { name: "OverrideElasticity", kind: Kind::Bool, used: true, doc: "on: the world contacts take this elasticity while he moves slowly (true)" },
+        Param { name: "?f3231c3d", kind: Kind::Float, used: true, doc: "the decay starts once ctx+0x100c passes this (80)" },
+        Param { name: "?ec29dcac", kind: Kind::Float, used: true, doc: "the decay's time, s (0.5)" },
+        Param { name: "?1da37e6f", kind: Kind::Float, used: true, doc: "only under this speed (7)" },
+        Param { name: "?f4b0205d", kind: Kind::Float, used: true, doc: "the elasticity (1)" },
+    ] },
     Message { name: "configureLimits", params: &[
         Param { name: "mask", kind: Kind::Str, used: true, doc: "the joints (fb)" },
         Param { name: "index", kind: Kind::Int, used: true, doc: "one joint, by number (-1: the mask's)" },
@@ -661,11 +689,89 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "spinLimit" => spin_limit(p),
         "setCharacterDamping" => damping(p),
         "quadLimbLimit" => limb_limit(p),
+        "setWeaponMode" => weapon_mode(p),
+        "registerWeapon" => register_weapon(p),
+        "fireWeapon" => fire_weapon(p),
+        "forceToBodyPart" => force_to_part(p),
+        "OverrideElasticity" => override_elasticity(p),
         _ => return None,
     })
 }
 
 const NOT_SENT: f32 = -1e30;
+
+/// setWeaponMode (0x2a51a64 -> 0x2a51944).
+fn weapon_mode(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let mode = p.i("weaponMode", 5)?;
+    Ok(once(move |c| {
+        c.ch.core.weapon_mode(mode);
+        trace(|| format!("setWeaponMode {mode}: arm states {:?}", c.ch.core.arm_state));
+    }))
+}
+
+/// registerWeapon (0x2a48c48 -> 0x2a48908): the hand's record, state 0. The constraint and the matrices aren't kept: no weapon body here.
+/// The weapon bits are the game task's (0x2a27f28, no message of its own here) [P]: registering sets them.
+fn register_weapon(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let hand = p.i("hand", 1)?.clamp(0, 1) as usize;
+    for n in ["type", "Handle", "constraintHandle", "gunToMuzzleInGun", "?5a4c1887"] {
+        let _ = p.get(n);
+    }
+    Ok(once(move |c| {
+        c.ch.core.weapon_bits |= if hand == 0 { 0x10000 } else { 0x80000 };
+        c.ch.core.arm_state[hand] = 0;
+        trace(|| format!("registerWeapon: hand {hand}, bits {:#x}", c.ch.core.weapon_bits));
+    }))
+}
+
+/// fireWeapon (0x2a2f994): held for pointGun's tick; with pointGun off the handler does nothing.
+fn fire_weapon(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let r = crate::nmrs::FireRec {
+        hand: p.i("gunHandEnum", 0)?.clamp(0, 1) as usize, strength: p.f("firedWeaponStrength", 1000.0)?, at_clavicle: p.b("applyFireGunForceAtClavicle", false)?,
+        inhibit: p.f("inhibitTime", 0.4)?, direction: p.v("direction", Vec3::ZERO)?.normalize_or_zero(), split: p.f("split", 0.5)?, other: p.f("?e9e30d92", 0.0)?,
+    };
+    let _ = p.b("?fb138fe4", false)?;
+    Ok(once(move |c| c.ch.core.fire = Some(r)))
+}
+
+/// forceToBodyPart (0x2a313c8): a force on a part for this step (0x2a19174: times dt, at the part's COM), in the part's space if it says so.
+/// It wakes him (ctx+0x4804) when it isn't zero, which the room's doll needs no flag for.
+fn force_to_part(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let part = crate::extras_ysk_rdr2::rp(p.i("partIndex", 0)?.max(0) as usize);
+    let (f, local) = (p.v("force", Vec3::ZERO)?, p.b("forceDefinedInPartSpace", false)?);
+    Ok(once(move |c| {
+        let k = part.min(c.b.frames.len().saturating_sub(1));
+        let frame = c.b.frames[k];
+        let world = if local { frame.rotation * f } else { f };
+        c.out.impulse.push((k, c.b.at(k), world * c.dt));
+        trace(|| format!("forceToBodyPart: part {k}, {world:.2?} N"));
+    }))
+}
+
+/// OverrideElasticity (0x2a40a5c): the record that 0x2a5c018 ticks in `elastic_step`.
+fn override_elasticity(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let on = p.b("OverrideElasticity", true)?;
+    let (th, decay, speed, e) = (p.f("?f3231c3d", 80.0)?, p.f("?ec29dcac", 0.5)?, p.f("?1da37e6f", 7.0)?, p.f("?f4b0205d", 1.0)?);
+    Ok(once(move |c| {
+        c.ch.core.elastic = if on {
+            crate::nmrs::ElasticRec { on, elasticity: e, speed, threshold: th, decay, scale: 1.0, triggered: false, active: false }
+        } else {
+            crate::nmrs::ElasticRec::default()
+        };
+        trace(|| format!("OverrideElasticity: {:?}", c.ch.core.elastic));
+    }))
+}
+
+/// 0x2a5c018, each step: past the threshold on `peak` with the body touching, the scale falls to 0 over the decay's time; the contacts take it while the COM's speed is under the limit and he isn't falling faster than that.
+pub fn elastic_step(r: &mut crate::nmrs::ElasticRec, dt: f32, vel: Vec3, peak: f32, touching: bool, gate: bool) {
+    if !r.on {
+        return;
+    }
+    if r.triggered || (touching && peak > r.threshold) {
+        r.triggered = true;
+        r.scale = (r.scale - dt / r.decay.max(1e-4)).max(0.0);
+    }
+    r.active = gate && vel.length() < r.speed && -r.speed < vel.z;
+}
 
 /// A trace line once per text, for paths with no state of their own to keep it in.
 pub fn trace_first(s: &'static str) {

@@ -590,6 +590,21 @@ pub struct Character {
 /// RDR2 core: per-character values RDR2's core helpers read (rdr2_core2.md sections 1 and 4).
 #[derive(Clone, Copy, Debug)]
 pub struct CoreState {
+    /// ctx+0x34e8: which hands have a weapon registered, bit 16 left, bit 19 right
+    pub weapon_bits: u32,
+    /// the COM's velocity last step, for ctx+0x100c
+    pub com_was: Option<Vec3>,
+    /// ctx+0x2ca4, +0x2ce4: each arm's weapon state: 0 none, 1 pistol, 2 rifle, 3, 4 not usable (0x2a51944, 0x2a4e830)
+    pub arm_state: [i32; 2],
+    /// a fireWeapon message waiting for pointGun's tick (0x2a2f994 runs only with pointGun on)
+    pub fire: Option<FireRec>,
+    pub fire_seen: bool,
+    /// OverrideElasticity's record, ctx+0x10d0..+0x10e6 (0x2a40a5c, 0x2a5c018)
+    pub elastic: ElasticRec,
+    /// ctx+0x47e0, +0x47e1: the foot's bound is short and its contacts have no friction (0x2a483f8)
+    pub foot_inverted: [bool; 2],
+    /// ctx+0x480c: the arms' pose this frame comes from a weapon pose (the core's default arms stay off)
+    pub arms_held: bool,
     /// ctx+0xfe0: the floor's acceleration, its horizontal change low-passed. Nothing under him moves in the room, so only the test hook RDR2_FLOOR_ACC fills it
     pub floor_acc: Vec3,
     /// RDR2's joint scale fields this step (k, damping, muscle): lowered by whoever asks, over any setStiffness
@@ -667,9 +682,46 @@ impl CoreState {
     }
 }
 
+/// fireWeapon's parameters (0x2a2f994), scaled and with its direction normalised.
+#[derive(Clone, Copy, Debug)]
+pub struct FireRec { pub hand: usize, pub strength: f32, pub at_clavicle: bool, pub inhibit: f32, pub direction: Vec3, pub split: f32, pub other: f32 }
+
+/// ctx+0x10d0..: OverrideElasticity's: the world contacts' elasticity (ctx+0x10e0 x +0x10d0 x the part's), while he moves slowly.
+#[derive(Clone, Copy, Debug)]
+pub struct ElasticRec { pub on: bool, pub elasticity: f32, pub speed: f32, pub threshold: f32, pub decay: f32, pub scale: f32, pub triggered: bool, pub active: bool }
+
+impl Default for ElasticRec {
+    fn default() -> ElasticRec {
+        ElasticRec { on: false, elasticity: 0.0, speed: 0.0, threshold: 80.0, decay: 0.5, scale: 1.0, triggered: false, active: false }
+    }
+}
+
+impl CoreState {
+    /// 0x2a51944: a weapon mode on the arms: a hand holds a state only with its weapon bit. Mode 2 is the rifle's, on the right.
+    pub fn weapon_mode(&mut self, mode: i32) {
+        let (l, r) = (self.weapon_bits & 0x10000 != 0, self.weapon_bits & 0x80000 != 0);
+        let one = |b: bool| if b { 1 } else { 4 };
+        self.arm_state = [if l { 0 } else { 4 }, if r { 0 } else { 4 }];
+        match mode {
+            0 | 5 => self.arm_state[1] = one(r),
+            1 => self.arm_state = [one(l), one(r)],
+            2 => self.arm_state[1] = if r { 2 } else { 4 },
+            3 => self.arm_state = [one(l), one(r)],
+            4 => self.arm_state[0] = one(l),
+            _ => {}
+        }
+    }
+
+    /// 0x2a4e830: one arm's state, if that hand's weapon is there.
+    pub fn set_arm_state(&mut self, hand: usize, state: i32) {
+        let bit = if hand == 0 { 0x10000 } else { 0x80000 };
+        self.arm_state[hand] = if self.weapon_bits & bit != 0 { state } else { 4 };
+    }
+}
+
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { floor_acc: Vec3::ZERO, props: [(-1, 0.0, 0.0); 8], prop_hit: [(-1, bevy_math::Vec3::ZERO, bevy_math::Vec3::ZERO, -1); 4], lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
+        CoreState { fire_seen: false, com_was: None, weapon_bits: 0, arm_state: [0; 2], fire: None, elastic: ElasticRec::default(), foot_inverted: [false; 2], arms_held: false, floor_acc: Vec3::ZERO, props: [(-1, 0.0, 0.0); 8], prop_hit: [(-1, bevy_math::Vec3::ZERO, bevy_math::Vec3::ZERO, -1); 4], lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 

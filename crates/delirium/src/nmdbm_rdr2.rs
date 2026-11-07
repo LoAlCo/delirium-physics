@@ -438,7 +438,7 @@ macro_rules! stay_fields {
 }
 
 // Names by joaat of the message's hashes, but for leanRelative (49e2f424) and switchSpeed (ab3a861c), which are ours.
-// lastStand*, stepUpHelp and stayUpAcc* are carried and do nothing here: off or without effect on flat still ground.
+// lastStand*, stepUpHelp are carried and do nothing here (stayUpAcc* reads in nm.rs): off or without effect on flat still ground.
 stay_fields! {
     bool: ("useForces", use_forces), ("useTorques", use_torques), ("lastStandMode", last_stand_mode), ("velocityBased", velocity_based),
           ("torqueOnlyInAir", torque_only_in_air), ("leanRelative", lean_relative), ("torqueparts", torque_parts),

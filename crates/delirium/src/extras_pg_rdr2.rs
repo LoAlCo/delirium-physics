@@ -442,6 +442,8 @@ pub struct PointGun {
     looking: bool,
     dt: f32,
     ws: [i32; 2],
+    /// R+0x40c: no more recoil on this arm until it's out
+    inhibit: [f32; 2],
     ropes: Vec<(usize, Vec3, Vec3, f32, f32)>,
     pair_off: Vec<(u32, u32)>,
     block: [bool; 2],
@@ -459,7 +461,7 @@ impl PointGun {
             side_t: 0.0, broken_t: 0.0, conn_t: 0.0, conn_for: 0.0, extra: 0.0, turn_t: 0.0, look_t: 0.0, side_pose: 1, fed: 0, g: 1, s: 0,
             probe_hit: [false; 2], fall_rifle: false, fall_support: false, support_on: true, duck_neutral: false, two: false, below: false,
             support_mode: false, look_r: [false, true], connected: false, exists: false, allowed: true, connected_kept: true,
-            new_target: true, yanked: false, pik_limit: 1.15, objects: vec![], looking: false, dt: 1.0 / 60.0, ws: [0; 2], ropes: vec![], pair_off: vec![], block: [false; 2],
+            new_target: true, yanked: false, pik_limit: 1.15, objects: vec![], looking: false, dt: 1.0 / 60.0, ws: [0; 2], inhibit: [0.0; 2], ropes: vec![], pair_off: vec![], block: [false; 2],
             said: 0, out: vec![], fallback: None,
         };
         if fire {
@@ -477,7 +479,57 @@ impl PointGun {
     }
 
     /// The hands' weapon states (left, right): 0 none, 1 pistol, 2 rifle, 3, 4.
+    /// 0x2accc7c: fireWeapon on the arm. States 0 and 4 hold nothing to fire. Past its inhibit clock the recoil goes on the hand, or on the clavicle and the
+    /// hand by split, in the hand's space [P: the weapon's matrix ctx+0x2d00 is the hand's own; no weapon body], and on the other hand when it grips too. Then the
+    /// arm relaxes, and a gripping other arm's four joints take the arm's stiffness by .7, .6, .5, .3. Whatever the clock, the relax restarts.
+    fn fire_rdr2(&mut self, c: &mut Ctx, r: crate::nmrs::FireRec) {
+        let i = r.hand;
+        let state = c.ch.core.arm_state[i];
+        if state == 0 || state == 4 {
+            note(format_args!("fireWeapon: arm {i} state {state}, nothing to fire"));
+            return;
+        }
+        let (l, lo) = (crate::nmshot::limb(i), crate::nmshot::limb(1 - i));
+        let two = self.support_mode && self.gripped(1 - i) && self.arms[1 - i].state == 4;
+        if self.inhibit[i] <= 0.0 {
+            self.inhibit[i] = r.inhibit;
+            let hand = c.b.part(l.p[3]);
+            let d = (hand.m.a * r.direction.x + hand.m.b * r.direction.y + hand.m.c * r.direction.z) * c.dt;
+            let other = c.b.part(lo.p[3]).m.d;
+            let other_gets = |f: Vec3| -> Option<Vec3> {
+                if !two { None } else if r.other > 0.0 && r.other <= 1.0 { Some(f * r.other) } else if r.other < 0.0 { Some(-f * r.other) } else { None }
+            };
+            let hand_f = |f: Vec3| if r.other > 0.0 && r.other <= 1.0 { f * (1.0 - r.other) } else { f };
+            let f = if r.at_clavicle {
+                c.out.impulse.push((l.p[0], c.b.joint_pos(l.e[1]), d * (r.strength * (1.0 - r.split))));
+                d * (r.strength * r.split)
+            } else {
+                d * r.strength
+            };
+            c.out.impulse.push((l.p[3], hand.m.d, hand_f(f)));
+            if let Some(g) = other_gets(f) {
+                c.out.impulse.push((lo.p[3], other, g));
+            }
+            note(format_args!("fireWeapon: recoil {:.1} N s on arm {i}, clavicle {}, the other hand {two}", f.length(), r.at_clavicle));
+        }
+        self.arms[i].relax_t = self.p.relax.0;
+        let k = (1.0 - self.p.relax.1) * self.p.arm_k;
+        c.ch.set_stiffness(k, self.p.arm_d, ["ul", "ur"][i], None);
+        if two {
+            let f = self.arms[1 - i].relax * self.p.arm_k;
+            for (j, m) in lo.e.iter().zip([0.7, 0.6, 0.5, 0.3]) {
+                let (s, d) = (f * m, self.p.arm_d);
+                c.ch.eff[*j].strength = s * s;
+                c.ch.eff[*j].damping = 2.0 * s * d;
+            }
+        }
+    }
+
     fn states(&self, c: &Ctx) -> [i32; 2] {
+        // a registered weapon's state, setWeaponMode's or 0x2a4e830's, over the message's
+        if c.ch.core.weapon_bits != 0 {
+            return c.ch.core.arm_state;
+        }
         let right = match self.p.weapon[1] {
             w @ 0.. => w.min(4),
             _ if c.ch.busy[1] => if c.ch.busy[0] { 2 } else { 1 },
@@ -1587,6 +1639,8 @@ impl PointGun {
     /// §5.1 inputs and the targets update 0x2ae2434.
     fn inputs(&mut self, c: &mut Ctx, dt: f32) {
         self.ws = self.states(c);
+        // what the other behaviours read of the held gun (ctx+0x2ca4, +0x2ce4)
+        c.ch.core.arm_state = self.ws;
         (self.g, self.s) = Self::hands(self.ws);
         self.extra = 0.0;
         // the facing tests, in the incoming pose
@@ -1607,6 +1661,9 @@ impl PointGun {
             } else {
                 self.measure(c);
             }
+        }
+        if let Some(r) = c.ch.core.fire.take() {
+            self.fire_rdr2(c, r);
         }
         self.tw = if self.p.time_warp.0 && dt > 0.0 { ((1.0 / 30.0) / dt * self.p.time_warp.1).sqrt().max(1.0) } else { 1.0 };
         let chest = c.b.part(chest_part());
@@ -1635,6 +1692,8 @@ impl PointGun {
                 let r = a.target - chest.m.d;
                 a.led += (a.vel - chest.v - chest.w.cross(r)) * (self.p.lead * 0.016666 / self.tw);
             }
+            self.inhibit[i] = (self.inhibit[i] - dt).max(0.0);
+            let a = &mut self.arms[i];
             let (t, amount) = (self.p.relax.0, self.p.relax.1);
             a.relax = if t > 0.0 { (1.0 - a.relax_t / t) * amount + (1.0 - amount) } else { 1.0 };
             a.relax_t = (a.relax_t - dt).clamp(0.0, 5.0);
