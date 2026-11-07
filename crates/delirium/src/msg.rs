@@ -320,6 +320,9 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "noSlopeTime", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
         Param { name: "slopeMoveFoot", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
         Param { name: "ankleEquilibrium", kind: Kind::Float, used: true, doc: "RDR2 core only: the balancer's, as RDR2 names it" },
+        Param { name: "sidewaysmovefeet", kind: Kind::Float, used: false, doc: "RDR2: registered and sent; no reader found in the balancer's code" },
+        Param { name: "predictionTimeHip", kind: Kind::Float, used: false, doc: "RDR2: registered and sent; no reader found in the balancer's code" },
+        Param { name: "footslipdamping", kind: Kind::Float, used: false, doc: "RDR2: sent; the handler doesn't take it" },
         Param { name: "footFriction", kind: Kind::Float, used: true, doc: "RDR2 core only: friction scale on the feet while the balancer runs (1)" },
         Param { name: "footFrictionStagger", kind: Kind::Float, used: true, doc: "RDR2 core only: the same with staggerFall on (1)" },
         Param { name: "movingFloor", kind: Kind::Bool, used: true, doc: "RDR2 core only: leans into the floor's acceleration ctx+0xfe0 (test hook RDR2_FLOOR_ACC=x,y,z: nothing moves under him in the room)" },
@@ -707,6 +710,7 @@ pub static MESSAGES: [Message; 30] = [
         Param { name: "fling2LengthMinR", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "fling2LengthMaxR", kind: Kind::Float, used: true, doc: "RDR2 core only" },
         Param { name: "enableDefaultArms", kind: Kind::Bool, used: true, doc: "RDR2 core only (RDR2's shotConfigureArms): the default arms (true)" },
+        Param { name: "?3bfc7305", kind: Kind::Int, used: true, doc: "RDR2 core only: +0x284: the pose source of the default arms' blend (-1, the joints' own)" },
         Param { name: "brace", kind: Kind::Bool, used: true, doc: "RDR2 core only: free arms reach towards the ground the way he moves, else the guard pose (true)" },
         Param { name: "useArmsWindmill", kind: Kind::Bool, used: true, doc: "RDR2 core only: arms windmill when thrown back fast (true)" },
         Param { name: "alwaysReachTime", kind: Kind::Float, used: true, doc: "RDR2 core only: s a hand holds the wound before releaseWound may let it go (0.3)" },
@@ -1632,6 +1636,7 @@ fn set(st: &mut State, msg: &str, name: &str, v: &Value) -> Result<(), Error> {
         ("shot", "fling2LengthMinR") => { let p = &mut st.shot; p.rdr2.fling2_length[1][0] = v.f()?; }
         ("shot", "fling2LengthMaxR") => { let p = &mut st.shot; p.rdr2.fling2_length[1][1] = v.f()?; }
         ("shot", "enableDefaultArms") => { let p = &mut st.shot; p.rdr2.default_arms = v.b()?; }
+        ("shot", "?3bfc7305") => { st.shot.rdr2.arm_source = v.i()?; }
         ("shot", "brace") => { let p = &mut st.shot; p.rdr2.brace = v.b()?; }
         ("shot", "useArmsWindmill") => { let p = &mut st.shot; p.rdr2.use_arms_windmill = v.b()?; }
         ("shot", "alwaysReachTime") => { let p = &mut st.shot; p.rdr2.always_reach_time = v.f()?; }

@@ -551,6 +551,8 @@ pub struct Character {
     /// RDR2 core's joint drive (mod rdr2); false: GTA IV's
     pub rdr2: bool,
     pub busy: [bool; 2],
+    /// RDR2 core: ctx+0x3630: the pose sources by number, as joint frames (0x2a33e1c); empty when that source is off
+    pub pose_src: [Vec<[Vec3; 3]>; 4],
     /// RDR2 core: sit on bodyBalance: noisy elbows (+0x150, cleared by its tick), the joints out of its mask, its target
     pub bb_noisy: bool,
     /// RDR2: a reaction ramps its strength (shot+0x48 under 0.99): bodyBalance's "hit"
@@ -590,6 +592,10 @@ pub struct Character {
 /// RDR2 core: per-character values RDR2's core helpers read (rdr2_core2.md sections 1 and 4).
 #[derive(Clone, Copy, Debug)]
 pub struct CoreState {
+    /// the two hands' weapons (ctx+0x2c70, stride 0x40; matrices ctx+0x2d00, +0x2d40)
+    pub weapon: [WeaponRec; 2],
+    /// shot +0x284, ?3bfc7305: the source of the default arms' zero-pose blend (-1: the joints' own)
+    pub arm_source: i32,
     /// ctx+0x34e8: which hands have a weapon registered, bit 16 left, bit 19 right
     pub weapon_bits: u32,
     /// the shot's side lever for the balancer (bal+0x2fc)
@@ -689,6 +695,39 @@ impl CoreState {
     }
 }
 
+/// The minimum weapon the code runs on. The game's is a body with its own attachment constraint; here a mass on the hand, weighing by the constraint's strength
+/// [G for the mass and for strength as the share of its weight the hand feels]. `saved` +0x24 (-1: none), `soft` +0x38, `to_hand` the gunToHand matrix.
+#[derive(Clone, Copy, Debug)]
+pub struct WeaponRec { pub on: bool, pub to_hand: [Vec3; 3], pub mass: f32, pub strength: f32, pub saved: f32, pub soft: bool }
+
+impl Default for WeaponRec {
+    fn default() -> WeaponRec {
+        WeaponRec { on: false, to_hand: [Vec3::X, Vec3::Y, Vec3::Z], mass: 0.0, strength: 1.0, saved: -1.0, soft: false }
+    }
+}
+
+impl WeaponRec {
+    /// 0x2a47288: the strength saved, and .05.
+    pub fn soften(&mut self) {
+        if self.on && !self.soft {
+            (self.saved, self.strength, self.soft) = (self.strength, 0.05, true);
+        }
+    }
+    /// 0x2a4b400: softened, the saved strength times `k`, at least .05.
+    pub fn scale(&mut self, k: f32) {
+        if self.on && self.soft {
+            self.strength = (k * self.saved).max(0.05);
+        }
+    }
+    /// 0x2a47208: back: 0 stays off, under .05 as it is.
+    pub fn restore(&mut self) {
+        if self.on && self.saved >= 0.0 && (self.saved == 0.0 || self.saved >= 0.05) {
+            self.strength = self.saved;
+        }
+        (self.saved, self.soft) = (-1.0, false);
+    }
+}
+
 /// fireWeapon's parameters (0x2a2f994), scaled and with its direction normalised.
 #[derive(Clone, Copy, Debug)]
 pub struct FireRec { pub hand: usize, pub strength: f32, pub at_clavicle: bool, pub inhibit: f32, pub direction: Vec3, pub split: f32, pub other: f32 }
@@ -728,7 +767,7 @@ impl CoreState {
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { side_lever: None, bcr_state: -1, constraint_arms: false, constraint_legs: false, fire_seen: false, com_was: None, weapon_bits: 0, arm_state: [0; 2], fire: None, elastic: ElasticRec::default(), foot_inverted: [false; 2], arms_held: false, floor_acc: Vec3::ZERO, props: [(-1, 0.0, 0.0); 8], prop_hit: [(-1, bevy_math::Vec3::ZERO, bevy_math::Vec3::ZERO, -1); 4], lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
+        CoreState { weapon: [WeaponRec::default(); 2], arm_source: -1, side_lever: None, bcr_state: -1, constraint_arms: false, constraint_legs: false, fire_seen: false, com_was: None, weapon_bits: 0, arm_state: [0; 2], fire: None, elastic: ElasticRec::default(), foot_inverted: [false; 2], arms_held: false, floor_acc: Vec3::ZERO, props: [(-1, 0.0, 0.0); 8], prop_hit: [(-1, bevy_math::Vec3::ZERO, bevy_math::Vec3::ZERO, -1); 4], lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 
@@ -770,7 +809,7 @@ fn targets(j: &JointDef, e: &Effector) -> [f32; 3] {
 
 impl Character {
     pub fn new(joints: Vec<JointDef>, frames: &[Transform]) -> Character {
-        let mut c = Character { eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], bb_noisy: false, bb_hit: false, bb_off: vec![], bb_target: None, stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, bcr_probe: None, cf_exclude: [false; 2], fow_state: None, core: CoreState::default() };
+        let mut c = Character { pose_src: Default::default(), eff: vec![], joints, rng: (0, 0), rdr2: false, busy: [false; 2], bb_noisy: false, bb_hit: false, bb_off: vec![], bb_target: None, stabilise: None, foot_yaw: [0.0; 2], attached: None, agent: 0, inst_id: 0, mode: 1, block: None, read: vec![], limb: [None; 4], refs: None, support: [-2; 2], up: Vec3::Z, stance_yaw: (crate::nmdbm::CHAR_YAW().1, crate::nmdbm::CHAR_HEAD()), exclude_arms: [false; 2], bcr: None, bcr_probe: None, cf_exclude: [false; 2], fow_state: None, core: CoreState::default() };
         c.seed(0);
         c.eff = (0..c.joints.len()).map(|i| Effector::new(&c.joints[i], c.angle(i, frames))).collect();
         static ONCE: std::sync::Once = std::sync::Once::new();

@@ -1696,6 +1696,8 @@ impl Shot {
 /// RDR2's shot parameters beyond GTA IV's (its defaults). Spine pain and exaggeration are off unless asked for.
 #[derive(Clone, Copy, Debug)]
 pub struct ShotRdr2 {
+    /// +0x284, ?3bfc7305
+    pub arm_source: i32,
     pub exag_duration: f32,
     pub exag_mag: f32,
     pub exag_twist_mag: f32,
@@ -1777,7 +1779,7 @@ pub struct ShotRdr2 {
 
 impl Default for ShotRdr2 {
     fn default() -> ShotRdr2 {
-        ShotRdr2 { exag_duration: 0.0, exag_mag: 1.0, exag_twist_mag: 0.5, exag_undo_rate: 2.5, cpain_start: 0.3, cpain_rate: 2.0,
+        ShotRdr2 { arm_source: -1, exag_duration: 0.0, exag_mag: 1.0, exag_twist_mag: 0.5, exag_undo_rate: 2.5, cpain_start: 0.3, cpain_rate: 2.0,
                    cpain_duration: 0.0, cpain_mag: 1.0, cpain_twist_mag: 0.5, cpain_undo_rate: 0.85, arm_stiffness: 10.0,
                    spine_damping: 1.0, initial_neck_stiffness: 14.0, initial_neck_damping: 1.0, neck_stiffness: 14.0, neck_damping: 1.0,
                    k_mult_on_loose: 0.0, k_mult_4_legs: 0.3, initial_weakness_ramp: 0.4, initial_weakness_zero: 0.0,
@@ -2163,6 +2165,7 @@ impl Shot {
         if self.rd.started {
             self.strength_rdr2(c, dt);
         }
+        c.ch.core.arm_source = self.p.rdr2.arm_source;
         self.run(c, REACT(), Some(|s, _| s.p.rdr2.default_arms && !s.failed()), Some(Shot::arms_enter), Some(Shot::arms_tick),
                  Some(|s, _| s.new_hit || s.failed() || !s.p.rdr2.default_arms), Some(Shot::arms_exit), dt);
         c.module(REACT() as u32);
@@ -2215,6 +2218,23 @@ impl Shot {
 }
 
 // ---- RDR2's default arms (configureArms runner 2, with the RDR2 core), from rdr2_shot_defaultarms.md ----
+
+/// Record +0x28, 0x2a2048c / 0x2a20504: the joint towards its zero pose, or with a source (shot +0x284) towards the pose in that buffer (0x2a7419c).
+fn arm_zero_blend(c: &mut Ctx, j: usize, w: f32) {
+    let src = c.ch.core.arm_source;
+    if src >= 0 && (src as usize) < c.ch.pose_src.len() && !c.ch.pose_src[src as usize].is_empty() {
+        let rows = std::mem::take(&mut c.ch.pose_src[src as usize]);
+        let t = c.ch.incoming_angle(j, &rows);
+        let e = &mut c.ch.eff[j];
+        for k in 0..3 {
+            e.desired[k] += (t[k] - e.desired[k]) * w;
+        }
+        c.ch.pose_src[src as usize] = rows;
+        crate::extras_core_rdr2::trace_once("arm source", || format!("the default arm's blend from pose source {src}"));
+        return;
+    }
+    c.ch.eff[j].blend_to_zero(w);
+}
 
 /// The default arms' state: the brace phase clocks, the windmill timers and which arms windmill, releaseWound's
 /// hysteresis timers and released hands, the hold blend's clavicle, shoulder and elbow states per arm, and the
@@ -2416,9 +2436,9 @@ impl Shot {
         let mut ret = false;
         if v < 0.5 {
             for j in [l.e[0], l.e[1], l.e[2]] {
-                c.ch.eff[j].blend_to_zero(1.0 - 2.0 * v);
+                arm_zero_blend(c, j, 1.0 - 2.0 * v);
             }
-            c.ch.eff[l.e[3]].blend_to_zero(1.0);
+            arm_zero_blend(c, l.e[3], 1.0);
             ret = window;
         }
         let s = (11.0 * u).max(1.0);

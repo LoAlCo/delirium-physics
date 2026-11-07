@@ -869,6 +869,22 @@ impl Agent {
 
     /// RDR2 core: StayUpright's message fills one set, or both without a side (0x2a5ac10): its law in place of GTA IV's
     /// stabiliser. `on` false clears useForces, useTorques and lastStandMode.
+    /// RDR2 core: shot +0x284.
+    pub fn set_arm_source(&mut self, k: i32) {
+        if let Some(ch) = self.ch.as_mut() {
+            ch.core.arm_source = k;
+        }
+    }
+
+    /// RDR2 core: ctx+0x3630[k]: this pose as pose source k (the game's animation buffers).
+    pub fn store_pose_source(&mut self, k: usize) {
+        let frames: Vec<Transform> = self.doll.frames().collect();
+        let rows = crate::nmrs::incoming_rows(&self.doll.links, &frames);
+        if let Some(s) = self.ch.as_mut().and_then(|ch| ch.pose_src.get_mut(k)) {
+            *s = rows;
+        }
+    }
+
     pub fn stay_upright_rdr2(&mut self, on: bool, side: Option<usize>, mut rec: crate::nmdbm_rdr2::StayUpright) {
         if !on {
             (rec.use_forces, rec.use_torques, rec.last_stand_mode) = (false, false, false);
@@ -2584,6 +2600,15 @@ impl Agent {
             if let Some(ch) = self.ch.as_mut() {
                 if !self.extras.on.iter().any(|(n, _)| *n == "balancerCollisionsReaction") {
                     ch.core.bcr_state = -1;
+                }
+                // the weapon's weight on its hand, by the attachment's strength (minimum weapon: see `WeaponRec`)
+                for i in 0..2 {
+                    let w = ch.core.weapon[i];
+                    if w.on && w.mass > 0.0 {
+                        let k = crate::nmshot::limb(i).p[3];
+                        self.doll.impulse(k, frames[k].translation, Vec3::Z * (-9.8 * w.mass * w.strength.min(1.0) * dt));
+                        crate::extras_core_rdr2::trace_once("weapon weight", || format!("the weapon's weight on hand {i}: {:.1} kg, strength {:.2}", w.mass, w.strength));
+                    }
                 }
                 // 0x2a39ee0, the spin push: an object in touch with the parts applyTo names drags them round: the velocity difference at the contact, capped at
                 // maxVelocity, times spin, as a force at the contact and its opposite through the part's centre: a couple. RDR2 goes by the object's type (ctx+0x10f0): any obstacle here

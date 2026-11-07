@@ -10328,6 +10328,11 @@ fn headless(mut sim: Sim, n: usize) {
             }
         }
         // test hook: RDR2_HOLD_INCOMING=<frame> makes the pose at that frame the incoming animation from then on
+        // test hook: RDR2_POSE_SRC=<frame>:<k> keeps the pose at that frame as pose source k (0x2a33e1c's buffers)
+        if std::env::var("RDR2_POSE_SRC").ok().and_then(|s| { let (f, k) = s.split_once(':')?; Some((f.parse::<usize>().ok()?, k.parse::<usize>().ok()?)) }).is_some_and(|(f, _)| f == i) {
+            let k = std::env::var("RDR2_POSE_SRC").unwrap().split_once(':').unwrap().1.parse().unwrap_or(0);
+            sim.agent.store_pose_source(k);
+        }
         if hold_incoming == Some(i) {
             sim.agent.incoming = sim.agent.doll.frames().collect();
         }

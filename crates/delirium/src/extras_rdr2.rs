@@ -151,6 +151,7 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "flatStiffness", kind: Kind::Float, used: true, doc: "the turn's strength, N m per rad (12; 0: off)" },
     ] },
     Message { name: "setFallingReaction", params: &[
+        Param { name: "reachLengthMultiplier", kind: Kind::Float, used: false, doc: "RDR2: sent; no handler takes it" },
         Param { name: "stopManual", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: a floor on the slope factor, over 0 turning the slope block on (0)" },
         Param { name: "stopOnSlopes", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the time after which slopes count (10000)" },
         Param { name: "blendkneerate", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the knees' rate (10000)" },
@@ -207,6 +208,7 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "stiffness", kind: Kind::Float, used: true, doc: "his stiffness (10)" },
     ] },
     Message { name: "reachForWound", params: &[
+        Param { name: "?0a09aa12", kind: Kind::Float, used: false, doc: "RDR2: sent; no handler takes it" },
         Param { name: "moveInjuredArm", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x80: a hit arm goes to a random place on the spine itself (false)" },
         Param { name: "alwaysReach", kind: Kind::Bool, used: true, doc: "RDR2 core: +0x165: no distance limit on a leg wound, and lying on a side doesn't keep a hand away (false)" },
         Param { name: "movablegeneralscales", kind: Kind::Float, used: true, doc: "RDR2 core: +0x5c: with the next, how long a reach lasts on the ground; the name misleads (0.2)" },

@@ -1427,7 +1427,11 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                 }
             }
             let mut hits: Vec<(Vec3, Vec3)> = kept.iter().map(|&(g, i)| (groups[g].1[i].ground + groups[g].1[i].n * WORLD_MARGIN(), groups[g].1[i].n)).collect();
-            poly.clamp(&mut hits, WORLD_MARGIN());
+            if rage.is_some() {
+                poly.clamp_rage(&mut hits);
+            } else {
+                poly.clamp(&mut hits, WORLD_MARGIN());
+            }
             for (&(g, i), (at, n)) in kept.iter().zip(hits) {
                 let r = &mut groups[g].1[i];
                 (r.ground, r.n) = (at - n * WORLD_MARGIN(), n);

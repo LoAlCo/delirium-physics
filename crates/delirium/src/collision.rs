@@ -117,6 +117,34 @@ pub struct Poly {
 }
 
 impl Poly {
+    /// RDR2 core: 0x2821184's internal-edge normals. The game's triangles store each edge's neighbour angle as a byte through the table at .data 0x364d580 (cos(i pi/2/127));
+    /// each edge's normal is the face's times that cosine plus the edge's outward times the sine. The law the bytes encode comes out as the neighbour's normal, which the
+    /// room's adjacency has [P]: difference: exact, not rounded to the table's 255 steps. A contact normal outside the three (0x2917cdac: its barycentric weights) loses its negative parts
+    /// [P: the tail of 0x2821184 past the first branch not read through]. A free edge keeps the face's normal, as its byte (0xff) masks that row.
+    pub fn clamp_rage(&self, hits: &mut [(Vec3, Vec3)]) {
+        let en: Vec<Vec3> = self.edges.iter().take(3).map(|e| e.map_or(self.n, |x| x.2)).collect();
+        if en.len() < 3 || self.edges[3].is_some() {
+            return;
+        }
+        let m = bevy_math::Mat3::from_cols(en[0], en[1], en[2]);
+        let det = m.determinant();
+        if det.abs() < 1e-5 {
+            return;
+        }
+        let inv = m.inverse();
+        for (_, n) in hits.iter_mut() {
+            let w = inv * *n;
+            if w.min_element() >= 0.0 {
+                continue;
+            }
+            let v = en[0] * w.x.max(0.0) + en[1] * w.y.max(0.0) + en[2] * w.z.max(0.0);
+            if v.length_squared() > 1e-8 {
+                *n = v.normalize();
+                crate::extras_core_rdr2::trace_once("edge normal", || "contact normal held to the triangle's edge normals (0x2821184)".to_string());
+            }
+        }
+    }
+
     pub fn clamp(&self, hits: &mut [(Vec3, Vec3)], margin: f32) {
         let tol = margin * margin * delirium_data::kv!(69);
         let own = self.frame.and_then(|f| f.own.map(|o| (f, o.0)));
