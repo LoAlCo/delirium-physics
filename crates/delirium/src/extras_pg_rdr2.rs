@@ -523,6 +523,7 @@ impl PointGun {
         let k = (1.0 - self.p.relax.1) * self.p.arm_k;
         c.ch.set_stiffness(k, self.p.arm_d, ["ul", "ur"][i], None);
         if two {
+            crate::extras_core_rdr2::trace_first("fireWeapon: the other arm's four joints softened, .7, .6, .5, .3");
             let f = self.arms[1 - i].relax * self.p.arm_k;
             for (j, m) in lo.e.iter().zip([0.7, 0.6, 0.5, 0.3]) {
                 let (s, d) = (f * m, self.p.arm_d);

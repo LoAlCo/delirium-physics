@@ -10328,6 +10328,18 @@ fn headless(mut sim: Sim, n: usize) {
             }
         }
         // test hook: RDR2_HOLD_INCOMING=<frame> makes the pose at that frame the incoming animation from then on
+        // test hook: RDR2_TURN=<frame>:ax,ay,az,deg,dz turns the whole doll about its pelvis and lifts it, still (to reach what needs him upside down, on a side or deep)
+        if let Some((f, a)) = std::env::var("RDR2_TURN").ok().as_deref().and_then(|s| s.split_once(':')).map(|(f, a)| (f.parse::<usize>().unwrap_or(usize::MAX), a.to_string())) {
+            let v: Vec<f32> = a.split(',').filter_map(|x| x.parse().ok()).collect();
+            if f == i && v.len() == 5 {
+                let frames: Vec<Transform> = sim.agent.doll.frames().collect();
+                let q = Quat::from_axis_angle(Vec3::new(v[0], v[1], v[2]).normalize_or(Vec3::X), v[3].to_radians());
+                let c = frames[0].translation;
+                for (k, t) in frames.iter().enumerate() {
+                    sim.agent.doll.set_body(k, c + q * (t.translation - c) + Vec3::Z * v[4], q * t.rotation, Vec3::ZERO, Vec3::ZERO);
+                }
+            }
+        }
         // test hook: RDR2_POSE_SRC=<frame>:<k> keeps the pose at that frame as pose source k (0x2a33e1c's buffers)
         if std::env::var("RDR2_POSE_SRC").ok().and_then(|s| { let (f, k) = s.split_once(':')?; Some((f.parse::<usize>().ok()?, k.parse::<usize>().ok()?)) }).is_some_and(|(f, _)| f == i) {
             let k = std::env::var("RDR2_POSE_SRC").unwrap().split_once(':').unwrap().1.parse().unwrap_or(0);

@@ -1918,6 +1918,9 @@ impl Ragdoll {
     fn push_block_rage(b: &Block, gap: f32, h: f32) -> Block {
         let e = -gap - 0.007;
         // (.05 / K on the impulse, 0x28a5b30: .05 on the row's own move)
+        if e * 0.25 > 0.05 {
+            crate::extras_core_rdr2::trace_once("position cap", || format!("the position row's cap: {:.3} m deep past .007 moves .05", e));
+        }
         let t = (if e > 0.0 { (e * 0.25).min(0.05) } else { e }) / h;
         let g = b.g.map(|g| G7 { target: Vec3::new(t, 0.0, 0.0), ..g });
         Block { target: DVec3::new(t as f64, 0.0, 0.0), lambda: DVec3::ZERO, held: None, scale: DVec3::ONE, g, ..b.clone() }
