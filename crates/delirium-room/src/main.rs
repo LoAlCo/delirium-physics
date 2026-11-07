@@ -10048,6 +10048,10 @@ impl Sim {
             .map(|(p, a)| (a, &hero[..], ped_build(build, bench, crowd, p)))
             .chain(doll).enumerate().map(|(i, (a, o, b))| (a, i, b, &car[..], o)).collect();
         Agent::step_group(&mut all, &self.world, 1.0 / 60.0, &mut self.group, &mut |_, _, _| {});
+        // RDR2 core: a new horse starts on the game's own `stand` set, from the player's physicstasks if they have it
+        if self.rdr2_core && self.horse.as_mut().is_some_and(|h| h.wants_task()) {
+            self.horse_task("stand");
+        }
         if let Some(h) = self.horse.as_mut() {
             // ridden, Homer's body doesn't push on it (held in the seat, he'd act as if he weighed everything)
             let riding = self.riding && self.agent.extras.on.iter().any(|(n, _)| *n == "rdr2Sit");
@@ -10188,8 +10192,18 @@ fn headless(mut sim: Sim, n: usize) {
                 eprintln!("horse: no setting {kv:?}");
             }
         }
+        // HORSE_LIFT=<m>: it starts that far up, falling
+        if let Some(up) = std::env::var("HORSE_LIFT").ok().and_then(|v| v.parse::<f32>().ok()) && let Some(h) = sim.horse.as_mut() {
+            let fr: Vec<Transform> = h.doll.frames().collect();
+            for (k, f) in fr.iter().enumerate() {
+                h.doll.set_body(k, f.translation + Vec3::Z * up, f.rotation, Vec3::ZERO, Vec3::ZERO);
+            }
+        }
         // HORSE_TASK=<set>: the set from the player's physicstasks (RDR2_TUNE_DIR), for the RDR2 core; set after HORSE_SET
         if let Ok(t) = std::env::var("HORSE_TASK") {
+            if let Some(h) = sim.horse.as_mut() {
+                h.task_asked = true;
+            }
             sim.horse_task(&t);
             for kv in std::env::var("HORSE_SET").unwrap_or_default().split(',').filter_map(|kv| kv.split_once('=')) {
                 if let Some(h) = sim.horse.as_mut() {
@@ -10227,6 +10241,10 @@ fn headless(mut sim: Sim, n: usize) {
                     let at = sim.agent.doll.frames().nth(10).map_or(Vec3::ZERO, |f| f.translation);
                     sim.agent.doll.impulse(10, at, Vec3::Y * std::env::var("HORSE_PUSH").ok().and_then(|v| v.parse().ok()).unwrap_or(120.0));
                 }
+            }
+            // HORSE_OFF=<frame>: the RDR2 core goes off then (the behaviour's deactivate)
+            if std::env::var("HORSE_OFF").ok().and_then(|v| v.parse::<usize>().ok()) == Some(i) {
+                sim.button("rdr2 core");
             }
             sim.tick();
             // the horse's numbers to stdout as hex (the bit patterns show a NaN), and what the check asks
@@ -11503,6 +11521,13 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                         if ui.button("RDR2's defaults").clicked() {
                             h.r = Default::default();
                         }
+                        ui.horizontal(|ui| {
+                            for (name, id) in [("stand", "stand"), ("walk", "walk"), ("09eb9d90", "09eb9d90"), ("1501a19f", "1501a19f"), ("d58ad8a6", "d58ad8a6")] {
+                                if ui.button(name).clicked() {
+                                    pressed = Some(format!("#horse task {id}"));
+                                }
+                            }
+                        });
                     });
                 }
             });

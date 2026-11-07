@@ -197,6 +197,7 @@ pub struct Horse {
     core: Option<Box<rdr2::Core>>,
     rdr2_hits: Vec<(usize, Vec3, Vec3)>,
     pub rider: Option<(Vec3, Vec3, f32)>,
+    pub task_asked: bool,
     centres: Vec<Vec3>,
     /// each part's joint's muscle stiffness and force caps, from horse.xml
     rig_ms: Vec<f32>,
@@ -417,7 +418,7 @@ impl Horse {
         let lefts = frames.iter().map(|f| f.rotation.inverse() * (turn * Vec3::Y)).collect();
         Ok(Horse { build, doll, targets, muscles, health: HEALTH, legs: [0.0; 4], dead: false, sunk: 0.0, kept: Default::default(),
                    stand, fwd, ups, lefts, q: Quadruped::default(), fell: false, since_hit: f32::MAX, down: 0.0,
-                   pose: frames.clone(), held: true, pushes: vec![], rdr2: false, r: Default::default(), core: None, rdr2_hits: vec![], rider: None,
+                   pose: frames.clone(), held: true, pushes: vec![], rdr2: false, r: Default::default(), core: None, rdr2_hits: vec![], rider: None, task_asked: false,
                    centres, rig_ms, rig_caps, spine_axis, spine_cg })
     }
 
@@ -595,6 +596,11 @@ impl Horse {
         a || b
     }
 
+    /// The sets' start, asked for once a horse is under the RDR2 core (`Sim::tick`).
+    pub fn wants_task(&mut self) -> bool {
+        !std::mem::replace(&mut self.task_asked, true)
+    }
+
     /// A set from the player's physicstasks, for RDR2's core: `quadrupedbase` (a start reloads the defaults first; the
     /// handler 0x2a6bcd8), ?e35a5d1a and stayUpright. Says what it took and what's left; setOpposeGravity does nothing on
     /// a quadruped (0x2a45344).
@@ -613,6 +619,9 @@ impl Horse {
                 }
                 let list: Vec<(u32, Val)> = m.params.iter().map(|p| (p.hash, p.val.clone())).collect();
                 let left = self.r.message(&list);
+                if std::env::var_os("RDR2_TRACE").is_some() {
+                    eprintln!("quadruped 0x2a6bcd8: the handler: {} values, {} left", m.params.len(), left.len());
+                }
                 said.push(format!("quadrupedbase: {} values{}", m.params.len(), if left.is_empty() { String::new() } else { format!(", not the behaviour's: {left:x?}") }));
             } else if m.hash == 0xe35a5d1a {
                 let Some(limb) = num(m, 0x4e70182d) else { continue };

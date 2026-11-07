@@ -61,6 +61,8 @@ const TAIL_MASK: u32 = 0x410;
 const TAIL_FRICTION: f32 = 0.01;
 /// The hold on a hoof's contact, s.
 const HOLD: f32 = 0.025;
+/// The stiffness 0x2ae11f8 gives the chain in a flail (0x3321e28).
+const FLAIL_STIFF: f32 = 14.0;
 /// ctx+0x2bfc on the reference horse (0x2a4e1dc).
 const LEG_LEN: f32 = 1.0;
 
@@ -587,7 +589,18 @@ impl Horse {
         let fs = p!(self.r, "frictionScale");
         let fric: Vec<(usize, f32)> = parts_of(HOOF_MASK).map(|k| (k, fs)).chain(parts_of(TAIL_MASK).map(|k| (k, TAIL_FRICTION))).collect();
         self.doll.set_part_scales(&fric, &[]);
+        // angVelScale on its mask, once (0x2a4b1ac)
+        let scale = p!(self.r, "angVelScale");
+        if (scale - 1.0).abs() >= 1.192_092_9e-7 {
+            for (k, f) in fr.iter().enumerate() {
+                let (v, w) = self.doll.vel(k);
+                self.doll.set_body(k, f.translation, f.rotation, v, w * scale);
+            }
+            say!(c, "0x2a4b1ac", "the parts' spin scaled {scale}");
+        }
         if tr {
+            eprintln!("quadruped 0x2abf7dc: ctor's defaults: blend 1, H unit 1, seeds {:.1} {:.1}", c.seed[0], c.seed[1]);
+            eprintln!("quadruped 0x2acea44: reset: legs stance, gait -1, last leg {}, widths {:?}", c.last_leg, c.width);
             let sole: Vec<String> = (0..4).map(|i| { let l = c.to_local(c.legs[i].sole); format!("({:.3} {:.3} {:.3})", l.x, l.y, l.z) }).collect();
             let y = fr[MID].rotation * self.spine_axis;
             eprintln!("quadruped 0x2ad4518: activate: H {h:.3}, mass {m:.1} (S {:.3}), soles in the frame {}, Spine2's second axis along a {:.3}, along b {:.3}, along c {:.3}", c.scale, sole.join(" "), y.dot(rows[0]), y.dot(rows[1]), y.dot(rows[2]));
@@ -854,7 +867,7 @@ impl Horse {
 
         // stepping
         if c.free || (c.state == 1 && c.out_t > 0.0) {
-            self.step_trigger(&mut c, &pv, look, rows, vel);
+            self.step_trigger(&mut c, &pv, look, vel);
         } else if c.state == 0 && p!(pv, "step") != 0.0 && !any_step && p!(pv, "restepdistance") > 0.0 {
             let u = c.u;
             let far = (0..4).map(|i| {
@@ -913,8 +926,8 @@ impl Horse {
                 false
             };
             if scrabble {
-                request = Some((self.scrabble_target(&mut c, i, rows), None));
-                hooves_f[i] = p!(pv, "0x1f3617d5");
+                request = Some((self.scrabble_target(&mut c, i), None));
+                hooves_f[i] = 0.1;
             } else if c.state == 4 {
                 // nothing asked
             } else if ((c.state == 2 && !c.free) || c.state == 3) && c.legs[i].state != 0 {
@@ -976,9 +989,10 @@ impl Horse {
         let on_fire = p!(pv, "OnFire") != 0.0;
         let writhes = (p!(pv, "Writhe") != 0.0 || (p!(pv, "writheonground") != 0.0 && c.state == 4)) && !c.spine_gone();
         if writhes {
-            self.writhe(&mut c, &pv, &fr, &mut chain, dt);
+            self.writhe(&mut c, &pv, &fr, &mut chain);
         }
         // the head (0x2ade20c), or the free fall's flail
+        let mut flail_on = false;
         if !c.free && !on_fire {
             let lift = p!(pv, "alwayslifthead") != 0.0 || c.state == 2 || c.state == 3 || (c.state == 4 && !writhes);
             if lift {
@@ -990,18 +1004,20 @@ impl Horse {
                 c.flail_sign = -c.flail_sign;
                 c.flail = c.rand(0) * 3.0 - 1.0;
             }
-            let bend = c.flail + 0.3;
-            let side = c.flail_sign * 3.0;
+            let spine = c.flail + 0.3;
+            let (side, twist) = (c.flail_sign, c.flail_sign * 3.0);
+            flail_on = true;
             // 0x2ae0318, 0x2ae074c: the spine's bend over B, C, D; the neck's over E..H (and 0x2ae11f8's one stiffness)
             for (i, x) in chain.iter_mut().enumerate().skip(1) {
                 if let Some(x) = x {
-                    let n = if i < 4 { 3.0 } else { 4.0 };
-                    *x = Vec3::new(bend / n, side / n, 0.0);
+                    let (n, lean) = if i < 4 { (3.0, spine) } else { (4.0, c.flail) };
+                    let mid = self.centres.get(CHAIN[i]).copied().unwrap_or(Vec3::ZERO);
+                    *x = Vec3::new(lean / n - mid.x, -(side / n - mid.y), twist / n - mid.z);
                 }
             }
-            say!(c, "0x2ae0318", "the spine bends {:.3}/3 each", bend);
-            say!(c, "0x2ae074c", "the neck bends {:.3}/4 each", bend);
-            say!(c, "0x2ae11f8", "one stiffness on all eight");
+            say!(c, "0x2ae0318", "the spine bends {:.3}, {:.3}, {:.3} over three", spine, side, twist);
+            say!(c, "0x2ae074c", "the neck bends {:.3}, {:.3}, {:.3} over four", c.flail, side, twist);
+            say!(c, "0x2ae11f8", "one stiffness on all eight, {FLAIL_STIFF}");
         }
         for (i, &k) in CHAIN.iter().enumerate() {
             if let (Some(x), Limit::Bone { pf, cf, .. }) = (chain[i], self.build.parts[k].limit) {
@@ -1059,6 +1075,10 @@ impl Horse {
             }
             c.was_state = c.state;
         }
+        if c.tr && (c.t * 60.0).round() as i32 % 60 == 0 {
+            let s: Vec<String> = (0..4).map(|i| { let l = c.to_local(c.legs[i].sole); let g = c.to_local(c.to_world(c.legs[i].target)); format!("{}{} ({:+.2} {:+.2} {:+.2})>({:+.2} {:+.2})", if c.legs[i].planted { 'P' } else { '-' }, c.legs[i].state, l.x, l.y, l.z, g.y, g.z) }).collect();
+            eprintln!("sample t {:.0} st {} up {:.3} m {:.3} com {:.2} {:.2} {:.2} v {:.3} w {:.3} {}", c.t, c.state, a.dot(w), m, com.x, com.y, com.z, speed, spin, s.join(" "));
+        }
         // stayUpright (0x2a59608 → 0x2a5a238)
         if !self.dead {
             self.stay_upright(&mut c, &pv, &fr, com, omega, rows, vel, dt, &mut torque);
@@ -1088,7 +1108,7 @@ impl Horse {
                     (leg_st[i] * kk, leg_d)
                 }
             } else if CHAIN.contains(&k) && k != CHAIN[0] {
-                (c.fs2 * sk, sd)
+                if flail_on { (FLAIL_STIFF * kk, p!(pv, "spineDamping")) } else { (c.fs2 * sk, sd) }
             } else {
                 (own, ratio)
             };
@@ -1317,7 +1337,7 @@ impl Horse {
     }
 
     /// The step trigger (0x2acebbc).
-    fn step_trigger(&self, c: &mut Core, pv: &Params, look: Vec3, rows: [Vec3; 3], vel: Vec3) {
+    fn step_trigger(&self, c: &mut Core, pv: &Params, look: Vec3, vel: Vec3) {
         if c.legs.iter().any(|l| l.state == 1) {
             return;
         }
@@ -1371,7 +1391,6 @@ impl Horse {
         if weak > 0.0 {
             c.fl = (c.fl - weak).max(5.0 / p!(pv, "legStiffness"));
         }
-        let _ = rows;
         say!(c, "0x2acebbc", "leg {leg} with {pair:?}, gait {}, vector {d:.3}", c.gait);
     }
 
@@ -1434,14 +1453,14 @@ impl Horse {
         let height = p!(pv, "stepheightscale");
         let lg = &mut c.legs[i];
         let mut lift = 0.0;
-        let mut done = false;
+        let done;
         if t < lg.end {
             let d = Vec3::new(0.0, f.y - target.y, f.z - target.z).length().min(lg.left);
             lg.left = d;
             lift = (1.0 - (t - lg.start) / (lg.end - lg.start)) * height * d.clamp(0.0, 0.15) * 6.666_666_5;
             done = d < 0.03 || ((t - lg.start) > (lg.end - lg.start) * 0.5 && lg.planted && d < 0.1);
         } else {
-            done = true || done;
+            done = true;
         }
         if done {
             lg.state = 0;
@@ -1463,16 +1482,16 @@ impl Horse {
         (to, lead)
     }
 
-    /// 0x2ae324c: the hoof on its circle.
-    fn scrabble_target(&self, c: &mut Core, i: usize, rows: [Vec3; 3]) -> Vec3 {
-        let [a, b, cc] = rows;
+    /// 0x2ae324c: the hoof on its circle: below the hip along the frame's row a; a radius along row a turned about
+    /// row b by the phase, the legs a quarter turn apart.
+    fn scrabble_target(&self, c: &mut Core, i: usize) -> Vec3 {
+        let [a, b, _] = c.rows;
         let s = c.sigma;
         let centre = c.legs[i].hip - a * (0.8 + 0.2 * s);
         let r = 0.2 + 0.18 * (1.0 - s);
         let th = c.phase + i as f32 * FRAC_PI_2;
-        let _ = b;
         say!(c, "0x2ae324c", "leg {i}: radius {r:.3}, angle {th:.3}");
-        centre + (cc * th.cos() + a * th.sin()) * r
+        centre + Quat::from_axis_angle(b, th) * a * r
     }
 
     /// 0x2a41764 over a mask of `CHAIN`: `frac`/n of the way for each.
@@ -1488,7 +1507,7 @@ impl Horse {
     /// 0x2a42b64: the joint's own z axis (in its parent's frame) toward `dir`, by `share`.
     fn point_joint(&self, fr: &[Transform], chain: &mut [Option<Vec3>], i: usize, dir: Vec3, share: f32) {
         let k = CHAIN[i];
-        let (Limit::Bone { pf, cf, .. }, Some(p)) = (self.build.parts[k].limit, self.build.parts[k].parent) else { return };
+        let (Limit::Bone { pf, .. }, Some(p)) = (self.build.parts[k].limit, self.build.parts[k].parent) else { return };
         if chain[i].is_none() {
             return;
         }
@@ -1500,9 +1519,8 @@ impl Horse {
     }
 
     /// The writhe (0x2aca3e4): two noise angles across the frame; the seven joints of 0x709822.
-    fn writhe(&self, c: &mut Core, pv: &Params, fr: &[Transform], chain: &mut [Option<Vec3>], dt: f32) {
+    fn writhe(&self, c: &mut Core, pv: &Params, fr: &[Transform], chain: &mut [Option<Vec3>]) {
         let x = c.writhe_t * p!(pv, "writhespeed");
-        let _ = dt;
         let (yaw, pit) = ((noise(x, c.seed[0]) + 0.5) * PI - FRAC_PI_2, (noise(x, c.seed[1]) + 0.5) * PI - FRAC_PI_2);
         let w = Vec3::Z;
         let e = c.rows[2].cross(w).normalize_or(Vec3::X);
@@ -1563,12 +1581,13 @@ impl Horse {
                 say!(c, "0x2ac3f28 yaw", "{y:.1} N m");
             }
         }
+        // about the flat long axis, toward the way it should face, and only that way
         let wc = omega.dot(ch);
-        let gain = p!(pv, "0x84cf43be");
         let lim = p!(pv, "0x65b9a730");
-        let rate = ((gain * ch.dot(flat(rows[1], w, 0.0).cross(w)).signum() * 0.0 + gain * rows[1].dot(w) - wc) / dt).clamp(-lim, lim);
+        let cd = ch.dot(dh);
+        let rate = ((p!(pv, "0x84cf43be") * cd - wc) / dt).clamp(-lim, lim);
         let t = rate * k * c.scale * c.scale * 500.0 * c.fade[0];
-        if t * wc <= 0.0 {
+        if (cd <= 0.0 && t <= 0.0) || (cd > 0.0 && t >= 0.0) {
             for p in PUSHED {
                 torque[p] += ch * t;
             }
@@ -1667,13 +1686,28 @@ impl Horse {
         !self.dead && self.core.as_ref().is_none_or(|c| c.state < 2)
     }
 
-    /// deactivate (0x2ad5514) with the dtor (0x2abfb04): its state goes.
+    /// deactivate (0x2ad5514) with the dtor (0x2abfb04): its state goes, and all it changed: the solver's rules, the
+    /// drive, the friction and the hocks' moving limits.
     pub(super) fn stop_rdr2(&mut self) {
         if let Some(c) = self.core.take() {
             if c.tr {
                 eprintln!("quadruped 0x2ad5514: deactivate at {:.2} s", c.t);
+                eprintln!("quadruped 0x2abfb04: its state freed");
+            }
+            for r in &c.rig {
+                let k = LEGS[r.row][2];
+                if let Limit::BoneHinge { pf, cf, .. } = self.build.parts[k].limit {
+                    self.build.parts[k].limit = Limit::BoneHinge { pf, cf, lo: r.hock.lo, hi: r.hock.hi };
+                }
             }
         }
+        // it stays a ragdoll, where it is
+        self.held = false;
+        self.fell = true;
+        self.sunk = self.sunk.max(1.0);
+        self.doll.nm_first = false;
+        self.kept.rigid.clear();
+        self.doll.set_part_scales(&[], &[]);
     }
 }
 
