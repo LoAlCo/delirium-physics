@@ -4173,6 +4173,10 @@ impl Sim {
     }
 
     fn tie(&mut self, pin: Option<Vec3>, all: bool) {
+        // the drag is on the RDR2 horse, whose part numbers aren't Homer's
+        if self.grab.as_ref().is_some_and(|g| g.pulling && g.horse) {
+            return self.say("room  lines tie Homer, not the horse".into());
+        }
         if let Some(g) = self.grab.take_if(|g| g.pulling) {
             let Some(f) = self.agent.doll.frames().nth(g.part) else { return };
             let at = f.translation + f.rotation * g.local;
