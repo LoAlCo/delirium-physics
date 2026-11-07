@@ -581,7 +581,7 @@ enum Kind {
 /// RDR2 core: a limit that isn't the joint's own: Rage's rotation limit constraint (0x2a3bc68 -> 0x288e264, type 0xb), its rows in 0x289c9d4 -> 0x28af29c: a twist window
 /// `lo..hi`, breaking strength (base +0x28), past the window the velocity row closes `k` of the error over the step (0: the joint limit's own law), the position row `soft` past .03 (.5 is the joint's too).
 #[derive(Clone, Copy, Debug)]
-pub struct LimitRow { pub lo: f32, pub hi: f32, pub strength: f32, pub soft: f32, pub k: f32 }
+pub struct LimitRow { pub lo: f32, pub hi: f32, pub strength: f32, pub breaks: bool, pub blend: f32, pub soft: f32, pub k: f32 }
 
 #[derive(Clone, Copy, Debug)]
 struct Joint {
@@ -1312,7 +1312,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
               seen_w: Option<&Vec3>, seen_r: Option<&[Vec3; 3]>, held: &mut Vec<Held>, careful: bool, rage: Option<RageMeet>) {
     let bw = xw;
     if rage.is_some() {
-        rage_refresh(world, held, tm, bw);
+        rage_refresh(world, held, shape, tm, bw);
     }
     let met = std::cell::RefCell::new(Vec::<u32>::new());
         let last = seen.map_or(x, |s| s.0);
@@ -1417,19 +1417,26 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                         None => { groups.push((new.inst, vec![])); groups.len() - 1 }
                     };
                     if let (Some(rm), Some(tc)) = (rage, tc) {
-                        if let Some(i) = rage_hold(&mut groups[g].1, new) {
+                        let tri = world.tri_of(poly.first);
+                        let law = |h: Held| match tri {
+                            Some(t) => {
+                                let at = h.ground + h.n * WORLD_MARGIN();
+                                poly.edge_law(t, at, h.n, WORLD_MARGIN(), true, false).map(|n| Held { n, ground: at - n * WORLD_MARGIN(), ..h })
+                            }
+                            None => Some(h),
+                        };
+                        let turn = rage_round(&shape).then(|| (seen.map_or(Mat3::IDENTITY, |s| s.1.transpose() * tm), Mat3::IDENTITY));
+                        if let Some(i) = law(new).and_then(|h| rage_hold(&mut groups[g].1, h, turn)) {
                             kept.push((g, i));
                         }
-                        rage_perturb(rm, &shape, tm, xw, o, tc, new, &mut groups[g].1, &mut kept, g);
+                        rage_perturb(rm, &shape, tm, xw, o, tc, new, &mut groups[g].1, &mut kept, g, &law, turn);
                     } else if let Some(i) = hold(&mut groups[g].1, new) {
                         kept.push((g, i));
                     }
                 }
             }
             let mut hits: Vec<(Vec3, Vec3)> = kept.iter().map(|&(g, i)| (groups[g].1[i].ground + groups[g].1[i].n * WORLD_MARGIN(), groups[g].1[i].n)).collect();
-            if rage.is_some() {
-                poly.clamp_rage(&mut hits);
-            } else {
+            if rage.is_none() {
                 poly.clamp(&mut hits, WORLD_MARGIN());
             }
             for (&(g, i), (at, n)) in kept.iter().zip(hits) {
@@ -1477,7 +1484,64 @@ struct RageMeet { iters: u32, moving: bool }
 /// one contact a step: the one slid furthest if that's over 2 cm along the surface, else the most separated if that's over 4 cm. So a corner that
 /// lifts stays held, its row inactive, which GTA IV's (all past the margin go, at once) didn't. Whole manifolds go with their pair, by `met`.
 /// 0x285b248, which can spare a slid contact sitting on its triangle, isn't followed [P].
-fn rage_refresh(world: &Collision, held: &mut Vec<Held>, tm: Mat3, bw: Vec3) {
+#[derive(Clone, Copy)]
+enum RageElem {
+    Part(gjk::Shape, Mat3, Vec3),
+    Tri([Vec3; 3]),
+}
+
+impl RageElem {
+    /// The bound's slot +0xa0: the closest point on its surface to `p`, and the direction from `p` to it. On a triangle 0x1e4f44c, none at no distance; on a capsule, sphere or box
+    /// 0x2874aec, 0x2874be4 or 0x282fb14, a 1e-4 sphere asked of the shape (0x28ecb9c GJK; the box's closed form the same answer).
+    fn closest(&self, p: Vec3, axis: Vec3) -> Option<(Vec3, Vec3)> {
+        match *self {
+            RageElem::Tri(t) => {
+                let c = closest_on_tri(p, t);
+                let d = p - c;
+                (d.length_squared() > 1e-20).then(|| { let u = d.normalize(); (c + u * WORLD_MARGIN(), -u) })
+            }
+            RageElem::Part(s, q, x) => gjk::closest(&s, q, x, &gjk::Shape::Tri([p; 3], 1e-4), Mat3::IDENTITY, Vec3::ZERO, axis, f32::INFINITY, Some(gjk::Pen::Sphere)).map(|c| (c.a, c.n)),
+        }
+    }
+
+    /// The bound's slot +0x98 and its margin: its extreme along `n`, in the world.
+    fn support(&self, n: Vec3) -> Vec3 {
+        match *self {
+            RageElem::Tri(t) => t.into_iter().max_by(|a, b| a.dot(n).total_cmp(&b.dot(n))).unwrap() + n * WORLD_MARGIN(),
+            RageElem::Part(s, q, x) => {
+                let m = match s {
+                    gjk::Shape::Box(_, m) | gjk::Shape::Capsule(_, m) | gjk::Shape::Tri(_, m) | gjk::Shape::Hull(_, m) | gjk::Shape::Curved(_, m) | gjk::Shape::Tapered(_, _, m) => m,
+                };
+                let l = s.support(Vec3::new(n.vd(q.x_axis), n.vd(q.y_axis), n.vd(q.z_axis)));
+                x + q * l + n * m
+            }
+        }
+    }
+}
+
+/// 0x285b248 (on: 0x3c9f242), for a contact whose points slid: each side's element finds the other side's point again. `a` is side 0, the side the normal points into, with its point `pa`;
+/// `c` side 1 with its point `pc`, and pa = pc + n gap. A find counts within 2 cm of the point along the normal at the contact's depth (.0004 squared), with the element's own normal the
+/// contact's within 1e-6 squared (0x2832904 then) and the other element's extreme along the normal under 7 mm past it. Of two, the one farther from the manifold's middle `mid` (0x2842c7d). Side 0's
+/// find moves side 0's point, side 1's side 1's. The contact's own margin (+0x9c, 0x28326bc) isn't asked of a triangle here: the room has one margin.
+fn rage_spare(a: RageElem, c: RageElem, pa: Vec3, pc: Vec3, n: Vec3, gap: f32, mid: Vec3) -> Option<(bool, Vec3)> {
+    let d = -gap;
+    let on_a = a.closest(pc, n).filter(|&(p, m)| (p + n * d - pc).length_squared() < 0.0004 && (m - n).length_squared() < 1e-6)
+        .map(|f| f.0).filter(|&p| (c.support(n) - p).dot(n) < 0.007);
+    let on_c = c.closest(pa, n).filter(|&(p, m)| (p - n * d - pa).length_squared() < 0.0004 && (-m - n).length_squared() < 1e-6)
+        .map(|f| f.0).filter(|&p| (a.support(n) - p).dot(n) < 0.007);
+    match (on_a, on_c) {
+        (Some(x), Some(y)) => Some(if x.distance_squared(mid) <= y.distance_squared(mid) { (false, y) } else { (true, x) }),
+        (Some(x), None) => Some((true, x)),
+        (None, Some(y)) => Some((false, y)),
+        (None, None) => None,
+    }
+}
+
+fn rage_round(s: &gjk::Shape) -> bool {
+    matches!(s, gjk::Shape::Capsule(..) | gjk::Shape::Tapered(..) | gjk::Shape::Curved(..))
+}
+
+fn rage_refresh(world: &Collision, held: &mut Vec<Held>, shape: gjk::Shape, tm: Mat3, bw: Vec3) {
     let mut insts: Vec<u32> = vec![];
     for r in held.iter_mut() {
         r.gap = (crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) - (r.ground + r.n * WORLD_MARGIN())).vd(r.n);
@@ -1500,13 +1564,20 @@ fn rage_refresh(world: &Collision, held: &mut Vec<Held>, tm: Mat3, bw: Vec3) {
             }
         }
         if let (Some(k), true) = (slid.0, slid.1 > 0.0004) {
-            // 0x285b248 (on: 0x3c9f242): a slid contact stays when its element finds the point again: the triangle's closest point to the part's, under 2 cm off the part's
-            // along its normal, and the ground point moves there [P: the second side's query, for a part's own bound, and its normal test aren't here]
             let a = crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, held[k].local);
             let n = held[k].n;
-            if let Some(q) = world.tri_of(held[k].tri).map(|t| closest_on_tri(a, t)).filter(|q| (*q + n * (WORLD_MARGIN() + held[k].gap)).distance_squared(a) < 0.0004) {
-                held[k].ground = q;
-                crate::extras_core_rdr2::trace_once("rage spared", || "rage manifold: a slid contact stays on its triangle (0x285b248)".to_string());
+            let group: Vec<Vec3> = held.iter().filter(|r| r.inst == inst).map(|r| crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) + r.ground + r.n * WORLD_MARGIN()).collect();
+            let mid = group.iter().fold(Vec3::ZERO, |s, &v| s + v) / (2.0 * group.len() as f32);
+            let spared = world.tri_of(held[k].tri).and_then(|t| rage_spare(RageElem::Part(shape, tm, bw), RageElem::Tri(t), a, held[k].ground + n * WORLD_MARGIN(), n, held[k].gap, mid));
+            if let Some((own, p)) = spared {
+                if own {
+                    let d = p - bw;
+                    held[k].local = Vec3::new(d.vd(tm.x_axis), d.vd(tm.y_axis), d.vd(tm.z_axis));
+                    held[k].world = p;
+                } else {
+                    held[k].ground = p - n * WORLD_MARGIN();
+                }
+                crate::extras_core_rdr2::trace_once("rage spared", || format!("rage manifold: a slid contact stays (0x285b248), {} point moves", if own { "the part's" } else { "the triangle's" }));
                 continue;
             }
             held.swap_remove(k);
@@ -1521,11 +1592,17 @@ fn rage_refresh(world: &Collision, held: &mut Vec<Held>, tm: Mat3, bw: Vec3) {
 /// 0x2822930 with 0x282fc10 and 0x28236e4: a new contact takes the place of one on the same triangle within 1 mm, on either body, keeping its
 /// impulses and refreshed depth. One from this very collide wins. Otherwise a free slot of six; a full manifold gives up the oldest contact sharing
 /// the new one's normal, within .985 (0x28480e4). If nothing there is older, 0x28480e4 goes on to area rules: `replaced` is the same as its branch for lone normals.
-/// The capsule's form 0x282fd0c, turning the new point by the body's step first, isn't here [P].
-fn rage_hold(held: &mut Vec<Held>, new: Held) -> Option<usize> {
+/// With a sphere or capsule in the pair (type under 3 or 9: 0x2840512, contact +0x48 bit 1) the match is 0x282fd0c: against a contact of this very collide the larger of the two distances, unturned;
+/// else the smaller, the new points first turned by each side's step, `turn`. That's quaternion +0x30 of the collider's pose record (param[1]: collider +0x60, 0x281eff8), which 0x2829cc4 fills from
+/// last^T x now (0x3aacdc, 0x1649f0), identity for a bound of type 5 or 6 and for a pose that hasn't changed: a point that stayed in the world while the part rolled is the same contact.
+fn rage_hold(held: &mut Vec<Held>, new: Held, turn: Option<(Mat3, Mat3)>) -> Option<usize> {
     let mut near = (None, 1e-6_f32);
     for (k, r) in held.iter().enumerate().filter(|(_, r)| r.tri == new.tri) {
-        let d = r.local.distance_squared(new.local).min(r.ground.distance_squared(new.ground));
+        let d = match turn {
+            Some(_) if r.age == 0 => r.local.distance_squared(new.local).max(r.ground.distance_squared(new.ground)),
+            Some((a, c)) => r.local.distance_squared(a * new.local).min(r.ground.distance_squared(c * new.ground)),
+            None => r.local.distance_squared(new.local).min(r.ground.distance_squared(new.ground)),
+        };
         if d < near.1 {
             near = (Some(k), d);
         }
@@ -1654,7 +1731,7 @@ fn rage_axis(age0: &[Vec3], centre: Vec3, dir: Vec3) -> Option<Vec3> {
 /// side would touch (2 to 15 degrees), and asks again. The point found is a real one of the part's, kept on the unturned body with the first contact's
 /// normal; its depth is as found until the next refresh. So a flat foot gets both toe corners. Only when the part moves over 1 cm/s, or just woke.
 #[allow(clippy::too_many_arguments)]
-fn rage_perturb(rm: RageMeet, shape: &gjk::Shape, tm: Mat3, xw: Vec3, o: Vec3, (t0, tri, turn, pen): (Vec3, gjk::Shape, Mat3, [Vec3; 4]), base: Held, held: &mut Vec<Held>, kept: &mut Vec<(usize, usize)>, g: usize) {
+fn rage_perturb(rm: RageMeet, shape: &gjk::Shape, tm: Mat3, xw: Vec3, o: Vec3, (t0, tri, turn, pen): (Vec3, gjk::Shape, Mat3, [Vec3; 4]), base: Held, held: &mut Vec<Held>, kept: &mut Vec<(usize, usize)>, g: usize, law: &impl Fn(Held) -> Option<Held>, step: Option<(Mat3, Mat3)>) {
     if !rm.moving && rm.iters <= 1 {
         return;
     }
@@ -1680,7 +1757,7 @@ fn rage_perturb(rm: RageMeet, shape: &gjk::Shape, tm: Mat3, xw: Vec3, o: Vec3, (
         let local = turned.transpose() * (world - xw);
         let ground = q.b + t0 - q.n * WORLD_MARGIN();
         let new = Held { local, ground, gap: q.dist, age: 0, n, world: crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, xw, local), imp: Vec3::ZERO, pimp: Vec3::ZERO, ..base };
-        if let Some(i) = rage_hold(held, new) {
+        if let Some(i) = law(new).and_then(|h| rage_hold(held, h, step)) {
             kept.push((g, i));
             crate::extras_core_rdr2::trace_once("rage perturb", || format!("rage perturbation: {} new, a further point at gap {:.4}, turned {:.1} deg, world {:.3?}", age0.len(), new.gap, tilt.to_degrees(), new.world - o));
         }
@@ -2905,6 +2982,12 @@ impl Ragdoll {
                     prep.push((k, st.twist));
                     let l = (twist - LIMIT_MARGIN()).max(0.0);
                     let axis = crate::rigid::ldot(&cl.r, crate::rigid::col(&j.jc.cm, 2));
+                    // 0x289c9d4: the row's axis is the two parts' axes blended by +0xb8 (0x2894840 gives each), normalised if long enough, else the first's
+                    let axis = window.map_or(axis, |w| {
+                        let first = crate::rigid::col(&st.pr, 2);
+                        let v = first * (1.0 - w.blend) + axis * w.blend;
+                        if v.length() >= 1e-4 { v.normalize() } else { first }
+                    });
                     let (over, under) = window.map_or((st.twist - l, -st.twist - l), |w| (st.twist - (w.hi - LIMIT_MARGIN()), (w.lo + LIMIT_MARGIN()) - st.twist));
                     for (u, o) in [(axis, over), (-axis, under)] {
                         if near(u, o) {
@@ -3639,7 +3722,22 @@ impl Ragdoll {
                 if d > most.1 { most = (Some(k), d); }
                 if r.gap > far.1 { far = (Some(k), r.gap); }
             }
-            if let (Some(k), true) = (most.0, most.1 > 0.0004) {
+            let spared = most.0.filter(|_| most.1 > 0.0004).and_then(|k| {
+                let (pa, pc) = ends(&held[k]);
+                let mid = held.iter().fold(Vec3::ZERO, |s, r| { let (x, y) = ends(r); s + x + y }) / (2.0 * held.len() as f32);
+                rage_spare(RageElem::Part(a, qa, xa), RageElem::Part(c, qc, xc), pa, pc, held[k].n, held[k].gap, mid).map(|s| (k, s))
+            });
+            let into = |q: Mat3, v: Vec3| Vec3::new(v.vd(q.x_axis), v.vd(q.y_axis), v.vd(q.z_axis));
+            if let Some((k, (own, p))) = spared {
+                if own {
+                    held[k].local = into(qa, p - xa);
+                    held[k].world = p;
+                } else {
+                    held[k].ground = into(qc, p - xc);
+                    held[k].wc = p;
+                }
+                crate::extras_core_rdr2::trace_once("rage pair spared", || "rage pair manifold: a slid contact stays (0x285b248)".to_string());
+            } else if let (Some(k), true) = (most.0, most.1 > 0.0004) {
                 held.swap_remove(k);
                 crate::extras_core_rdr2::trace_once("rage pair slid", || format!("rage pair manifold: a contact slid {:.3} m goes", most.1.sqrt()));
             } else if let (Some(k), true) = (far.0, far.1 > 0.04) {
@@ -3669,7 +3767,7 @@ impl Ragdoll {
             let new = if flip { Held { local: new.ground, ground: new.local, ..new } } else { new };
             if rage {
                 if new.gap < MARGIN() {
-                    rage_hold(held, new);
+                    rage_hold(held, new, (rage_round(&a) || rage_round(&c)).then(|| (sa.1.transpose() * qa, sc.1.transpose() * qc)));
                     crate::extras_core_rdr2::trace_once("rage pair", || "rage pair manifold: a contact added by 0x2822930's rules".to_string());
                 }
             } else {
@@ -3910,12 +4008,13 @@ impl Ragdoll {
         }
         // RDR2 core: the velocity pass's limit rows start the next step from these (0x28e1650's warm start, 0x28a9ca8)
         self.lim_warm = st.rows.iter().filter_map(|r| Some((r.g?.warm?, r.lambda as f32))).collect();
-        // the constraint's breaking strength, base +0x28 (10000 on the hock's): gone once a row's impulse over the step passes it [P: per second]
+        // the constraint's breaking strength, base +0x28 (10000 on the hock's), units the row's own impulse: slot +0x48 0x2894a2c -> 0x28955c8 (|row's lambdas| by 0x9a1c58, 0x9a25c0), and 0x28e2a77's
+        // ratio under 1 breaks it. Only if base +0x43 bit 2 is on: params +0x1c (0x288dff5), left 0 by 0x2a3bc68 [C], so this one doesn't
         for ((k, _), l) in self.lim_warm.iter().map(|&(a, b)| (a, b)).collect::<Vec<_>>() {
             if let Some(w) = self.limit_row.get(k as usize).copied().flatten() {
-                if l.abs() / st.h > w.strength {
+                if w.breaks && l.abs() > w.strength {
                     self.limit_broken |= 1 << k;
-                    crate::extras_core_rdr2::trace_once("limit broke", || format!("rotation limit constraint on part {k} broke: {:.0} over {}", l.abs() / st.h, w.strength));
+                    crate::extras_core_rdr2::trace_once("limit broke", || format!("rotation limit constraint on part {k} broke: {:.0} over {}", l.abs(), w.strength));
                 }
             }
         }

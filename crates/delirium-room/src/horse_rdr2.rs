@@ -1280,7 +1280,7 @@ impl Horse {
             for &k in &l[1..] {
                 if let Limit::BoneHinge { lo, hi, .. } = self.build.parts[k].limit {
                     let hock = k == l[2] && (0..4).any(|i| LEGS[c.rig[i].row][2] == k && self.r.limits[i].is_some_and(|x| x.kind == 3));
-                    self.doll.limit_row[k] = Some(if hock { delirium::ragdoll::LimitRow { lo, hi, strength: 10000.0, soft: 0.5, k: 0.01 } } else { delirium::ragdoll::LimitRow { lo, hi, strength: f32::MAX, soft: 0.5, k: 0.0 } });
+                    self.doll.limit_row[k] = Some(if hock { delirium::ragdoll::LimitRow { lo, hi, strength: 10000.0, breaks: false, blend: 0.5, soft: 0.5, k: 0.01 } } else { delirium::ragdoll::LimitRow { lo, hi, strength: f32::MAX, breaks: false, blend: 1.0, soft: 0.5, k: 0.0 } });
                     if hock {
                         say!(c, "0x2a3bc68", "hock part {k}: window {lo:.3}..{hi:.3}, strength 10000, softness .5, .01");
                     }
