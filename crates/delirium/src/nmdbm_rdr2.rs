@@ -438,7 +438,7 @@ macro_rules! stay_fields {
 }
 
 // Names by joaat of the message's hashes, but for leanRelative (49e2f424) and switchSpeed (ab3a861c), which are ours.
-// lastStand*, stepUpHelp and stayUpAcc* are carried and do nothing here: off or without effect on flat still ground.
+// lastStand*, stepUpHelp are carried and do nothing here (stayUpAcc* reads in nm.rs): off or without effect on flat still ground.
 stay_fields! {
     bool: ("useForces", use_forces), ("useTorques", use_torques), ("lastStandMode", last_stand_mode), ("velocityBased", velocity_based),
           ("torqueOnlyInAir", torque_only_in_air), ("leanRelative", lean_relative), ("torqueparts", torque_parts),
@@ -626,6 +626,8 @@ impl Default for LimpCfg {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Rdr2 {
+    /// bal+0x2fc, the shot's side lever, and bal+0x454, the step count it was given at: while no step has been taken since, it biases the foot choice
+    pub lever: (f32, u32),
     /// yanked's turn block: the "other foot farther" margin stays 0.2 leg lengths while turning
     pub turn_margin: bool,
     pub p: Params,
@@ -737,7 +739,7 @@ pub struct Rdr2 {
 
 impl Rdr2 {
     pub fn new(p: Params, random: f32) -> Rdr2 {
-        Rdr2 { p, turn_margin: false, time: 0.0, still: 0.0, straight: (0.99, 1.0), steps: 0, extra_steps: 0, down_swing: [false; 2], up_now: bevy_math::Vec3::Z, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
+        Rdr2 { lever: (0.0, 0), p, turn_margin: false, time: 0.0, still: 0.0, straight: (0.99, 1.0), steps: 0, extra_steps: 0, down_swing: [false; 2], up_now: bevy_math::Vec3::Z, failing: None, asym: (random * 2.0 - 1.0) * 0.15, on_slope: false,
                since_step: 100000.0, step_age: RESET_STEP_AGE, speed: 0.0, running: false, run_fast: false, wait: [0.0; 2], give_way: false, push_off: false, falling: false, limp: (0, 0.0), limp_cfg: LimpCfg::default(), lift_mult: [-1.0; 2], forced: None, cancel_step: false, owned: Owned::default(),
                rng: (random * 4294967295.0) as u32 | 1, prediction: p.prediction_time, clamp_add: 0.0, lift: p.lift_feet,
                width_scale: 1.0, prev_swing: None, sideways: false, last_foot: None, turning: false, heading_only: false,
@@ -1007,6 +1009,7 @@ impl Rdr2 {
                 return;
             }
             self.crouching = Some((-c.min(0.5), hip.clamp(-1.5, 1.5), self.p.crouch_time));
+            crate::extras_core_rdr2::trace_once("crouch depth", || format!("crouch start: depth {c:.3}, between {} and {}", self.p.crouch_bend_thresh, self.p.crouch_bend_max));
             let t = turn_out.clamp(0.0, TURN_OUT_MAX);
             if t > 0.0 {
                 self.twist_rest = t;

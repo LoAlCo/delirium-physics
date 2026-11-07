@@ -525,6 +525,15 @@ impl CatchFall {
         r.hk = fall.hk && c.ch.core.cfg.health > 0.0 && fall.hk_window > r.time;
         if r.hk {
             crate::extras_core_rdr2::trace_first("catchFall: hands and knees");
+            // 0x2af72f4 step 4: no arm part (0xfd800) touching with the balancer active, or a BCR in 8, 9: the effective mask is the upper body's: the legs
+            // are the balancer's. (bal+0x467 goes with it: the writes are all there is; no read in the balancer's code at +0x467 or, off bal+0xe0, +0x387.)
+            let rp = crate::extras_ysk_rdr2::rp;
+            let arm_touch = (11..=19).any(|l| c.b.doll.hit_out.get(rp(l)).is_some_and(|h| h.is_some()));
+            let bcr = c.ch.core.bcr_state == 8 || c.ch.core.bcr_state == 9;
+            if c.upright && (!arm_touch || bcr) {
+                c.out.cf_upper = true;
+                crate::extras_core_rdr2::trace_first("catchFall: hands and knees, the legs stay the balancer's");
+            }
         }
         // the window ends this tick: the arms start over
         if r.time < fall.hk_window && fall.hk_window < r.time + dt {
@@ -650,6 +659,16 @@ impl CatchFall {
             for i in 0..2 {
                 // 12 with the other hand pushing off (the mask's 0x2 reads helper 1's flag, 0x4 helper 0's)
                 ch.eff[(*HIP())[i]].set_stiffness(if r.arm[1 - i].push { 12.0 } else { 8.0 }, 0.5, Some(0.5));
+            }
+        }
+        // 5.8: +0xc0: an arm in state 2 holds the rifle: the shoulder at 0, the elbow at 2; the core's default arms stay off (ctx+0x480c)
+        for i in 0..2 {
+            if fall.rifle_pose && ch.core.arm_state[i] == 2 {
+                let l = limb(i);
+                ch.eff[l.e[1]].desired = [0.0; 3];
+                ch.eff[l.e[2]].desired[0] = 2.0;
+                ch.core.arms_held = true;
+                crate::extras_core_rdr2::trace_first("catchFall: riflePose, the arm in state 2");
             }
         }
         for (i, ka) in [(0, kl), (1, kr)] {

@@ -24,6 +24,8 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "impulse", kind: Kind::Vec3, used: true, doc: "the bullet's impulse, N s, world (zero)" },
         Param { name: "hitPoint", kind: Kind::Vec3, used: true, doc: "where it hit, world (unset: the part's centre)" },
         Param { name: "equalizeAmount", kind: Kind::Float, used: true, doc: "0: the impulse as given, 1: scaled by the part's mass over the mean part's (RDR2's shot sends 0) (0)" },
+        Param { name: "localHitPointInfo", kind: Kind::Bool, used: true, doc: "hitPoint is in the part's space (false)" },
+        Param { name: "partBoundHandle", kind: Kind::Int, used: false, doc: "RDR2's part by a bound's handle; partIndex names the part here" },
         Param { name: "extraShare", kind: Kind::Float, used: true, doc: "a share also given to the trunk (Spine0): less than 0 adds |share| of it there on top, 0..1 splits it between the trunk and the part hit, more than 1 none. RDR2's shot sends minus COMImpulseScale on trunk hits (0)" },
     ] },
     Message { name: "rdr2Sit", params: &[
@@ -154,7 +156,7 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "blendkneerate", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the knees' rate (10000)" },
         Param { name: "antiPropClav", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: falling backward, no clavicle (false)" },
         Param { name: "antiPropWeak", kind: Kind::Float, used: false, doc: "RDR2 core: +0xc2: no reader in the game's code" },
-        Param { name: "riflePose", kind: Kind::Float, used: false, doc: "RDR2 core: +0xc0: an arm pose while the arm's weapon state is 2; no weapon states here" },
+        Param { name: "riflePose", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's and rollUp's arm pose while the arm's weapon state is 2 or 3 (false)" },
         Param { name: "?7dad7aaf", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the arm's swing circle (0)" },
         Param { name: "?dcd030d5", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x1068: the knee and foot tweak (0)" },
         Param { name: "zmpgroundcollision", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x105c: how far the tweaked knee may fold (3)" },
@@ -863,6 +865,9 @@ impl DuckRdr2 {
         self.neck_twist_rate = p.f("neckTwistRate", self.neck_twist_rate)?;
         self.spine_twist_rate = p.f("spineTwistRate", self.spine_twist_rate)?;
         self.spine_twist_rate = p.f("elasticitypushed7", self.spine_twist_rate)?;
+        if p.get("elasticitypushed7").is_some() {
+            crate::extras_core_rdr2::trace_once("duck elastic", || format!("duck: elasticitypushed7, the spine's rate {}", self.spine_twist_rate));
+        }
         (self.wait, self.time, self.blend) = (p.f("timeBeforeDuck", self.wait)?, p.f("duckTime", self.time)?, p.f("blendTime", self.blend)?);
         (self.dont_look, self.point_gun) = (p.f("dontLookTime", self.dont_look)?, p.i("pointGunType", self.point_gun)?);
         (self.twist, self.forward, self.exag) = (p.b("leanTwistStart", self.twist)?, p.b("bendForward", self.forward)?, p.b("duckExag", self.exag)?);
@@ -2965,7 +2970,7 @@ impl ReachForWound {
         // on the ground: only as reachFalling (or, lying, reachOnFloor) allows; then, both hands reaching, by
         // reachFallingWithOneHand or by how he lies 0.2 s on; then catchFall and bodyRollUp leave this arm alone
         // (riding isn't on the ground: reachForWound's +0x52e, sit running with its state at most 2)
-        // [not ported: all of it is skipped while the shot's fall to knees has its record's +0x74]
+
         if !c.upright && !c.sit_state.is_some_and(|s| s <= 2) {
             let body: Vec<usize> = std::iter::once(0).chain(7..21).collect();
             let lying = c.b.doll.collided(&body);
@@ -2977,8 +2982,14 @@ impl ReachForWound {
             if both && (r.falling_one == 1 && i == 1 || r.falling_one == 2 && i == 0) {
                 return;
             }
-            // 0x2a35fb8, 0x2a33350: the COM frame 0.2 s on by its spin, and which way he lies then
-            let class = rfw_lie_class(c, 0.2);
+            // 0x2a35fb8, 0x2a33350: the COM frame 0.2 s on by its spin, and which way he lies then.
+            // All of it is skipped while the shot's fall to knees has him on them (shot+0x785, shot+0x5e8's +0x74) [P: that flag is `kneeling`]
+            let class = if c.ch.core.ftk.on && c.ch.core.ftk.kneeling {
+                crate::extras_core_rdr2::trace_first("reach for wound: on his knees, no lying rules");
+                0
+            } else {
+                rfw_lie_class(c, 0.2)
+            };
             let (mut keep_l, mut keep_r) = (false, false);
             match class {
                 1 | 2 => (keep_l, keep_r) = (true, true),
@@ -6244,6 +6255,8 @@ pub struct BulletImpulse {
     /// the trunk's extra share
     new: Vec<(usize, Option<Vec3>, Vec3, f32, bool)>,
     modifier: f32,
+    /// this message's hitPoint is in the part's space
+    local: bool,
 }
 
 /// One running record (ctx+0x1150): part, hit point in the part's frame (None: its centre), the whole impulse, s left,
@@ -6367,7 +6380,7 @@ const BULLET_RUN_SPEED: f32 = 1.5;
 
 impl BulletImpulse {
     fn new(p: &mut P) -> Result<BulletImpulse, Error> {
-        let mut b = BulletImpulse { recs: vec![], new: vec![], modifier: 1.0 };
+        let mut b = BulletImpulse { recs: vec![], new: vec![], modifier: 1.0, local: false };
         b.take(p)?;
         Ok(b)
     }
@@ -6377,6 +6390,8 @@ impl BulletImpulse {
         let imp = p.v("impulse", Vec3::ZERO)?;
         let at = p.v("hitPoint", Vec3::NAN)?;
         let at = (!at.is_nan()).then_some(at);
+        self.local = p.b("localHitPointInfo", false)?;
+        let _ = p.get("partBoundHandle");
         let equalize = p.f("equalizeAmount", 0.0)?;
         let s = p.f("extraShare", 0.0)?;
         let (extra, main) = if s < 0.0 { (-s, 1.0) } else if s <= 1.0 { (s, 1.0 - s) } else { (0.0, 1.0) };
@@ -6495,6 +6510,12 @@ impl Extra for BulletImpulse {
             if k >= f.len() {
                 continue;
             }
+            let at = if self.local {
+                crate::extras_core_rdr2::trace_once("bullet local", || "applyBulletImpulse: hitPoint in the part's space".to_string());
+                at.map(|a| f[k].translation + f[k].rotation * a)
+            } else {
+                at
+            };
             let cfg = &mut c.ch.core.cfg;
             let t = cfg.bullets[extra as usize];
             let imp = imp * self.modifier;

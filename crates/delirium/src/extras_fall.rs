@@ -1073,6 +1073,7 @@ impl StgRdr2 {
                 (hip, knee) = (hip * w, knee * w);
             }
             c.ch.eff[(*KNEE())[i]].set_stiffness(knee, 0.9, Some(p.leg_muscle));
+            crate::extras_core_rdr2::trace_once("stagger muscle", || format!("staggerFall: ?86f98004, the legs' muscle stiffness {}", p.leg_muscle));
             c.ch.eff[(*ANKLE())[i]].set_stiffness(ankle, 1.0, Some(STG_ANKLE_MUSCLE));
             c.ch.eff[(*HIP())[i]].set_stiffness(hip, 1.0, Some(p.leg_muscle));
         }
@@ -1095,7 +1096,17 @@ impl StgRdr2 {
             gains: (2.0 + spine[0], spine[1]),
             no_twist: p.upper_body,
             at: p.head.then_some((p.head_pos, Vec3::ZERO)),
-            along: (p.head && bal.stepping != 0 && self.head_along).then(|| (head.m.d + hz(v).normalize_or_zero(), head.v)),
+            // 0x2a78100's third argument, 0x2a9eb9e: moving backward (v along the COM's row c), the look is along the chest's -c, tipped by its b: -c + 3 (-b.up) b
+            along: (p.head && bal.stepping != 0 && self.head_along).then(|| {
+                let dir = if v.normalize_or_zero().dot(c.m.c) > 0.0 {
+                    let chest = c.b.part(crate::extras_ysk_rdr2::rp(10)).m;
+                    crate::extras_core_rdr2::trace_once("stagger look back", || "staggerFall: moving back, the look along the chest".to_string());
+                    -chest.c + chest.b * (3.0 * -chest.b.dot(c.ch.up))
+                } else {
+                    hz(v).normalize_or_zero()
+                };
+                (head.m.d + dir, head.v)
+            }),
         });
         self.arms(c, p, u, out);
         // fall types (timeToFall)

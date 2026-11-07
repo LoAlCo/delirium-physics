@@ -11,7 +11,38 @@ use bevy_math::Vec3;
 /// A message line can say start=false: on=false here, since an extra only starts with start=true.
 const ON: Param = Param { name: "on", kind: Kind::Bool, used: true, doc: "false: RDR2's start=false for this record (true)" };
 
-pub static MESSAGES: [Message; 16] = [
+pub static MESSAGES: [Message; 22] = [
+    Message { name: "setCharacterHealth", params: &[
+        Param { name: "characterHealth", kind: Kind::Float, used: true, doc: "ctx+0x1030: 0 or less, smartFall and catchFall's reads take him for dead (1)" },
+    ] },
+    Message { name: "setWeaponMode", params: &[
+        Param { name: "weaponMode", kind: Kind::Int, used: true, doc: "RDR2's weapon mode: 0, 5 right, 1, 3 both, 2 the rifle on the right, 4 left (5)" },
+    ] },
+    Message { name: "registerWeapon", params: &[
+        Param { name: "hand", kind: Kind::Int, used: true, doc: "0 left, 1 right: that hand has a weapon, state 0 until setWeaponMode (1)" },
+    ] },
+    Message { name: "fireWeapon", params: &[
+        Param { name: "gunHandEnum", kind: Kind::Int, used: true, doc: "the hand that fires (0)" },
+        Param { name: "firedWeaponStrength", kind: Kind::Float, used: true, doc: "the recoil's force, N (1000)" },
+        Param { name: "applyFireGunForceAtClavicle", kind: Kind::Bool, used: true, doc: "split it between the hand and the clavicle (false)" },
+        Param { name: "inhibitTime", kind: Kind::Float, used: true, doc: "no more recoil on this arm for this long, s (0.4)" },
+        Param { name: "direction", kind: Kind::Vec3, used: true, doc: "the recoil's direction in the hand's space (0)" },
+        Param { name: "split", kind: Kind::Float, used: true, doc: "the hand's share with applyFireGunForceAtClavicle (0.5)" },
+        Param { name: "?e9e30d92", kind: Kind::Float, used: true, doc: "the other hand's share, when it holds the gun too (0)" },
+        Param { name: "?fb138fe4", kind: Kind::Bool, used: true, doc: "the request context's mask is the whole body (false)" },
+    ] },
+    Message { name: "forceToBodyPart", params: &[
+        Param { name: "partIndex", kind: Kind::Int, used: true, doc: "RDR2's part (its handle's, here a number) (0, the pelvis)" },
+        Param { name: "force", kind: Kind::Vec3, used: true, doc: "the force, N" },
+        Param { name: "forceDefinedInPartSpace", kind: Kind::Bool, used: true, doc: "force is in the part's space (false)" },
+    ] },
+    Message { name: "OverrideElasticity", params: &[
+        Param { name: "OverrideElasticity", kind: Kind::Bool, used: true, doc: "on: the world contacts take this elasticity while he moves slowly (true)" },
+        Param { name: "?f3231c3d", kind: Kind::Float, used: true, doc: "the decay starts once ctx+0x100c passes this (80)" },
+        Param { name: "?ec29dcac", kind: Kind::Float, used: true, doc: "the decay's time, s (0.5)" },
+        Param { name: "?1da37e6f", kind: Kind::Float, used: true, doc: "only under this speed (7)" },
+        Param { name: "?f4b0205d", kind: Kind::Float, used: true, doc: "the elasticity (1)" },
+    ] },
     Message { name: "configureLimits", params: &[
         Param { name: "mask", kind: Kind::Str, used: true, doc: "the joints (fb)" },
         Param { name: "index", kind: Kind::Int, used: true, doc: "one joint, by number (-1: the mask's)" },
@@ -26,6 +57,8 @@ pub static MESSAGES: [Message; 16] = [
     ] },
     Message { name: "configureConstraints", params: &[
         Param { name: "mask", kind: Kind::Str, used: true, doc: "RDR2's constraint config; the joints' limits take in where they are, for good (not sent by any set)" },
+        Param { name: "?641de259", kind: Kind::Bool, used: true, doc: "ctx+0x1014: a change takes the arms' joints like the mask's (false)" },
+        Param { name: "?5a9f278c", kind: Kind::Bool, used: true, doc: "ctx+0x1016: a change takes the legs' (false)" },
     ] },
     Message { name: "SoftKey", params: &[
         Param { name: "mask", kind: Kind::Str, used: true, doc: "the joints (fb)" },
@@ -225,6 +258,8 @@ impl Default for BulletCfg {
 /// setFallingReaction's values (0x2a74c3c): catchFall's fields, which only that message writes (rdr2_catchfall.md 2).
 #[derive(Clone, Copy, Debug)]
 pub struct FallCfg {
+    /// catchFall +0xc0, rollUp +0x89: riflePose
+    pub rifle_pose: bool,
     pub com_vel_rds: f32,
     pub inhibit_rolling: f32,
     pub change_friction_time: f32,
@@ -272,7 +307,7 @@ pub struct FallCfg {
 
 impl Default for FallCfg {
     fn default() -> FallCfg {
-        FallCfg { stop_manual: 0.0, stop_on_slopes: f32::MAX, knee_rate: 10000.0, anti_prop_clav: 0.0, swing_circle: 1.0, knee_tweak: 1.0, knee_limit: 3.0, limit_rate: 1.0, foot_friction: 0.0, hk: false, hk_head: true, hk_window: 0.0, hand_window: 100000.0, force_head: false, rds_smart: None, com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
+        FallCfg { rifle_pose: false, stop_manual: 0.0, stop_on_slopes: f32::MAX, knee_rate: 10000.0, anti_prop_clav: 0.0, swing_circle: 1.0, knee_tweak: 1.0, knee_limit: 3.0, limit_rate: 1.0, foot_friction: 0.0, hk: false, hk_head: true, hk_window: 0.0, hand_window: 100000.0, force_head: false, rds_smart: None, com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
     }
 }
 
@@ -283,10 +318,11 @@ impl FallCfg {
     }
 
     /// One value by the port's name; the names of the parameters the message takes for these.
-    pub const NAMES: [&'static str; 27] = ["?5be84846", "?c3e9ccc1", "stopManual", "stopOnSlopes", "blendkneerate", "antiPropClav", "?7dad7aaf", "?dcd030d5", "zmpgroundcollision", "?7579162f", "?4fe4ab89", "comVelRDSThresh", "inhibitRollingTime", "changeFrictionTime", "groundFriction", "armFriction", "frictionMin", "frictionMax", "stoppedStrengthDecay", "kTime", "spineLeanGain", "successStrength", "minLegStiffness", "minSpineStiffness", "minArmStiffness", "callRDS", "resistRolling"];
+    pub const NAMES: [&'static str; 28] = ["riflePose", "?5be84846", "?c3e9ccc1", "stopManual", "stopOnSlopes", "blendkneerate", "antiPropClav", "?7dad7aaf", "?dcd030d5", "zmpgroundcollision", "?7579162f", "?4fe4ab89", "comVelRDSThresh", "inhibitRollingTime", "changeFrictionTime", "groundFriction", "armFriction", "frictionMin", "frictionMax", "stoppedStrengthDecay", "kTime", "spineLeanGain", "successStrength", "minLegStiffness", "minSpineStiffness", "minArmStiffness", "callRDS", "resistRolling"];
 
     pub fn set(&mut self, name: &str, v: f32) {
         match name {
+            "riflePose" => self.rifle_pose = v != 0.0,
             "?5be84846" => self.hand_window = v,
             "?c3e9ccc1" => self.hk_window = v,
             "comVelRDSThresh" => self.com_vel_rds = v,
@@ -661,11 +697,99 @@ pub fn build(name: &str, p: &mut P) -> Option<Result<Box<dyn Extra>, Error>> {
         "spinLimit" => spin_limit(p),
         "setCharacterDamping" => damping(p),
         "quadLimbLimit" => limb_limit(p),
+        "setCharacterHealth" => health(p),
+        "setWeaponMode" => weapon_mode(p),
+        "registerWeapon" => register_weapon(p),
+        "fireWeapon" => fire_weapon(p),
+        "forceToBodyPart" => force_to_part(p),
+        "OverrideElasticity" => override_elasticity(p),
         _ => return None,
     })
 }
 
 const NOT_SENT: f32 = -1e30;
+
+/// setCharacterHealth (0x2a4d7c8), ctx+0x1030.
+fn health(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let h = p.f("characterHealth", 1.0)?;
+    Ok(once(move |c| {
+        c.ch.core.cfg.health = h;
+        trace(|| format!("character health {h}"));
+    }))
+}
+
+/// setWeaponMode (0x2a51a64 -> 0x2a51944).
+fn weapon_mode(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let mode = p.i("weaponMode", 5)?;
+    Ok(once(move |c| {
+        c.ch.core.weapon_mode(mode);
+        trace(|| format!("setWeaponMode {mode}: arm states {:?}", c.ch.core.arm_state));
+    }))
+}
+
+/// registerWeapon (0x2a48c48 -> 0x2a48908): the hand's record, state 0. The constraint and the matrices aren't kept: no weapon body here.
+/// The weapon bits are the game task's (0x2a27f28, no message of its own here) [P]: registering sets them.
+fn register_weapon(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let hand = p.i("hand", 1)?.clamp(0, 1) as usize;
+    for n in ["type", "Handle", "constraintHandle", "gunToMuzzleInGun", "?5a4c1887"] {
+        let _ = p.get(n);
+    }
+    Ok(once(move |c| {
+        c.ch.core.weapon_bits |= if hand == 0 { 0x10000 } else { 0x80000 };
+        c.ch.core.arm_state[hand] = 0;
+        trace(|| format!("registerWeapon: hand {hand}, bits {:#x}", c.ch.core.weapon_bits));
+    }))
+}
+
+/// fireWeapon (0x2a2f994): held for pointGun's tick; with pointGun off the handler does nothing.
+fn fire_weapon(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let r = crate::nmrs::FireRec {
+        hand: p.i("gunHandEnum", 0)?.clamp(0, 1) as usize, strength: p.f("firedWeaponStrength", 1000.0)?, at_clavicle: p.b("applyFireGunForceAtClavicle", false)?,
+        inhibit: p.f("inhibitTime", 0.4)?, direction: p.v("direction", Vec3::ZERO)?.normalize_or_zero(), split: p.f("split", 0.5)?, other: p.f("?e9e30d92", 0.0)?,
+    };
+    let _ = p.b("?fb138fe4", false)?;
+    Ok(once(move |c| c.ch.core.fire = Some(r)))
+}
+
+/// forceToBodyPart (0x2a313c8): a force on a part for this step (0x2a19174: times dt, at the part's COM), in the part's space if it says so.
+/// It wakes him (ctx+0x4804) when it isn't zero, which the room's doll needs no flag for.
+fn force_to_part(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let part = crate::extras_ysk_rdr2::rp(p.i("partIndex", 0)?.max(0) as usize);
+    let (f, local) = (p.v("force", Vec3::ZERO)?, p.b("forceDefinedInPartSpace", false)?);
+    Ok(once(move |c| {
+        let k = part.min(c.b.frames.len().saturating_sub(1));
+        let frame = c.b.frames[k];
+        let world = if local { frame.rotation * f } else { f };
+        c.out.impulse.push((k, c.b.at(k), world * c.dt));
+        trace(|| format!("forceToBodyPart: part {k}, {world:.2?} N"));
+    }))
+}
+
+/// OverrideElasticity (0x2a40a5c): the record that 0x2a5c018 ticks in `elastic_step`.
+fn override_elasticity(p: &mut P) -> Result<Box<dyn Extra>, Error> {
+    let on = p.b("OverrideElasticity", true)?;
+    let (th, decay, speed, e) = (p.f("?f3231c3d", 80.0)?, p.f("?ec29dcac", 0.5)?, p.f("?1da37e6f", 7.0)?, p.f("?f4b0205d", 1.0)?);
+    Ok(once(move |c| {
+        c.ch.core.elastic = if on {
+            crate::nmrs::ElasticRec { on, elasticity: e, speed, threshold: th, decay, scale: 1.0, triggered: false, active: false }
+        } else {
+            crate::nmrs::ElasticRec::default()
+        };
+        trace(|| format!("OverrideElasticity: {:?}", c.ch.core.elastic));
+    }))
+}
+
+/// 0x2a5c018, each step: past the threshold on `peak` with the body touching, the scale falls to 0 over the decay's time; the contacts take it while the COM's speed is under the limit and he isn't falling faster than that.
+pub fn elastic_step(r: &mut crate::nmrs::ElasticRec, dt: f32, vel: Vec3, peak: f32, touching: bool, gate: bool) {
+    if !r.on {
+        return;
+    }
+    if r.triggered || (touching && peak > r.threshold) {
+        r.triggered = true;
+        r.scale = (r.scale - dt / r.decay.max(1e-4)).max(0.0);
+    }
+    r.active = gate && vel.length() < r.speed && -r.speed < vel.z;
+}
 
 /// A trace line once per text, for paths with no state of their own to keep it in.
 pub fn trace_first(s: &'static str) {
@@ -709,8 +833,25 @@ fn limits(p: &mut P) -> Result<Box<dyn Extra>, Error> {
 /// takes that for good (slot +0xf0, 0).
 fn constraints(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     let mask = p.s("mask", "fb")?;
+    let (arms, legs) = (p.b("?641de259", false)?, p.b("?5a9f278c", false)?);
     Ok(once(move |c| {
-        let on = joint_mask(&mask);
+        let mut on = joint_mask(&mask);
+        // 0x2a26f54: on a change of ctx+0x1014 the arms (0xfd800), of ctx+0x1016 the legs (0xf6): each joint's slot +0x110, +0xf0, Rage's constraint built afresh.
+        // The other four fields (+0x1015, +0x1017, +0x1018, +0x101c, +0x1020) have no reader in the code read
+        for (i, (now, was)) in [(arms, &mut c.ch.core.constraint_arms), (legs, &mut c.ch.core.constraint_legs)].into_iter().enumerate() {
+            if now != *was {
+                *was = now;
+                let limbs = if i == 0 { [0, 1] } else { [2, 3] };
+                for l in limbs {
+                    for &j in crate::nmshot::limb(l).e.iter() {
+                        if let Some(o) = on.get_mut(j) {
+                            *o = true;
+                        }
+                    }
+                }
+                trace(|| format!("configureConstraints: {} switched {now}", ["arms", "legs"][i]));
+            }
+        }
         for j in (0..c.ch.eff.len()).filter(|&j| on.get(j).copied().unwrap_or(false)) {
             let a = c.ch.actual(j, c.b.frames);
             c.ch.lim_around(j, a, 0.0);

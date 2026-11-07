@@ -134,6 +134,8 @@ pub struct Out {
     pub dbm_force_balance: bool,
     /// RDR2 core: force this foot (0 left, 1 right) to step next, dropping the step in progress (Some(None): no more)
     pub dbm_force_step: Option<Option<usize>>,
+    /// RDR2 core: hands and knees: catchFall leaves the legs this tick (+0x2b0 = 0x1fff09)
+    pub cf_upper: bool,
     pub dbm_turn_facing: Option<f32>,
     /// RDR2 core: staggerFall's stagger mode for the balancer this step, and its prediction time
     pub dbm_stagger: bool,
@@ -1040,6 +1042,7 @@ impl Shot {
         self.side = sdot(at - from, c.m.a, b"zyx").clamp(-2.0, 2.0);
         if c.ch.rdr2 {
             self.side = self.side_lever_rdr2(c, at);
+            c.ch.core.side_lever = Some(self.side);
             self.intake_rdr2(c, at);
         }
     }

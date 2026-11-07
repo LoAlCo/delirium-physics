@@ -1809,9 +1809,19 @@ impl Agent {
         }
         if let (Some(ch), true) = (self.ch.as_mut(), nm_tick) {
             ch.up = Vec3::Z;
+            // 0x2ab9fe8, ctx+0xfc0: the floor's acceleration, thrown away over 20, at most stayUpAccMax, tilts the up every behaviour reads
+            let a = ch.core.floor_acc;
+            if self.rdr2_core.is_some() && a != Vec3::ZERO && a.length() <= 20.0 {
+                let (k, max) = (ch.core.stay[0].stay_up_acc, ch.core.stay[0].stay_up_acc_max);
+                ch.up = (Vec3::Z + a.clamp_length_max(max) * (k / 9.81)).normalize_or(Vec3::Z);
+                crate::extras_core_rdr2::trace_once("stay up acc", || format!("stayUpAcc: the floor's acceleration {a:.3?} tilts up to {:.3?}", ch.up));
+            }
         }
         if let (Some(b), Some(ch), true) = (self.balance.as_mut(), self.ch.as_mut(), nm_tick) {
             if let Some(dbm) = b.dbm.as_mut() {
+                if let (Some(l), Some(r)) = (ch.core.side_lever.take(), dbm.p.rdr2.as_mut()) {
+                    r.lever = (l, r.steps);
+                }
                 let c = dbm_config(self.config, &b.params, self.lean_bias, self.hip_yaw, self.legs);
                 dbm.lean = match self.lean {
                     Some((mode, amount, _, as_force)) => crate::nmdbm::Lean { mode, amount, as_force },
@@ -1947,6 +1957,7 @@ impl Agent {
         let mut bb_req = (false, None, None);
         #[allow(unused_mut)]
         let mut part_scales: (Vec<(usize, f32)>, Vec<(usize, [f32; 3])>) = (vec![], vec![]);
+        let mut part_caps: Vec<(usize, f32)> = vec![];
         let (mut key_part, mut key_vel): (Vec<(usize, Option<Transform>, Vec3, Vec3)>, Vec<(usize, Vec3, Vec3)>) = (vec![], vec![]);
         let mut shot_bullet: Option<(usize, Vec3)> = None;
         let mut fric_clamp = None;
@@ -2242,7 +2253,16 @@ impl Agent {
             if !waits(walk_actives!(self), W_CF()) {
                 if let Some(f) = self.nm_cf.as_mut() {
                     let before = self.cf_arms_only.then(|| c.ch.eff.clone());
+                    let upper_only = self.rdr2_core.is_some().then(|| c.ch.eff.clone());
                     f.tick(&mut c, world, obstacles, &mut self.nm_head, &mut self.nm_twist, dt);
+                    if let (true, Some(was)) = (std::mem::take(&mut c.out.cf_upper), upper_only) {
+                        let (l2, l3) = (crate::nmshot::limb(2), crate::nmshot::limb(3));
+                        for (k, e) in c.ch.eff.iter_mut().enumerate() {
+                            if l2.e.contains(&k) || l3.e.contains(&k) {
+                                *e = was[k].clone();
+                            }
+                        }
+                    }
                     if let Some(before) = before {
                         let (l0, l1) = (crate::nmshot::limb(0), crate::nmshot::limb(1));
                         for (k, e) in c.ch.eff.iter_mut().enumerate() {
@@ -2613,6 +2633,80 @@ impl Agent {
             let out_hit = self.doll.hit_out_id.iter().zip(&self.doll.hit_out).any(|(id, h)| h.is_some() && *id >= 0);
             let frames: Vec<Transform> = self.doll.frames().collect();
             if let Some(ch) = self.ch.as_mut() {
+                if !self.extras.on.iter().any(|(n, _)| *n == "balancerCollisionsReaction") {
+                    ch.core.bcr_state = -1;
+                }
+                // 0x2a39ee0, the spin push: an object in touch with the parts applyTo names drags them round: the velocity difference at the contact, capped at
+                // maxVelocity, times spin, as a force at the contact and its opposite through the part's centre: a couple. RDR2 goes by the object's type (ctx+0x10f0): any obstacle here
+                let coll = ch.core.cfg.coll;
+                if coll.spin > 0.0 {
+                    let rp = crate::extras_ysk_rdr2::rp;
+                    let hit: Vec<(usize, Vec3, i32)> = self.doll.hit_out.iter().zip(&self.doll.hit_out_id).enumerate().filter_map(|(k, (h, id))| Some((k, h.as_ref()?.0, *id))).filter(|h| h.2 >= 0).collect();
+                    for (k, at, id) in hit {
+                        let l = (0..frames.len().min(22)).find(|&l| rp(l) == k).unwrap_or(99);
+                        let on = coll.all || (coll.spine && 0x709u32 >> l.min(31) & 1 == 1) || (coll.thighs && (1..=2).contains(&l)) || (coll.clavicles && (11..=12).contains(&l)) || (coll.upper && 0x24000u32 >> l.min(31) & 1 == 1);
+                        let Some(ob) = self.obstacles.iter().find(|o| o.id == id).filter(|_| on) else { continue };
+                        let centre = frames[k].translation;
+                        let d = ob.vel_at(at) - (self.doll.part_vel(k) + self.doll.part_spin(k).cross(at - centre));
+                        let f = d.clamp_length_max(coll.max_speed) * (coll.spin * dt);
+                        self.doll.impulse(k, at, f);
+                        self.doll.impulse(k, centre * 2.0 - at, -f);
+                        crate::extras_core_rdr2::trace_once("spin push", || format!("setCharacterCollisions: spin push on part {k}, {:.2} N s", f.length()));
+                    }
+                }
+                // 0x2a7452c: a hand whose arm is in state 2 meets nothing
+                self.doll.ignore_parts = (0..2).filter(|&i| ch.core.arm_state[i] == 2).fold(0, |m, i| m | 1 << crate::nmshot::limb(i).p[3]);
+                if self.doll.ignore_parts != 0 {
+                    crate::extras_core_rdr2::trace_once("hand ignored", || "contacts of the rifle's hand ignored".to_string());
+                }
+                // 0x2a483f8, the foot bound swap: under 1.8 rad/s of foot spin, a foot above the pelvis, or with nothing but the shins and feet touching one
+                // upside down off the ground. Its bound's third half extent x .8, and its contacts lose friction (ctx+0x47e2)
+                {
+                    let rp = crate::extras_ysk_rdr2::rp;
+                    let pelvis = frames[rp(0)].translation;
+                    let shins_feet = (0..frames.len()).filter(|&k| (4..=7).any(|l| rp(l) == k)).fold(0u32, |m, k| m | 1 << k);
+                    let other_touch = self.doll.touch.iter().enumerate().any(|(k, t)| *t != 0 && shins_feet >> k & 1 == 0);
+                    let mut short = 0u32;
+                    for (s, foot) in [rp(5), rp(7)].into_iter().enumerate() {
+                        let spin = self.doll.part_spin(foot).length();
+                        if spin < 1.8 {
+                            let h = pelvis.z - frames[foot].translation.z;
+                            let third = (frames[foot].rotation * Vec3::Z).z;
+                            let inv = h < -0.766 || (!other_touch && third < -0.3 && h < -0.1);
+                            if inv != ch.core.foot_inverted[s] {
+                                ch.core.foot_inverted[s] = inv;
+                                crate::extras_core_rdr2::trace(|| format!("foot bound swap: foot {s} inverted {inv}, height {h:.2}"));
+                            }
+                        }
+                        if ch.core.foot_inverted[s] {
+                            short |= 1 << foot;
+                            part_scales.0.push((foot, 0.0));
+                        }
+                    }
+                    self.doll.short_feet = short;
+                }
+                // 0x2a5c018: OverrideElasticity's clock, on ctx+0x100c, the COM's acceleration [P]; the behaviours gating it (4, 0xc, 0xe: foetal, catchFall, rollUp) are "falling" here
+                {
+                    let vel = self.doll.com().1;
+                    let peak = ch.core.com_was.map_or(0.0, |w| (vel - w).length() / dt.max(1e-4));
+                    ch.core.com_was = Some(vel);
+                    let (touching, gate) = (self.doll.touch.iter().any(|t| *t != 0), self.nm_cf.is_some() || self.roll_up.is_some());
+                    crate::extras_core_rdr2::elastic_step(&mut ch.core.elastic, dt, vel, peak, touching, gate);
+                    let r = ch.core.elastic;
+                    self.doll.override_elastic.clear();
+                    if r.on && r.active {
+                        let rp = crate::extras_ysk_rdr2::rp;
+                        let legs: Vec<usize> = [1, 2, 4, 5, 6, 7].map(rp).to_vec();
+                        self.doll.override_elastic.extend((0..frames.len()).map(|k| r.scale * r.elasticity * if legs.contains(&k) { 0.5 } else { 1.0 }));
+                        crate::extras_core_rdr2::trace_once("elasticity", || format!("OverrideElasticity: world contacts take {:.2}, speed {:.2}", r.scale * r.elasticity, vel.length()));
+                    }
+                }
+                if ch.core.fire.is_some() {
+                    if ch.core.fire_seen {
+                        ch.core.fire = None;
+                    }
+                    ch.core.fire_seen = !ch.core.fire_seen;
+                }
                 // the floor's acceleration channel, ctx+0xfe0, and resistAcc (bal+0x68c): the top of the body is pushed along with it, not parts 1..6, the legs
                 static FLOOR: std::sync::OnceLock<Vec3> = std::sync::OnceLock::new();
                 ch.core.floor_acc = *FLOOR.get_or_init(|| std::env::var("RDR2_FLOOR_ACC").ok().and_then(|s| {
@@ -2663,7 +2757,13 @@ impl Agent {
                         let foot = k == rp(5) || k == rp(7);
                         let mut scale = if out_hit && !r.foot_slip { r.scale[0] } else { 1.0 };
                         if foot && (timer || r.foot_slip) {
-                            scale *= if r.cap >= 0.0 { r.scale[1].min(r.cap) } else if r.foot_slip { 1.0 } else { r.scale[1] };
+                            // ctx+0x1110 >= 0: an absolute cap on the foot's friction instead of the scale
+                            if r.cap >= 0.0 {
+                                part_caps.push((k, r.cap));
+                                crate::extras_core_rdr2::trace_once("foot cap", || format!("setCharacterCollisions: the feet's friction capped at {}", r.cap));
+                            } else if !r.foot_slip {
+                                scale *= r.scale[1];
+                            }
                         }
                         if scale != 1.0 {
                             part_scales.0.push((k, scale));
@@ -2761,6 +2861,7 @@ impl Agent {
         }
         if self.rdr2_core.is_some() {
             self.doll.set_part_scales(&part_scales.0, &[]);
+            self.doll.fric_cap = std::mem::take(&mut part_caps);
             self.doll.fric_clamp = fric_clamp;
             if let Some(p) = self.rdr2_core.as_ref() {
                 self.doll.ignore_depth = p.ignore_depth;
