@@ -863,6 +863,9 @@ impl DuckRdr2 {
         self.neck_twist_rate = p.f("neckTwistRate", self.neck_twist_rate)?;
         self.spine_twist_rate = p.f("spineTwistRate", self.spine_twist_rate)?;
         self.spine_twist_rate = p.f("elasticitypushed7", self.spine_twist_rate)?;
+        if p.get("elasticitypushed7").is_some() {
+            crate::extras_core_rdr2::trace_once("duck elastic", || format!("duck: elasticitypushed7, the spine's rate {}", self.spine_twist_rate));
+        }
         (self.wait, self.time, self.blend) = (p.f("timeBeforeDuck", self.wait)?, p.f("duckTime", self.time)?, p.f("blendTime", self.blend)?);
         (self.dont_look, self.point_gun) = (p.f("dontLookTime", self.dont_look)?, p.i("pointGunType", self.point_gun)?);
         (self.twist, self.forward, self.exag) = (p.b("leanTwistStart", self.twist)?, p.b("bendForward", self.forward)?, p.b("duckExag", self.exag)?);

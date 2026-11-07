@@ -1073,6 +1073,7 @@ impl StgRdr2 {
                 (hip, knee) = (hip * w, knee * w);
             }
             c.ch.eff[(*KNEE())[i]].set_stiffness(knee, 0.9, Some(p.leg_muscle));
+            crate::extras_core_rdr2::trace_once("stagger muscle", || format!("staggerFall: ?86f98004, the legs' muscle stiffness {}", p.leg_muscle));
             c.ch.eff[(*ANKLE())[i]].set_stiffness(ankle, 1.0, Some(STG_ANKLE_MUSCLE));
             c.ch.eff[(*HIP())[i]].set_stiffness(hip, 1.0, Some(p.leg_muscle));
         }

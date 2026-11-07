@@ -1009,6 +1009,7 @@ impl Rdr2 {
                 return;
             }
             self.crouching = Some((-c.min(0.5), hip.clamp(-1.5, 1.5), self.p.crouch_time));
+            crate::extras_core_rdr2::trace_once("crouch depth", || format!("crouch start: depth {c:.3}, between {} and {}", self.p.crouch_bend_thresh, self.p.crouch_bend_max));
             let t = turn_out.clamp(0.0, TURN_OUT_MAX);
             if t > 0.0 {
                 self.twist_rest = t;

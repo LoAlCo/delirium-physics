@@ -289,6 +289,8 @@ struct Leg {
 
 /// The behaviour's state.
 pub struct Core {
+    /// joints whose lean half ranges a snap has raised (0x2a57164)
+    snap_floor: Vec<(usize, [f32; 3])>,
     t: f32,
     since_hit: f32,
     weak_clock: f32,
@@ -557,6 +559,7 @@ impl Horse {
         // the character's generators, its two streams seeded from its body
         let seed = (com.x.to_bits() as u64) ^ ((com.y.to_bits() as u64) << 21) ^ 0x1234_5678;
         let mut c = Core {
+            snap_floor: vec![],
             t: 0.0, since_hit: 100_000.0, weak_clock: 1000.0, blend: 1.0, state: 0, was_state: -1, first: true, hit_on: false, fresh3: false, h,
             com_h: 10.0, airborne: false, free: false, ground_t: 0.0, origin: com - rows[0] * h, rows, u: Vec3::Z, tilt: 0.0, sign: 1.0, flail_sign: 2.0,
             flail: 0.0, flail_t: 0.0, lying_t: 0.0, on_parts: false, lying: false, support_t: 0.0, out_t: 0.0, fs: 1.0, fs2: 1.0, fl: 1.0,
@@ -648,6 +651,7 @@ impl Horse {
             say!(c, "0x2a1839c", "leg {i}: swing lead fraction {p:.3}, length {len:.3}");
         }
         let d = (t - hip).length();
+        // (the tolerance is the call's own, 0x2a2c5aa: .001)
         let th = bend_angle(r.a, r.b, r.c, d, r.k, 1e-3);
         say!(c, "0x2a23434", "leg {i}: distance {d:.3} of {:.3}: theta {th:.3}", r.a + r.b + r.c);
         let (f, g) = bend_f(r.a, r.b, r.c, th, d.min(r.a + r.b + r.c), r.k);
@@ -968,7 +972,7 @@ impl Horse {
         }
         let fric: Vec<(usize, f32)> = parts_of(0xfff5_fd7f).map(|k| (k, body_f)).chain(parts_of(TAIL_MASK).map(|k| (k, TAIL_FRICTION)))
             .chain((0..4).map(|i| (LEGS[LEG[i]][2], hooves_f[i]))).collect();
-        self.doll.set_part_scales(&fric, &[]);
+        self.doll.set_part_scales(&fric, &c.snap_floor);
         self.limb_limits(&mut c, &fr);
 
         // the spine and neck: the base curve under everything (the part's other two axes as they stood)
@@ -1618,6 +1622,11 @@ impl Horse {
                 torque[p] -= t;
             }
             say!(c, "0x2a57164", "joint {j}: {:.1} N m", t.length());
+            // 0x2a57164: a joint of 3 DOF has its lean half ranges raised to .3 for good (joint +0x11c, +0x120)
+            if matches!(self.build.parts[k].limit, Limit::Cone { .. } | Limit::Bone { .. }) && !c.snap_floor.iter().any(|f| f.0 == k) {
+                c.snap_floor.push((k, [0.3, 0.3, 0.0]));
+                say!(c, "0x2a57164 lean", "joint {j}: lean half ranges at least 0.3");
+            }
         }
         say!(c, "0x2a56ee8", "snap on part {rp}, magnitude {mag:.2}");
     }
