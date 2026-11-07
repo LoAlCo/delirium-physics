@@ -1349,7 +1349,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                     None => (t[0], gjk::Shape::Tri(t.map(|v| v - t[0]), WORLD_MARGIN()), Mat3::IDENTITY, poly.pen),
                 };
                 let qr = |rel: Vec3, axis: Vec3| gjk::closest(&shape, tm, rel, &tri, turn, Vec3::ZERO, axis, f32::INFINITY, Some(gjk::Pen::Tri(pen)));
-                let qw = |w: Vec3| qr(w - t0, Vec3::X);
+                let qw = |w: Vec3| qr(w - t0, if rage.is_some() { Vec3::Z } else { Vec3::X }); // Rage starts GJK along .data 0x336eb50, (0, 0, 1) (0x28ea4ec)
                 let h = if fast {
                     let (lr, xr) = (seen_w.map_or(last + o, |&w| w) - t0, xw - t0);
                     let axis = std::cell::Cell::new(Vec3::X);
@@ -1367,7 +1367,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                     let an = crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, xr, lh);
                     Held { world: an + t0, gap: (an - q.b).vd(q.n), ..h }
                 } else {
-                    let q = qw(xw).filter(|q| q.dist < delirium_data::kv!(118))?;
+                    let q = qw(xw).filter(|q| q.dist < if rage.is_some() { RAGE_REACH } else { delirium_data::kv!(118) })?;
                     new(q, x, t0)
                 };
                 let d = h.world - xw;
@@ -1383,7 +1383,8 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                     let across = if u.dot(n) == 0.0 { n } else { (n - u * u.dot(n)).normalize() };
                     dirs[k + 1].dot(across) >= dirs[0].dot(dirs[k + 1]).min(1.0 - delirium_data::kv!(50)) - delirium_data::kv!(134)
                 });
-                if careful && (leaving(h.local, dirs[0]) || !across_ok(h.ground + h.n * WORLD_MARGIN(), h.n)) {
+                // GTA IV's two filters. Rage has neither: 0x284038c, 0x28e9fbc and 0x2821184 keep a point within the query's reach whichever way the part moves, and the normal's own test is `edge_law`
+                if rage.is_none() && careful && (leaving(h.local, dirs[0]) || !across_ok(h.ground + h.n * WORLD_MARGIN(), h.n)) {
                     return None;
                 }
                 Some((Held { m, fl: world.poly_flags(poly.first), inst, tri: poly.first, ..h }, poly, rage.map(|_| (t0, tri, turn, pen))))
@@ -1475,6 +1476,9 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
         }
         *held = groups.into_iter().flat_map(|g| g.1).collect();
 }
+
+/// A pair's contact distance, the query's +0 (0x2846fb0, .data 0x3c9f2a0): 0x28e9fbc keeps what GJK finds under it, on the turned part too. The tail of 0x282b864 lengthens the side's move for the sweep, not this.
+const RAGE_REACH: f32 = 0.01;
 
 /// What Rage's collide does that GTA IV's didn't: `nm_first` only. iterations of 0x284038c's perturbation, and whether the part moves enough for one.
 #[derive(Clone, Copy)]
@@ -1601,11 +1605,14 @@ fn rage_refresh(world: &Collision, held: &mut Vec<Held>, shape: gjk::Shape, tm: 
                     held[k].ground = p - n * WORLD_MARGIN();
                 }
                 crate::extras_core_rdr2::trace_once("rage spared", || format!("rage manifold: a slid contact stays (0x285b248), {} point moves", if own { "the part's" } else { "the triangle's" }));
+            } else {
+                held.swap_remove(k);
+                crate::extras_core_rdr2::trace_once("rage slid", || format!("rage manifold: a contact slid {:.3} m goes", slid.1.sqrt()));
                 continue;
             }
-            held.swap_remove(k);
-            crate::extras_core_rdr2::trace_once("rage slid", || format!("rage manifold: a contact slid {:.3} m goes", slid.1.sqrt()));
-        } else if let (Some(k), true) = (far.0, far.1 > 0.04) {
+        }
+        // a contact spared still lets the most separated go, in the same step (0x2842988 goes on to that test when 0x285b248 keeps its contact)
+        if let (Some(k), true) = (far.0, far.1 > 0.04) {
             held.swap_remove(k);
             crate::extras_core_rdr2::trace_once("rage far", || format!("rage manifold: a contact {:.3} m off goes", far.1));
         }
@@ -1772,8 +1779,7 @@ fn rage_perturb(rm: RageMeet, shape: &gjk::Shape, tm: Mat3, xw: Vec3, o: Vec3, (
         let Some(axis) = rage_axis(&age0, xw, dir) else { break };
         let turned = Mat3::from_axis_angle(axis.normalize(), tilt) * tm;
         let Some(q) = gjk::closest(shape, turned, xw - t0, &tri, turn, Vec3::ZERO, n, f32::INFINITY, Some(gjk::Pen::Tri(pen))) else { break };
-        let reach = delirium_data::kv!(118) + (far.length() * tilt.sin()).max(0.0);
-        if q.dist >= reach {
+        if q.dist >= RAGE_REACH {
             break;
         }
         let world = q.a + t0;
