@@ -1412,7 +1412,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                         None => { groups.push((new.inst, vec![])); groups.len() - 1 }
                     };
                     if let (Some(rm), Some(tc)) = (rage, tc) {
-                        if let Some(i) = rage_hold(&mut groups[g].1, new, rm.step) {
+                        if let Some(i) = rage_hold(&mut groups[g].1, new) {
                             kept.push((g, i));
                         }
                         rage_perturb(rm, &shape, tm, xw, o, tc, new, &mut groups[g].1, &mut kept, g);
@@ -1462,7 +1462,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
 
 /// What Rage's collide does that GTA IV's didn't: `nm_first` only. iterations of 0x284038c's perturbation, and whether the part moves enough for one.
 #[derive(Clone, Copy)]
-struct RageMeet { iters: u32, moving: bool, step: Option<Mat3> }
+struct RageMeet { iters: u32, moving: bool }
 
 /// 0x2842988, a manifold's refresh, at the head of the collide: every contact's depth from the new pose, age + 1. Past age 4 it drops at most
 /// one contact a step: the one slid furthest if that's over 2 cm along the surface, else the most separated if that's over 4 cm. So a corner that
@@ -1504,12 +1504,10 @@ fn rage_refresh(held: &mut Vec<Held>, tm: Mat3, bw: Vec3) {
 /// impulses and refreshed depth. One from this very collide wins. Otherwise a free slot of six; a full manifold gives up the oldest contact sharing
 /// the new one's normal, within .985 (0x28480e4). If nothing there is older, 0x28480e4 goes on to area rules: `replaced` is the same as its branch for lone normals.
 /// The capsule's form 0x282fd0c, turning the new point by the body's step first, isn't here [P].
-fn rage_hold(held: &mut Vec<Held>, new: Held, step: Option<Mat3>) -> Option<usize> {
+fn rage_hold(held: &mut Vec<Held>, new: Held) -> Option<usize> {
     let mut near = (None, 1e-6_f32);
-    // 0x282fd0c, a capsule's: the new point is turned back by the part's step before it's compared
-    let local = step.map_or(new.local, |s| s * new.local);
     for (k, r) in held.iter().enumerate().filter(|(_, r)| r.tri == new.tri) {
-        let d = r.local.distance_squared(local).min(r.ground.distance_squared(new.ground));
+        let d = r.local.distance_squared(new.local).min(r.ground.distance_squared(new.ground));
         if d < near.1 {
             near = (Some(k), d);
         }
@@ -1609,7 +1607,7 @@ fn rage_perturb(rm: RageMeet, shape: &gjk::Shape, tm: Mat3, xw: Vec3, o: Vec3, (
         let local = turned.transpose() * (world - xw);
         let ground = q.b + t0 - q.n * WORLD_MARGIN();
         let new = Held { local, ground, gap: q.dist, age: 0, n, world: crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, xw, local), imp: Vec3::ZERO, pimp: Vec3::ZERO, ..base };
-        if let Some(i) = rage_hold(held, new, rm.step) {
+        if let Some(i) = rage_hold(held, new) {
             kept.push((g, i));
             crate::extras_core_rdr2::trace_once("rage perturb", || format!("rage perturbation: {} new, a further point at gap {:.4}, turned {:.1} deg, world {:.3?}", age0.len(), new.gap, tilt.to_degrees(), new.world - o));
         }
@@ -3034,8 +3032,7 @@ impl Ragdoll {
                 None => gjk::Shape::Capsule(p.half, p.radius * self.radius_scale.get(i).copied().unwrap_or(1.0)),
             };
             if !first {
-                let rage = self.nm_first.then(|| RageMeet { iters: if self.age < 0.04 { 3 } else { 1 }, moving: b.v.vd(b.v) >= 1e-4,
-                    step: if matches!(shape, gjk::Shape::Capsule(..)) { self.seen.get(i).map(|s| s.1.transpose() * tm) } else { None } });
+                let rage = self.nm_first.then(|| RageMeet { iters: if self.age < 0.04 { 3 } else { 1 }, moving: b.v.vd(b.v) >= 1e-4 });
                 world_meet(world, o, shape, bound_half(p), tm, x, xw, self.seen.get(i), self.seen_w.get(i), self.seen_r.get(i), held, true, rage);
             }
             let last = self.seen.get(i).map_or(x, |s| s.0);
@@ -3576,7 +3573,7 @@ impl Ragdoll {
             let new = if flip { Held { local: new.ground, ground: new.local, ..new } } else { new };
             if rage {
                 if new.gap < MARGIN() {
-                    rage_hold(held, new, None);
+                    rage_hold(held, new);
                     crate::extras_core_rdr2::trace_once("rage pair", || "rage pair manifold: a contact added by 0x2822930's rules".to_string());
                 }
             } else {

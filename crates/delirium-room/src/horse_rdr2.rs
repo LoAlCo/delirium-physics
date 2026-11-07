@@ -7,7 +7,8 @@
 //! solver (`leg_ik`, 0x2a2c398): knee and hock tied as a Z with interior angles theta and k theta, Newton on the
 //! hip-to-sole distance, then the hip's shortest arc plus the hind legs' swivel. Hock limits follow the knee
 //! (`quadLimbLimit`, type 3). It steps when the look-ahead COM leaves the hooves' hull, by leg pairs per gait.
-//! The stayUpright torque (0x2a5a238) keeps row a up; there is no gravity opposition on a quadruped (0x2a45344).
+//! The stayUpright torque (0x2a5a238) keeps row a up. The biped's gravity opposition doesn't run on a quadruped (0x2a45344), but the body's flush does run
+//! its own solver while state < 2 (0x2a5ce00 -> 0x2a37820 -> 0x2a1932c: weight shared among the feet, joint torques down each leg): not ported (rdr2_helpers.md).
 //!
 //! Where it isn't RDR2's: A joint's "request blend" (+0x48)
 //! blends stiffness to the rig's and the target from the last one sent ([P] of the limb layer). The knees and hocks

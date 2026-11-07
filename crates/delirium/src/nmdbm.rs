@@ -415,9 +415,9 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
     // 0x2ab32bc, bal+0x454 and +0x2fc (read off bal+0xe0 as +0x374, +0x21c; written by the shot's intake 0x2a94a10): until the next step, the side of the hit
     // leans the choice: L + biasR against R + biasL, biasR = -.4 clamp(lever, -.5, .5), biasL = -biasR. Not while turning
     if let Some(r) = r.filter(|r| !r.turning && r.lever.0 != 0.0 && r.steps <= r.lever.1) {
+        // (in place of the alternation's lead, not on top of it)
         let b = -0.4 * r.lever.0.clamp(-0.5, 0.5);
-        d[0] += b;
-        d[1] -= b;
+        d = [f.dist[0] + b, f.dist[1] - b];
         crate::extras_core_rdr2::trace_once("step bias", || format!("the bullet's side lever {:.3} biases the step: left {:.3}, steps {}", r.lever.0, b, r.steps));
     }
     let a = d[0] > d[1] && free;
