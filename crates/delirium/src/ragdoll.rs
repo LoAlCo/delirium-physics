@@ -1349,7 +1349,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                     None => (t[0], gjk::Shape::Tri(t.map(|v| v - t[0]), WORLD_MARGIN()), Mat3::IDENTITY, poly.pen),
                 };
                 let qr = |rel: Vec3, axis: Vec3| gjk::closest(&shape, tm, rel, &tri, turn, Vec3::ZERO, axis, f32::INFINITY, Some(gjk::Pen::Tri(pen)));
-                let qw = |w: Vec3| qr(w - t0, Vec3::X);
+                let qw = |w: Vec3| qr(w - t0, if rage.is_some() { Vec3::Z } else { Vec3::X }); // Rage starts GJK along .data 0x336eb50, (0, 0, 1) (0x28ea4ec)
                 let h = if fast {
                     let (lr, xr) = (seen_w.map_or(last + o, |&w| w) - t0, xw - t0);
                     let axis = std::cell::Cell::new(Vec3::X);
