@@ -1770,6 +1770,9 @@ impl Agent {
         }
         if let (Some(b), Some(ch), true) = (self.balance.as_mut(), self.ch.as_mut(), nm_tick) {
             if let Some(dbm) = b.dbm.as_mut() {
+                if let (Some(l), Some(r)) = (ch.core.side_lever.take(), dbm.p.rdr2.as_mut()) {
+                    r.lever = (l, r.steps);
+                }
                 let c = dbm_config(self.config, &b.params, self.lean_bias, self.hip_yaw, self.legs);
                 dbm.lean = match self.lean {
                     Some((mode, amount, _, as_force)) => crate::nmdbm::Lean { mode, amount, as_force },
@@ -1905,6 +1908,7 @@ impl Agent {
         let mut bb_req = (false, None, None);
         #[allow(unused_mut)]
         let mut part_scales: (Vec<(usize, f32)>, Vec<(usize, [f32; 3])>) = (vec![], vec![]);
+        let mut part_caps: Vec<(usize, f32)> = vec![];
         let (mut key_part, mut key_vel): (Vec<(usize, Option<Transform>, Vec3, Vec3)>, Vec<(usize, Vec3, Vec3)>) = (vec![], vec![]);
         let mut shot_bullet: Option<(usize, Vec3)> = None;
         let mut fric_clamp = None;
@@ -2199,7 +2203,16 @@ impl Agent {
             if !waits(walk_actives!(self), W_CF()) {
                 if let Some(f) = self.nm_cf.as_mut() {
                     let before = self.cf_arms_only.then(|| c.ch.eff.clone());
+                    let upper_only = self.rdr2_core.is_some().then(|| c.ch.eff.clone());
                     f.tick(&mut c, world, obstacles, &mut self.nm_head, &mut self.nm_twist, dt);
+                    if let (true, Some(was)) = (std::mem::take(&mut c.out.cf_upper), upper_only) {
+                        let (l2, l3) = (crate::nmshot::limb(2), crate::nmshot::limb(3));
+                        for (k, e) in c.ch.eff.iter_mut().enumerate() {
+                            if l2.e.contains(&k) || l3.e.contains(&k) {
+                                *e = was[k].clone();
+                            }
+                        }
+                    }
                     if let Some(before) = before {
                         let (l0, l1) = (crate::nmshot::limb(0), crate::nmshot::limb(1));
                         for (k, e) in c.ch.eff.iter_mut().enumerate() {
@@ -2569,6 +2582,27 @@ impl Agent {
             let out_hit = self.doll.hit_out_id.iter().zip(&self.doll.hit_out).any(|(id, h)| h.is_some() && *id >= 0);
             let frames: Vec<Transform> = self.doll.frames().collect();
             if let Some(ch) = self.ch.as_mut() {
+                if !self.extras.on.iter().any(|(n, _)| *n == "balancerCollisionsReaction") {
+                    ch.core.bcr_state = -1;
+                }
+                // 0x2a39ee0, the spin push: an object in touch with the parts applyTo names drags them round: the velocity difference at the contact, capped at
+                // maxVelocity, times spin, as a force at the contact and its opposite through the part's centre: a couple. RDR2 goes by the object's type (ctx+0x10f0): any obstacle here
+                let coll = ch.core.cfg.coll;
+                if coll.spin > 0.0 {
+                    let rp = crate::extras_ysk_rdr2::rp;
+                    let hit: Vec<(usize, Vec3, i32)> = self.doll.hit_out.iter().zip(&self.doll.hit_out_id).enumerate().filter_map(|(k, (h, id))| Some((k, h.as_ref()?.0, *id))).filter(|h| h.2 >= 0).collect();
+                    for (k, at, id) in hit {
+                        let l = (0..frames.len().min(22)).find(|&l| rp(l) == k).unwrap_or(99);
+                        let on = coll.all || (coll.spine && 0x709u32 >> l.min(31) & 1 == 1) || (coll.thighs && (1..=2).contains(&l)) || (coll.clavicles && (11..=12).contains(&l)) || (coll.upper && 0x24000u32 >> l.min(31) & 1 == 1);
+                        let Some(ob) = self.obstacles.iter().find(|o| o.id == id).filter(|_| on) else { continue };
+                        let centre = frames[k].translation;
+                        let d = ob.vel_at(at) - (self.doll.part_vel(k) + self.doll.part_spin(k).cross(at - centre));
+                        let f = d.clamp_length_max(coll.max_speed) * (coll.spin * dt);
+                        self.doll.impulse(k, at, f);
+                        self.doll.impulse(k, centre * 2.0 - at, -f);
+                        crate::extras_core_rdr2::trace_once("spin push", || format!("setCharacterCollisions: spin push on part {k}, {:.2} N s", f.length()));
+                    }
+                }
                 // 0x2a7452c: a hand whose arm is in state 2 meets nothing
                 self.doll.ignore_parts = (0..2).filter(|&i| ch.core.arm_state[i] == 2).fold(0, |m, i| m | 1 << crate::nmshot::limb(i).p[3]);
                 if self.doll.ignore_parts != 0 {
@@ -2672,7 +2706,13 @@ impl Agent {
                         let foot = k == rp(5) || k == rp(7);
                         let mut scale = if out_hit && !r.foot_slip { r.scale[0] } else { 1.0 };
                         if foot && (timer || r.foot_slip) {
-                            scale *= if r.cap >= 0.0 { r.scale[1].min(r.cap) } else if r.foot_slip { 1.0 } else { r.scale[1] };
+                            // ctx+0x1110 >= 0: an absolute cap on the foot's friction instead of the scale
+                            if r.cap >= 0.0 {
+                                part_caps.push((k, r.cap));
+                                crate::extras_core_rdr2::trace_once("foot cap", || format!("setCharacterCollisions: the feet's friction capped at {}", r.cap));
+                            } else if !r.foot_slip {
+                                scale *= r.scale[1];
+                            }
                         }
                         if scale != 1.0 {
                             part_scales.0.push((k, scale));
@@ -2770,6 +2810,7 @@ impl Agent {
         }
         if self.rdr2_core.is_some() {
             self.doll.set_part_scales(&part_scales.0, &[]);
+            self.doll.fric_cap = std::mem::take(&mut part_caps);
             self.doll.fric_clamp = fric_clamp;
             if let Some(p) = self.rdr2_core.as_ref() {
                 self.doll.ignore_depth = p.ignore_depth;

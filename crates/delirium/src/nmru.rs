@@ -237,6 +237,7 @@ impl RollUp {
     /// RDR2's tick: a roll speed from the linear and angular speeds, smoothed; legs, spine and arms from it, the spin's
     /// push and how far the spin is off the body's side axis.
     fn roll_rdr2(&mut self, c: &mut Ctx, brace: bool, dt: f32) {
+        self.rifle_rdr2(c);
         let p = self.rdr2;
         let (m, w, up) = (c.m, c.angvel, c.up);
         let (v, spin_speed) = (c.vel.length(), w.length());
@@ -326,6 +327,30 @@ impl RollUp {
     }
 
     /// RDR2's arm reach: as GTA IV's, but its lead is up x the spine's spin and the clavicle stays where it is.
+    /// rdr2_rollup.md 3.6, +0x89: with riflePose, the weapon arm's own pose by its state; the core's default arms stay off (ctx+0x480c).
+    fn rifle_rdr2(&self, c: &mut Ctx) {
+        if !c.ch.core.cfg.fall.rifle_pose {
+            return;
+        }
+        for i in 0..2 {
+            let l = crate::nmshot::limb(i);
+            match c.ch.core.arm_state[i] {
+                2 => {
+                    c.ch.eff[l.e[2]].desired[0] = 2.0;
+                    c.ch.eff[l.e[1]].desired = [0.0; 3];
+                }
+                3 => {
+                    c.ch.eff[l.e[2]].desired[0] = 1.56182;
+                    c.ch.eff[l.e[1]].desired = [-0.153359, 0.421808, 0.907456];
+                    c.ch.eff[l.e[0]].desired = [0.257334, -0.01839, -0.14682];
+                }
+                _ => continue,
+            }
+            c.ch.core.arms_held = true;
+            crate::extras_core_rdr2::trace_first("bodyRollUp: riflePose, the weapon arm's pose");
+        }
+    }
+
     fn arm_rdr2(&self, c: &mut Ctx, i: usize, side: f32, reach: f32) -> (f32, f32) {
         let l = limb(i);
         let (m, up) = (c.m, c.up);

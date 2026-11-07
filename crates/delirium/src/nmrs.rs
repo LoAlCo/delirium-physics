@@ -592,6 +592,13 @@ pub struct Character {
 pub struct CoreState {
     /// ctx+0x34e8: which hands have a weapon registered, bit 16 left, bit 19 right
     pub weapon_bits: u32,
+    /// the shot's side lever for the balancer (bal+0x2fc)
+    pub side_lever: Option<f32>,
+    /// balancerCollisionsReaction's state (+0x268), -1 when it isn't running
+    pub bcr_state: i32,
+    /// ctx+0x1014, +0x1016
+    pub constraint_arms: bool,
+    pub constraint_legs: bool,
     /// the COM's velocity last step, for ctx+0x100c
     pub com_was: Option<Vec3>,
     /// ctx+0x2ca4, +0x2ce4: each arm's weapon state: 0 none, 1 pistol, 2 rifle, 3, 4 not usable (0x2a51944, 0x2a4e830)
@@ -721,7 +728,7 @@ impl CoreState {
 
 impl Default for CoreState {
     fn default() -> CoreState {
-        CoreState { fire_seen: false, com_was: None, weapon_bits: 0, arm_state: [0; 2], fire: None, elastic: ElasticRec::default(), foot_inverted: [false; 2], arms_held: false, floor_acc: Vec3::ZERO, props: [(-1, 0.0, 0.0); 8], prop_hit: [(-1, bevy_math::Vec3::ZERO, bevy_math::Vec3::ZERO, -1); 4], lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
+        CoreState { side_lever: None, bcr_state: -1, constraint_arms: false, constraint_legs: false, fire_seen: false, com_was: None, weapon_bits: 0, arm_state: [0; 2], fire: None, elastic: ElasticRec::default(), foot_inverted: [false; 2], arms_held: false, floor_acc: Vec3::ZERO, props: [(-1, 0.0, 0.0); 8], prop_hit: [(-1, bevy_math::Vec3::ZERO, bevy_math::Vec3::ZERO, -1); 4], lim: [JointLim::default(); 32], scale: [[1.0; 3]; 32], foot_slip: (60.0, 10.0), zmp: true, bullet_new: None, bullet_seen: None, hands: [false; 2], fling_stagger: [false; 2], shot_brace: true, hands_auto: [false; 2], feet: [None; 2], stay: Default::default(), bullet: None, ftk: Default::default(), cfg: Default::default(), foot_hold: true, foot_unlatch: false, cf_knee: [false; 3], rds_knee: None }
     }
 }
 

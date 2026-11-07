@@ -1575,6 +1575,7 @@ impl BcrRdr2 {
         }
         let fow_on = c.extras_on.contains(&"fallOverWall");
         self.fow_starting = false;
+        c.ch.core.bcr_state = self.state as i32;
         self.machine(c, dt, fow_on, out);
         c.ch.core.prop_hit = [(-1, Vec3::ZERO, Vec3::ZERO, -1); 4];
         let speed = (c.vel - up * up.dot(c.vel)).length();

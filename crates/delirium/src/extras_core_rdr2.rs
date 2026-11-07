@@ -54,6 +54,8 @@ pub static MESSAGES: [Message; 21] = [
     ] },
     Message { name: "configureConstraints", params: &[
         Param { name: "mask", kind: Kind::Str, used: true, doc: "RDR2's constraint config; the joints' limits take in where they are, for good (not sent by any set)" },
+        Param { name: "?641de259", kind: Kind::Bool, used: true, doc: "ctx+0x1014: a change takes the arms' joints like the mask's (false)" },
+        Param { name: "?5a9f278c", kind: Kind::Bool, used: true, doc: "ctx+0x1016: a change takes the legs' (false)" },
     ] },
     Message { name: "SoftKey", params: &[
         Param { name: "mask", kind: Kind::Str, used: true, doc: "the joints (fb)" },
@@ -253,6 +255,8 @@ impl Default for BulletCfg {
 /// setFallingReaction's values (0x2a74c3c): catchFall's fields, which only that message writes (rdr2_catchfall.md 2).
 #[derive(Clone, Copy, Debug)]
 pub struct FallCfg {
+    /// catchFall +0xc0, rollUp +0x89: riflePose
+    pub rifle_pose: bool,
     pub com_vel_rds: f32,
     pub inhibit_rolling: f32,
     pub change_friction_time: f32,
@@ -300,7 +304,7 @@ pub struct FallCfg {
 
 impl Default for FallCfg {
     fn default() -> FallCfg {
-        FallCfg { stop_manual: 0.0, stop_on_slopes: f32::MAX, knee_rate: 10000.0, anti_prop_clav: 0.0, swing_circle: 1.0, knee_tweak: 1.0, knee_limit: 3.0, limit_rate: 1.0, foot_friction: 0.0, hk: false, hk_head: true, hk_window: 0.0, hand_window: 100000.0, force_head: false, rds_smart: None, com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
+        FallCfg { rifle_pose: false, stop_manual: 0.0, stop_on_slopes: f32::MAX, knee_rate: 10000.0, anti_prop_clav: 0.0, swing_circle: 1.0, knee_tweak: 1.0, knee_limit: 3.0, limit_rate: 1.0, foot_friction: 0.0, hk: false, hk_head: true, hk_window: 0.0, hand_window: 100000.0, force_head: false, rds_smart: None, com_vel_rds: 2.0, inhibit_rolling: 0.2, change_friction_time: 0.2, ground_friction: 1.0, arm_friction: 0.3, friction_min: 0.0, friction_max: 9999.0, k_rate: 2.0, k_time: 10.0, spine_lean: 0.5, success: 1.0, min_leg: 3.0, min_spine: 4.5, min_arm: 7.0, call_rds: 0.0, resist_rolling: 0.0 }
     }
 }
 
@@ -311,10 +315,11 @@ impl FallCfg {
     }
 
     /// One value by the port's name; the names of the parameters the message takes for these.
-    pub const NAMES: [&'static str; 27] = ["?5be84846", "?c3e9ccc1", "stopManual", "stopOnSlopes", "blendkneerate", "antiPropClav", "?7dad7aaf", "?dcd030d5", "zmpgroundcollision", "?7579162f", "?4fe4ab89", "comVelRDSThresh", "inhibitRollingTime", "changeFrictionTime", "groundFriction", "armFriction", "frictionMin", "frictionMax", "stoppedStrengthDecay", "kTime", "spineLeanGain", "successStrength", "minLegStiffness", "minSpineStiffness", "minArmStiffness", "callRDS", "resistRolling"];
+    pub const NAMES: [&'static str; 28] = ["riflePose", "?5be84846", "?c3e9ccc1", "stopManual", "stopOnSlopes", "blendkneerate", "antiPropClav", "?7dad7aaf", "?dcd030d5", "zmpgroundcollision", "?7579162f", "?4fe4ab89", "comVelRDSThresh", "inhibitRollingTime", "changeFrictionTime", "groundFriction", "armFriction", "frictionMin", "frictionMax", "stoppedStrengthDecay", "kTime", "spineLeanGain", "successStrength", "minLegStiffness", "minSpineStiffness", "minArmStiffness", "callRDS", "resistRolling"];
 
     pub fn set(&mut self, name: &str, v: f32) {
         match name {
+            "riflePose" => self.rifle_pose = v != 0.0,
             "?5be84846" => self.hand_window = v,
             "?c3e9ccc1" => self.hk_window = v,
             "comVelRDSThresh" => self.com_vel_rds = v,
@@ -815,8 +820,25 @@ fn limits(p: &mut P) -> Result<Box<dyn Extra>, Error> {
 /// takes that for good (slot +0xf0, 0).
 fn constraints(p: &mut P) -> Result<Box<dyn Extra>, Error> {
     let mask = p.s("mask", "fb")?;
+    let (arms, legs) = (p.b("?641de259", false)?, p.b("?5a9f278c", false)?);
     Ok(once(move |c| {
-        let on = joint_mask(&mask);
+        let mut on = joint_mask(&mask);
+        // 0x2a26f54: on a change of ctx+0x1014 the arms (0xfd800), of ctx+0x1016 the legs (0xf6): each joint's slot +0x110, +0xf0, Rage's constraint built afresh.
+        // The other four fields (+0x1015, +0x1017, +0x1018, +0x101c, +0x1020) have no reader in the code read
+        for (i, (now, was)) in [(arms, &mut c.ch.core.constraint_arms), (legs, &mut c.ch.core.constraint_legs)].into_iter().enumerate() {
+            if now != *was {
+                *was = now;
+                let limbs = if i == 0 { [0, 1] } else { [2, 3] };
+                for l in limbs {
+                    for &j in crate::nmshot::limb(l).e.iter() {
+                        if let Some(o) = on.get_mut(j) {
+                            *o = true;
+                        }
+                    }
+                }
+                trace(|| format!("configureConstraints: {} switched {now}", ["arms", "legs"][i]));
+            }
+        }
         for j in (0..c.ch.eff.len()).filter(|&j| on.get(j).copied().unwrap_or(false)) {
             let a = c.ch.actual(j, c.b.frames);
             c.ch.lim_around(j, a, 0.0);

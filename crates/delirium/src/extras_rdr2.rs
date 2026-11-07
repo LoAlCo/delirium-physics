@@ -154,7 +154,7 @@ pub static MESSAGES: [Message; 28] = [
         Param { name: "blendkneerate", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the knees' rate (10000)" },
         Param { name: "antiPropClav", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: falling backward, no clavicle (false)" },
         Param { name: "antiPropWeak", kind: Kind::Float, used: false, doc: "RDR2 core: +0xc2: no reader in the game's code" },
-        Param { name: "riflePose", kind: Kind::Float, used: false, doc: "RDR2 core: +0xc0: an arm pose while the arm's weapon state is 2; no weapon states here" },
+        Param { name: "riflePose", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's and rollUp's arm pose while the arm's weapon state is 2 or 3 (false)" },
         Param { name: "?7dad7aaf", kind: Kind::Float, used: true, doc: "RDR2 core: catchFall's: the arm's swing circle (0)" },
         Param { name: "?dcd030d5", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x1068: the knee and foot tweak (0)" },
         Param { name: "zmpgroundcollision", kind: Kind::Float, used: true, doc: "RDR2 core: ctx+0x105c: how far the tweaked knee may fold (3)" },
@@ -2976,8 +2976,14 @@ impl ReachForWound {
             if both && (r.falling_one == 1 && i == 1 || r.falling_one == 2 && i == 0) {
                 return;
             }
-            // 0x2a35fb8, 0x2a33350: the COM frame 0.2 s on by its spin, and which way he lies then
-            let class = rfw_lie_class(c, 0.2);
+            // 0x2a35fb8, 0x2a33350: the COM frame 0.2 s on by its spin, and which way he lies then.
+            // All of it is skipped while the shot's fall to knees has him on them (shot+0x785, shot+0x5e8's +0x74) [P: that flag is `kneeling`]
+            let class = if c.ch.core.ftk.on && c.ch.core.ftk.kneeling {
+                crate::extras_core_rdr2::trace_first("reach for wound: on his knees, no lying rules");
+                0
+            } else {
+                rfw_lie_class(c, 0.2)
+            };
             let (mut keep_l, mut keep_r) = (false, false);
             match class {
                 1 | 2 => (keep_l, keep_r) = (true, true),

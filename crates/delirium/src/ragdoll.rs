@@ -1218,7 +1218,7 @@ pub struct Manifold(Vec<Held>);
 
 impl Manifold {
     pub fn update(&mut self, a: (gjk::Shape, Vec3, (Vec3, Mat3), (Vec3, Mat3)), c: (gjk::Shape, Vec3, (Vec3, Mat3), (Vec3, Mat3)), flip: bool) {
-        Ragdoll::manifold(&mut self.0, a, c, flip);
+        Ragdoll::manifold(&mut self.0, a, c, flip, false);
     }
 
     pub fn points(&self, (xa, qa): (Vec3, Mat3), (xc, qc): (Vec3, Mat3)) -> Vec<(Vec3, Vec3, Vec3, f32)> {
@@ -1412,7 +1412,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                         None => { groups.push((new.inst, vec![])); groups.len() - 1 }
                     };
                     if let (Some(rm), Some(tc)) = (rage, tc) {
-                        if let Some(i) = rage_hold(&mut groups[g].1, new) {
+                        if let Some(i) = rage_hold(&mut groups[g].1, new, rm.step) {
                             kept.push((g, i));
                         }
                         rage_perturb(rm, &shape, tm, xw, o, tc, new, &mut groups[g].1, &mut kept, g);
@@ -1462,7 +1462,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
 
 /// What Rage's collide does that GTA IV's didn't: `nm_first` only. iterations of 0x284038c's perturbation, and whether the part moves enough for one.
 #[derive(Clone, Copy)]
-struct RageMeet { iters: u32, moving: bool }
+struct RageMeet { iters: u32, moving: bool, step: Option<Mat3> }
 
 /// 0x2842988, a manifold's refresh, at the head of the collide: every contact's depth from the new pose, age + 1. Past age 4 it drops at most
 /// one contact a step: the one slid furthest if that's over 2 cm along the surface, else the most separated if that's over 4 cm. So a corner that
@@ -1504,10 +1504,12 @@ fn rage_refresh(held: &mut Vec<Held>, tm: Mat3, bw: Vec3) {
 /// impulses and refreshed depth. One from this very collide wins. Otherwise a free slot of six; a full manifold gives up the oldest contact sharing
 /// the new one's normal, within .985 (0x28480e4). If nothing there is older, 0x28480e4 goes on to area rules: `replaced` is the same as its branch for lone normals.
 /// The capsule's form 0x282fd0c, turning the new point by the body's step first, isn't here [P].
-fn rage_hold(held: &mut Vec<Held>, new: Held) -> Option<usize> {
+fn rage_hold(held: &mut Vec<Held>, new: Held, step: Option<Mat3>) -> Option<usize> {
     let mut near = (None, 1e-6_f32);
+    // 0x282fd0c, a capsule's: the new point is turned back by the part's step before it's compared
+    let local = step.map_or(new.local, |s| s * new.local);
     for (k, r) in held.iter().enumerate().filter(|(_, r)| r.tri == new.tri) {
-        let d = r.local.distance_squared(new.local).min(r.ground.distance_squared(new.ground));
+        let d = r.local.distance_squared(local).min(r.ground.distance_squared(new.ground));
         if d < near.1 {
             near = (Some(k), d);
         }
@@ -1607,7 +1609,7 @@ fn rage_perturb(rm: RageMeet, shape: &gjk::Shape, tm: Mat3, xw: Vec3, o: Vec3, (
         let local = turned.transpose() * (world - xw);
         let ground = q.b + t0 - q.n * WORLD_MARGIN();
         let new = Held { local, ground, gap: q.dist, age: 0, n, world: crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, xw, local), imp: Vec3::ZERO, pimp: Vec3::ZERO, ..base };
-        if let Some(i) = rage_hold(held, new) {
+        if let Some(i) = rage_hold(held, new, rm.step) {
             kept.push((g, i));
             crate::extras_core_rdr2::trace_once("rage perturb", || format!("rage perturbation: {} new, a further point at gap {:.4}, turned {:.1} deg, world {:.3?}", age0.len(), new.gap, tilt.to_degrees(), new.world - o));
         }
@@ -1844,7 +1846,8 @@ impl Ragdoll {
     /// it, no warm start (0x28e4740 passes 0 for it there)
     fn push_block_rage(b: &Block, gap: f32, h: f32) -> Block {
         let e = -gap - 0.007;
-        let t = (if e > 0.0 { e * 0.25 } else { e }) / h;
+        // (.05 / K on the impulse, 0x28a5b30: .05 on the row's own move)
+        let t = (if e > 0.0 { (e * 0.25).min(0.05) } else { e }) / h;
         let g = b.g.map(|g| G7 { target: Vec3::new(t, 0.0, 0.0), ..g });
         Block { target: DVec3::new(t as f64, 0.0, 0.0), lambda: DVec3::ZERO, held: None, scale: DVec3::ONE, g, ..b.clone() }
     }
@@ -1926,6 +1929,8 @@ pub struct Ragdoll {
     pub contact_off: u32,
     /// RDR2 core: parts with no contacts at all this step (a hand whose arm state is 2, 0x2a7452c)
     pub ignore_parts: u32,
+    /// RDR2 core: an absolute cap on a part's contact friction this step (ctx+0x1110)
+    pub fric_cap: Vec<(usize, f32)>,
     /// RDR2 core: the feet whose bound is short (0x2a483f8), part indices
     pub short_feet: u32,
     /// RDR2 core: OverrideElasticity: the world contacts' elasticity, before the part's
@@ -2080,7 +2085,7 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { ignore_parts: 0, short_feet: 0, override_elastic: vec![], hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+        Ragdoll { fric_cap: vec![], ignore_parts: 0, short_feet: 0, override_elastic: vec![], hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
                   sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, lim_warm: vec![], early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
@@ -2137,6 +2142,10 @@ impl Ragdoll {
     pub fn unpin(&mut self) {
         self.pins.iter_mut().for_each(|p| *p = None);
         self.age = 0.0;
+    }
+
+    pub fn part_vel(&self, k: usize) -> Vec3 {
+        self.bodies[k].v
     }
 
     pub fn part_spin(&self, k: usize) -> Vec3 {
@@ -3025,7 +3034,8 @@ impl Ragdoll {
                 None => gjk::Shape::Capsule(p.half, p.radius * self.radius_scale.get(i).copied().unwrap_or(1.0)),
             };
             if !first {
-                let rage = self.nm_first.then(|| RageMeet { iters: if self.age < 0.04 { 3 } else { 1 }, moving: b.v.vd(b.v) >= 1e-4 });
+                let rage = self.nm_first.then(|| RageMeet { iters: if self.age < 0.04 { 3 } else { 1 }, moving: b.v.vd(b.v) >= 1e-4,
+                    step: if matches!(shape, gjk::Shape::Capsule(..)) { self.seen.get(i).map(|s| s.1.transpose() * tm) } else { None } });
                 world_meet(world, o, shape, bound_half(p), tm, x, xw, self.seen.get(i), self.seen_w.get(i), self.seen_r.get(i), held, true, rage);
             }
             let last = self.seen.get(i).map_or(x, |s| s.0);
@@ -3035,7 +3045,7 @@ impl Ragdoll {
                 self.touch[i] |= touch;
                 add(at + o, r.n, -r.gap, -1);
                 hit_ob.push((hits.len(), world_id(r.inst), at + o, r.n));
-                hits.push((i, at, r.n, r.gap, clamp_fric(self.fric_clamp, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0)), Vec3::ZERO, self.override_elastic.get(i).copied().unwrap_or((PART_ELASTICITY() * row[1]).min(1.0)), Some((i, k)), at));
+                hits.push((i, at, r.n, r.gap, self.fric_cap.iter().find(|c| c.0 == i).map_or(f32::MAX, |c| c.1).min(clamp_fric(self.fric_clamp, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0))), Vec3::ZERO, self.override_elastic.get(i).copied().unwrap_or((PART_ELASTICITY() * row[1]).min(1.0)), Some((i, k)), at));
             }
             let a_last = (last, self.seen.get(i).map_or(tm, |s| s.1));
             for ob in obstacles.iter().filter(|ob| !self.joins.iter().any(|j| j.2 == ob.id)) {
@@ -3075,7 +3085,7 @@ impl Ragdoll {
                         continue;
                     }
                     let s = slot.unwrap_or_else(|| { self.held_car.push((i, ob.id, c, vec![])); self.held_car.len() - 1 });
-                    Self::manifold(&mut self.held_car[s].3, (shape, bound_half(p), (bw, tm), a_world), side_c, ob.first);
+                    Self::manifold(&mut self.held_car[s].3, (shape, bound_half(p), (bw, tm), a_world), side_c, ob.first, claw);
                     if self.no_collision == Some(ob.id) {
                         self.no_collision_met |= !self.held_car[s].3.is_empty();
                         self.held_car[s].3.clear();
@@ -3104,7 +3114,7 @@ impl Ragdoll {
                             _ => ob.vel_at(on + o),
                         };
                         let row = ob.surface(cp);
-                        hits.push((i, at, r.n, r.gap, clamp_fric(self.fric_clamp, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0)), v, (PART_ELASTICITY() * row[1]).min(1.0), Some((car_base + s, k)), on));
+                        hits.push((i, at, r.n, r.gap, self.fric_cap.iter().find(|c| c.0 == i).map_or(f32::MAX, |c| c.1).min(clamp_fric(self.fric_clamp, (part_friction(p) * row[0] * self.fric.get(i).copied().unwrap_or(1.0)).max(0.0))), v, (PART_ELASTICITY() * row[1]).min(1.0), Some((car_base + s, k)), on));
                     }
                 }
             }
@@ -3134,7 +3144,7 @@ impl Ragdoll {
                 while old.get(next_old).is_some_and(|((oa, oc), _)| (*oc, *oa) < (c, a)) { next_old += 1; }
                 if old.get(next_old).is_some_and(|o| o.0 == (a, c)) { self.held_pairs[pi] = std::mem::take(&mut old[next_old].1); next_old += 1; }
                 self.held_keys[pi] = Some((a, c));
-                Self::manifold(&mut self.held_pairs[pi], (part_shape(&build.parts[a]), bound_half(&build.parts[a]), wa, sa), (part_shape(&build.parts[c]), bound_half(&build.parts[c]), wc, sc), false);
+                Self::manifold(&mut self.held_pairs[pi], (part_shape(&build.parts[a]), bound_half(&build.parts[a]), wa, sa), (part_shape(&build.parts[c]), bound_half(&build.parts[c]), wc, sc), false, claw);
             }
         }
         let (lock_axes, turned) = self.lock_slack(obstacles);
@@ -3516,12 +3526,34 @@ impl Ragdoll {
             held.clear();
             return;
         }
-        Self::manifold(held, (part_shape(a), bound_half(a), fa, sa), (part_shape(c), bound_half(c), fc, sc), false);
+        Self::manifold(held, (part_shape(a), bound_half(a), fa, sa), (part_shape(c), bound_half(c), fc, sc), false, false);
     }
 
-    fn manifold(held: &mut Vec<Held>, (a, ha, fa, sa): (gjk::Shape, Vec3, (Vec3, Mat3), (Vec3, Mat3)), (c, hc, fc, sc): (gjk::Shape, Vec3, (Vec3, Mat3), (Vec3, Mat3)), flip: bool) {
+    fn manifold(held: &mut Vec<Held>, (a, ha, fa, sa): (gjk::Shape, Vec3, (Vec3, Mat3), (Vec3, Mat3)), (c, hc, fc, sc): (gjk::Shape, Vec3, (Vec3, Mat3), (Vec3, Mat3)), flip: bool, rage: bool) {
         let ((xa, qa), (xc, qc)) = (fa, fc);
         let ends = |r: &Held| (crate::vm4(qa.x_axis, qa.y_axis, qa.z_axis, xa, r.local), crate::vm4(qc.x_axis, qc.y_axis, qc.z_axis, xc, r.ground));
+        // RDR2 core: 0x2842988 on these pairs as on the world's: depth from the new pose, one removal a step past age 4, the most slid over 2 cm, else the most separated over 4 cm
+        if rage {
+            for r in held.iter_mut() {
+                let (pa, pc) = ends(r);
+                r.gap = (pa - pc).vd(r.n);
+                r.age = r.age.saturating_add(1);
+            }
+            let slid = |r: &Held| { let (pa, pc) = ends(r); let d = pc - (pa - r.n * r.gap); d.vd(d) };
+            let (mut most, mut far): ((Option<usize>, f32), (Option<usize>, f32)) = ((None, 0.0), (None, 0.0));
+            for (k, r) in held.iter().enumerate().filter(|(_, r)| r.age > 4) {
+                let d = slid(r);
+                if d > most.1 { most = (Some(k), d); }
+                if r.gap > far.1 { far = (Some(k), r.gap); }
+            }
+            if let (Some(k), true) = (most.0, most.1 > 0.0004) {
+                held.swap_remove(k);
+                crate::extras_core_rdr2::trace_once("rage pair slid", || format!("rage pair manifold: a contact slid {:.3} m goes", most.1.sqrt()));
+            } else if let (Some(k), true) = (far.0, far.1 > 0.04) {
+                held.swap_remove(k);
+                crate::extras_core_rdr2::trace_once("rage pair far", || format!("rage pair manifold: a contact {:.3} m off goes", far.1));
+            }
+        }
         let (la, lc) = (sa.0, sc.0);
         let moved = (xa - la) - (xc - lc);
         let fast = (qa.transpose() * moved).abs().cmpgt(ha).any() || (qc.transpose() * moved).abs().cmpgt(hc).any();
@@ -3541,8 +3573,19 @@ impl Ragdoll {
             let new = Held { local: into(qa, at_a - xa), ground: into(qc, at_c - xc), gap, age: 0, m: 0, fl: 0, imp: Vec3::ZERO, pimp: Vec3::ZERO, n, inst: 0, off: false, world: at_a, wc: at_c, tri: (0, 0) };
             let swap = |h: &mut Vec<Held>| if flip { h.iter_mut().for_each(|r| std::mem::swap(&mut r.local, &mut r.ground)) };
             swap(held);
-            hold(held, if flip { Held { local: new.ground, ground: new.local, ..new } } else { new });
+            let new = if flip { Held { local: new.ground, ground: new.local, ..new } } else { new };
+            if rage {
+                if new.gap < MARGIN() {
+                    rage_hold(held, new, None);
+                    crate::extras_core_rdr2::trace_once("rage pair", || "rage pair manifold: a contact added by 0x2822930's rules".to_string());
+                }
+            } else {
+                hold(held, new);
+            }
             swap(held);
+        }
+        if rage {
+            return;
         }
         for r in held.iter_mut() {
             if r.age != 0 {
