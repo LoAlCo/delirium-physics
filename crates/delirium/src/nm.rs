@@ -17,11 +17,11 @@ impl Random {
     }
 
     pub fn next(&mut self) -> f32 {
-        (self.bits() & delirium_data::kv!(190 int)) as f32 / (1 << delirium_data::kv!(106 int)) as f32
+        (self.bits() & delirium_data::kv!(196 int)) as f32 / (1 << delirium_data::kv!(106 int)) as f32
     }
 
     pub fn bits(&mut self) -> u32 {
-        self.0 = (self.0 & delirium_data::kv!(191 int)) * delirium_data::kv!(192 int) + (self.0 >> delirium_data::kv!(7 int));
+        self.0 = (self.0 & delirium_data::kv!(197 int)) * delirium_data::kv!(198 int) + (self.0 >> delirium_data::kv!(7 int));
         self.0 as u32
     }
 }
@@ -36,7 +36,7 @@ pub use locomotion_drive::LocomotionDrive;
 fn G() -> f32 { delirium_data::kv!(34) }
 #[allow(non_snake_case)]
 #[inline]
-fn FOOT() -> f32 { delirium_data::kv!(193) }
+fn FOOT() -> f32 { delirium_data::kv!(199) }
 #[allow(non_snake_case)]
 #[inline]
 fn ANKLE_STIFFNESS() -> f32 { delirium_data::kv!(11) }
@@ -45,7 +45,7 @@ fn ANKLE_STIFFNESS() -> f32 { delirium_data::kv!(11) }
 fn ANKLE_DAMPING() -> f32 { delirium_data::kv!(31) }
 #[allow(non_snake_case)]
 #[inline]
-fn STEP_TIME() -> f32 { delirium_data::kv!(194) }
+fn STEP_TIME() -> f32 { delirium_data::kv!(200) }
 #[allow(non_snake_case)]
 #[inline]
 fn STEP_REACH() -> f32 { delirium_data::kv!(74) }
@@ -180,7 +180,7 @@ pub struct BodyWrithe {
 
 impl Default for BodyWrithe {
     fn default() -> BodyWrithe {
-        BodyWrithe { arm_stiffness: delirium_data::kv!(195), back_stiffness: delirium_data::kv!(195), leg_stiffness: delirium_data::kv!(195), arm_damping: 0.5, back_damping: 0.5, leg_damping: 0.5,
+        BodyWrithe { arm_stiffness: delirium_data::kv!(201), back_stiffness: delirium_data::kv!(201), leg_stiffness: delirium_data::kv!(201), arm_damping: 0.5, back_damping: 0.5, leg_damping: 0.5,
                      arm_period: 1.0, back_period: 1.0, leg_period: 1.0, arm_amplitude: 1.0, back_amplitude: 1.0, leg_amplitude: 1.0,
                      elbow_amplitude: 1.0, knee_amplitude: 1.0, roll_over: false, mask: "fb", rdr2: Default::default() }
     }
@@ -243,7 +243,7 @@ impl Default for UpperBodyFlinch {
 
 impl Default for ArmsWindmill {
     fn default() -> ArmsWindmill {
-        ArmsWindmill { arm_stiffness: delirium_data::kv!(196), body_stiffness: delirium_data::kv!(117), period: 1.0, amplitude: delirium_data::kv!(119), phase: 0.0, disable_on_impact: true,
+        ArmsWindmill { arm_stiffness: delirium_data::kv!(202), body_stiffness: delirium_data::kv!(117), period: 1.0, amplitude: delirium_data::kv!(119), phase: 0.0, disable_on_impact: true,
                        rdr2: Default::default() }
     }
 }
@@ -251,7 +251,7 @@ impl Default for ArmsWindmill {
 impl Default for PedalLegs {
     fn default() -> PedalLegs {
         PedalLegs { leg_stiffness: delirium_data::kv!(31), radius: delirium_data::kv!(17), angular_speed: delirium_data::kv!(31), pedal_offset: delirium_data::kv!(9), speed_asymmetry: delirium_data::kv!(65), back_pedal: false,
-                    adaptive: false, drag_multiplier: delirium_data::kv!(24), left: true, right: true, radius_variance: delirium_data::kv!(116), random_seed: delirium_data::kv!(197 int),
+                    adaptive: false, drag_multiplier: delirium_data::kv!(24), left: true, right: true, radius_variance: delirium_data::kv!(116), random_seed: delirium_data::kv!(203 int),
                     leg_angle_variance: 0.5, centre_forwards: 0.0, centre_up: 0.0, rdr2: Default::default() }
     }
 }
@@ -267,10 +267,15 @@ pub type BraceForImpact = crate::nmbr::BraceParams;
 pub type HighFall = crate::nmhf::HighFallParams;
 pub type FallOverWall = crate::nmfow::FallOverWallParams;
 
-fn dbm_config(c: ConfigureBalance, params: &BodyBalance, lean_bias: f32, hip_yaw: (f32, f32), legs: (f32, f32)) -> crate::nmdbm::Config {
+/// The balancer's size (0.7.0): how this body's stance compares to Homer's. RDR2's rigs and core keep their own laws, so 1.
+fn dbm_size(core: bool, nm: usize, legs: (f32, f32)) -> f32 {
+    if core || crate::nmrs::is_rdr2(nm) { 1.0 } else { legs.1 / crate::nmdbm::CHAR_LEGS().1 }
+}
+
+fn dbm_config(c: ConfigureBalance, params: &BodyBalance, lean_bias: f32, hip_yaw: (f32, f32), legs: (f32, f32), size: f32) -> crate::nmdbm::Config {
     crate::nmdbm::Config { step_height: c.step_height, leg_stiffness: c.leg_stiffness, abort: c.balance_abort_threshold,
                            step_clamp: c.step_clamp_scale, max_steps: params.max_steps as i32, taper: c.taper_knee_strength,
-                           lean_bias, hip_yaw, legs }
+                           lean_bias, hip_yaw, legs, size }
 }
 
 impl BodyBalance {
@@ -365,6 +370,7 @@ pub struct Agent {
     pub(crate) nm_bw: Option<crate::nmbw::Writhe>,
     nm_bw_msg: Option<BodyWrithe>,
     pub extras: crate::extras::Extras,
+    pub overrides: Vec<(&'static str, &'static str, crate::msg::Value)>,
     nm_aw: crate::nmaw::Windmill,
     nm_aw_msg: Option<ArmsWindmill>,
     nm_pd: crate::nmpd::Pedal,
@@ -409,6 +415,8 @@ pub struct Agent {
     head_look: Vec<(Vec3, f32)>,
     shot_look: bool,
     pub(crate) eff_override: Vec<(usize, [f32; 3], f32, f32, f32, Option<f32>)>,
+    pub hold: Vec<(String, f32, f32, f32)>,
+    pub follow: Vec<(String, f32)>,
     nm_dt: Option<f32>,
     held: Option<crate::ragdoll::Kept>,
     held_eff: Vec<[f32; 6]>,
@@ -421,6 +429,10 @@ pub struct Agent {
     pub legs: (f32, f32),
     pub strength: f32,
     pub most: f32,
+    pub short: f32,
+    /// `short` off RDR2's core
+    short_body: f32,
+    pub apart: Vec<(usize, usize)>,
 }
 
 #[allow(non_snake_case)]
@@ -428,7 +440,7 @@ pub struct Agent {
 pub(crate) fn LEG_PAIRS() -> &'static [(usize, usize); 7] { static V: std::sync::OnceLock<[(usize, usize); 7]> = std::sync::OnceLock::new(); let f = || [(1, delirium_data::kv!(1 int)), (1, delirium_data::kv!(2 int)), (2, delirium_data::kv!(1 int)), (2, delirium_data::kv!(2 int)), (2, delirium_data::kv!(6 int)), (delirium_data::kv!(0 int), delirium_data::kv!(2 int)), (delirium_data::kv!(0 int), delirium_data::kv!(6 int))]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
 #[allow(non_snake_case)]
 #[inline]
-pub(crate) fn HAND_PAIRS() -> &'static [(usize, usize); 3] { static V: std::sync::OnceLock<[(usize, usize); 3]> = std::sync::OnceLock::new(); let f = || [(delirium_data::kv!(127 int), delirium_data::kv!(54 int)), (delirium_data::kv!(127 int), delirium_data::kv!(198 int)), (delirium_data::kv!(199 int), delirium_data::kv!(54 int))]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
+pub(crate) fn HAND_PAIRS() -> &'static [(usize, usize); 3] { static V: std::sync::OnceLock<[(usize, usize); 3]> = std::sync::OnceLock::new(); let f = || [(delirium_data::kv!(127 int), delirium_data::kv!(54 int)), (delirium_data::kv!(127 int), delirium_data::kv!(189 int)), (delirium_data::kv!(204 int), delirium_data::kv!(54 int))]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
 pub(crate) fn pair_on((a, b): (usize, usize), legs: bool, hands: bool) -> bool {
     !(legs && (*LEG_PAIRS()).contains(&(a.min(b), a.max(b))) || hands && (*HAND_PAIRS()).contains(&(a.max(b), a.min(b))))
 }
@@ -445,9 +457,13 @@ pub(crate) fn game_pairs(pairs: impl Iterator<Item = (usize, usize)>) -> Vec<(us
 
 impl Agent {
     pub fn limp_rage(&self) -> Vec<crate::ragdoll::Rigid> {
-        let mut rigid = self.ch.as_ref().map_or(vec![], |ch| ch.rigid(1.0 / delirium_data::kv!(103), self.strength, self.most));
+        let mut rigid = self.ch.as_ref().map_or(vec![], |ch| ch.rigid(1.0 / delirium_data::kv!(103), self.strength * self.short, self.most));
         rigid.iter_mut().for_each(|r| (r.max, r.gain) = ([0.0; 2], [0.0; 2]));
         rigid
+    }
+
+    pub fn rng(&self) -> Option<(u32, u32)> {
+        self.ch.as_ref().map(|ch| ch.rng)
     }
 
     pub fn set_rng(&mut self, rng: (u32, u32)) {
@@ -457,11 +473,16 @@ impl Agent {
     }
 
     pub fn new(build: &Build, mut doll: Ragdoll, facing: Quat, seed: f32) -> Agent {
+        let heavy = if build.parts.first().is_some_and(|p| p.heft != 1.0 || p.grown != 1.0) { (doll.mass() / delirium_data::kv!(205)).sqrt().max(1.0) } else { 1.0 };
         doll.fresh = true;
         doll.sleep_tol = [0.0; 3];
         if let Some(pairs) = crate::nmrs::SELF[build.nm].get().filter(|_| build.parts.len() == delirium_data::nm_asset::PARTS.len()) {
             doll.pairs = game_pairs(pairs.iter().copied().filter(|&(a, b)| a.max(b) < build.parts.len()));
         }
+        // 0.7.0's strength for a heavy or short body and its size-scaled balancer are GTA IV's rig's; RDR2's rigs stand on their own numbers
+        let short = if crate::nmrs::is_rdr2(build.nm) { 1.0 } else { heavy / build.parts[0].grown.clamp(delirium_data::kv!(78), 1.0).sqrt() };
+        let apart = if build.parts.iter().any(|p| p.size != 1.0) { doll.overlapping(build, &doll.pairs) } else { vec![] };
+        doll.pairs.retain(|p| !apart.contains(p));
         let frames: Vec<Transform> = doll.frames().collect();
         let zero = build.parts.iter().enumerate()
             .map(|(i, p)| p.parent.map_or(frames[i].rotation, |j| frames[j].rotation.inverse() * frames[i].rotation)).collect();
@@ -469,8 +490,8 @@ impl Agent {
         let pelvis_up = facing.inverse() * frames[roles.pelvis].rotation;
         let mut a = Agent { core_cb: vec![], core_base: None, locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
                 stiffness: (delirium_data::kv!(31), 1.0), relax: None, config: ConfigureBalance::default(), feedback: vec![], balance: None, lean: None,
-                shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_relax_lower: None, bb_brace: Default::default(), nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, cf_arms_only: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, fow_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
-                brace: None, head_look: vec![], shot_look: false, eff_override: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(200), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0 * build.parts[0].grown, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
+                shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_relax_lower: None, bb_brace: Default::default(), nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), overrides: vec![], nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, cf_arms_only: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, fow_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
+                brace: None, head_look: vec![], shot_look: false, eff_override: vec![], hold: vec![], follow: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(206), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, short, short_body: short, apart, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
                 ch: crate::nmrs::ASSET[build.nm].get().and_then(|a| crate::nmrs::joints(build, a)).map(|j| {
                     let mut c = crate::nmrs::Character::new(j, &frames);
                     c.mode = if build.nm == crate::nmrs::MARGE || build.nm == crate::nmrs::RDR2_WILMA { 2 } else { 1 };
@@ -714,12 +735,12 @@ impl Agent {
             }
             self.config.leg_stiffness = delirium_data::kv!(21);
             let body = crate::nmdbm::Body { ch, build, doll: &self.doll, frames: &frames };
-            let mut dbm = crate::nmdbm::Dbm::new(&body, dbm_config(self.config, &params, self.lean_bias, self.hip_yaw, self.legs));
+            let mut dbm = crate::nmdbm::Dbm::new(&body, dbm_config(self.config, &params, self.lean_bias, self.hip_yaw, self.legs, dbm_size(self.rdr2_core.is_some(), self.doll.nm, self.legs)));
             if let Some(p) = self.rdr2_core {
                 dbm.rdr2(crate::nmdbm_rdr2::Rdr2::new(p, self.random.next()));
             }
             dbm.activate(ch);
-            self.lean_bias = -delirium_data::kv!(200);
+            self.lean_bias = -delirium_data::kv!(206);
             self.balance = Some(Balance { params, dbm: Some(dbm), bb: Some(bb), feet: [Foot::Planted(Transform::IDENTITY); 2], steps: 0,
                                           stand_height: dbm.p.pelvis_height.max(delirium_data::kv!(74)), stepping: 0, still: 0.0, idle: false });
             // RDR2's startbalancer off: bodyBalance alone
@@ -1288,7 +1309,7 @@ impl Agent {
                                         dbm: self.balance.as_mut().and_then(|b| b.dbm.as_mut()), fallen: self.fallen };
         let mut started = self.nm_br.activate(b, &mut c, &mut k, &[]);
         if let (Some(s), false, Some(d)) = (started.leg_stiffness, self.fallen, self.balance.as_mut().and_then(|b| b.dbm.as_mut())) {
-            (self.config.leg_stiffness, d.f.countdown, d.p.leg_stiffness) = (s, delirium_data::kv!(197 int), s);
+            (self.config.leg_stiffness, d.f.countdown, d.p.leg_stiffness) = (s, delirium_data::kv!(203 int), s);
             d.stiffen(ch);
             started.leg_stiffness = None;
         }
@@ -1308,8 +1329,24 @@ impl Agent {
         }
     }
 
+    pub fn recentre_joint(&mut self, k: usize) -> bool {
+        let f: Vec<Transform> = self.doll.frames().collect();
+        let rows = crate::nmrs::incoming_rows(&self.doll.links, &f);
+        let Some(ch) = self.ch.as_mut() else { return false };
+        let Some(i) = ch.joints.iter().position(|j| j.child == k && j.rigid.is_some()) else { return false };
+        let bend = if ch.joints[i].three { Quat::IDENTITY } else {
+            let (lo, hi) = ch.joints[i].limits[0];
+            crate::nmrs::rotation([ch.incoming_angle(i, &rows)[0].clamp(lo.min(hi), hi.max(lo)), 0.0, 0.0])
+        };
+        let j = &mut ch.joints[i];
+        let jc = j.rigid.as_mut().unwrap();
+        jc.cm = self.doll.centred_cm(j.parent, j.child, &jc.pm, bend);
+        j.rage_child = f[j.child].rotation.inverse() * f[j.parent].rotation * j.rage_parent * bend;
+        true
+    }
+
     pub fn joints(&self, build: &Build) -> Vec<Option<crate::ragdoll::JointInfo>> {
-        let rigid = self.ch.as_ref().map_or(vec![], |ch| ch.rigid(1.0 / delirium_data::kv!(103), self.strength, self.most));
+        let rigid = self.ch.as_ref().map_or(vec![], |ch| ch.rigid(1.0 / delirium_data::kv!(103), self.strength * self.short, self.most));
         (0..build.parts.len()).map(|k| crate::ragdoll::joint_info(build, k, rigid.get(k))).collect()
     }
 
@@ -1421,8 +1458,8 @@ impl Agent {
                 let ch = self.ch.as_mut().unwrap();
                 let body = crate::nmdbm::Body { ch: &snap, build, doll: &self.doll, frames };
                 let params = self.balance.as_ref().map_or(BodyBalance { body_stiffness: 0.0, damping: 0.0, elbow: 0.0, shoulder: 0.0,
-                    max_steps: out.dbm_steps.unwrap_or(delirium_data::kv!(197 int)).max(0) as u32, spine_stiffness: 0.0, spine_damping: 0.0 }, |b| b.params);
-                let mut dbm = crate::nmdbm::Dbm::new(&body, dbm_config(self.config, &params, self.lean_bias, self.hip_yaw, self.legs));
+                    max_steps: out.dbm_steps.unwrap_or(delirium_data::kv!(203 int)).max(0) as u32, spine_stiffness: 0.0, spine_damping: 0.0 }, |b| b.params);
+                let mut dbm = crate::nmdbm::Dbm::new(&body, dbm_config(self.config, &params, self.lean_bias, self.hip_yaw, self.legs, dbm_size(self.rdr2_core.is_some(), self.doll.nm, self.legs)));
                 if let Some(old) = self.balance.as_ref().and_then(|b| b.dbm.as_ref()) {
                     dbm.restart_over(old);
                 }
@@ -1460,7 +1497,7 @@ impl Agent {
         }
         if let Some(d) = self.balance.as_mut().and_then(|b| b.dbm.as_mut()) {
             if let Some(n) = out.dbm_steps {
-                d.f.countdown = n;
+                d.f.countdown = crate::nmdbm::steps(n, d.p.size);
             }
             if let Some(x) = out.dbm_leg_offset {
                 d.leg_offset = x;
@@ -1671,12 +1708,29 @@ impl Agent {
                 }
             }
         }
+        let rows = (!self.follow.is_empty() && !self.incoming.is_empty()).then(|| crate::nmrs::incoming_rows(&self.doll.links, &self.incoming));
+        if let Some(ch) = self.ch.as_mut() {
+            for (mask, w) in rows.as_ref().map_or(&[][..], |_| &self.follow[..]) {
+                let n = ch.eff.len();
+                for i in crate::nmrs::Character::mask(mask).into_iter().filter(|&i| i < n) {
+                    let to = ch.incoming_angle(i, rows.as_ref().unwrap());
+                    let d = &mut ch.eff[i].desired;
+                    (0..delirium_data::kv!(0 int)).for_each(|c| d[c] += (to[c] - d[c]) * w);
+                }
+            }
+            for (mask, s, d, og) in &self.hold {
+                for i in crate::nmrs::Character::mask(mask) {
+                    let e = &mut ch.eff[i];
+                    (e.strength, e.damping, e.oppose_gravity) = (e.strength.max(s * s), e.damping.max(2.0 * s * d), e.oppose_gravity.max(*og));
+                }
+            }
+        }
         self.apply_locomotion_drive(&mut held,build,dt);
         let pelvis = self.roles.pelvis;
         if let Some(ch) = self.ch.as_mut().filter(|ch| eff_words(ch) != self.held_eff) {
             held.muscles = ch.muscles(Muscle { target: self.zero[pelvis], stiffness: 0.0, damping: 0.0 });
             held.muscles[pelvis].stiffness = 0.0;
-            held.rigid = ch.rigid(dt, self.strength, self.most);
+            held.rigid = ch.rigid(dt, self.strength * self.short, self.most);
         }
         Some(held)
     }
@@ -1709,6 +1763,7 @@ impl Agent {
         }
         let nm_tick = awake;
         self.core_base = self.rdr2_core;
+        self.short = if self.rdr2_core.is_some() { 1.0 } else { self.short_body };
         if let Some(p) = self.rdr2_core.as_mut() {
             for (n, v) in &self.core_cb {
                 p.set_message(n, *v);
@@ -1755,13 +1810,13 @@ impl Agent {
             if let (false, Some(ch)) = (self.fallen, self.ch.as_mut()) {
                 match self.balance.as_mut().and_then(|b| b.dbm.as_mut()) {
                     Some(d) => {
-                        (d.f.countdown, d.p.leg_stiffness) = (delirium_data::kv!(197 int), s);
+                        (d.f.countdown, d.p.leg_stiffness) = (delirium_data::kv!(203 int), s);
                         d.stiffen(ch);
                     }
                     None => {
-                        let params = BodyBalance { max_steps: delirium_data::kv!(197 int), ..BodyBalance::from(Default::default()) };
+                        let params = BodyBalance { max_steps: delirium_data::kv!(203 int), ..BodyBalance::from(Default::default()) };
                         let body = crate::nmdbm::Body { ch, build, doll: &self.doll, frames: &frames };
-                        let mut d = crate::nmdbm::Dbm::new(&body, crate::nmdbm::Config { lean_bias: -delirium_data::kv!(200), ..dbm_config(self.config, &params, 0.0, self.hip_yaw, self.legs) });
+                        let mut d = crate::nmdbm::Dbm::new(&body, crate::nmdbm::Config { lean_bias: -delirium_data::kv!(206), ..dbm_config(self.config, &params, 0.0, self.hip_yaw, self.legs, dbm_size(self.rdr2_core.is_some(), self.doll.nm, self.legs)) });
                         if let Some(p) = self.rdr2_core {
                             d.rdr2(crate::nmdbm_rdr2::Rdr2::new(p, self.random.next()));
                         }
@@ -1789,7 +1844,7 @@ impl Agent {
                 if let (Some(l), Some(r)) = (ch.core.side_lever.take(), dbm.p.rdr2.as_mut()) {
                     r.lever = (l, r.steps);
                 }
-                let c = dbm_config(self.config, &b.params, self.lean_bias, self.hip_yaw, self.legs);
+                let c = dbm_config(self.config, &b.params, self.lean_bias, self.hip_yaw, self.legs, dbm_size(self.rdr2_core.is_some(), self.doll.nm, self.legs));
                 dbm.lean = match self.lean {
                     Some((mode, amount, _, as_force)) => crate::nmdbm::Lean { mode, amount, as_force },
                     None => Default::default(),
@@ -2584,7 +2639,7 @@ impl Agent {
                 self.doll.key_vel(k, dv, dw);
             }
         }
-        let rigid = self.ch.as_ref().map_or(vec![], |ch| ch.rigid(dt, self.strength, self.most));
+        let rigid = self.ch.as_ref().map_or(vec![], |ch| ch.rigid(dt, self.strength * self.short, self.most));
         if self.rdr2_core.is_some() {
             if let Some(ch) = self.ch.as_mut() {
                 ch.lim_settle();
@@ -2991,7 +3046,7 @@ impl Agent {
                     let shoulder = frames[u].translation;
                     let to = s.hit_point - s.normal * delirium_data::kv!(68) - shoulder;
                     m[u] = Muscle { target: aim(u, to + Vec3::Z * delirium_data::kv!(78)), stiffness: s.body_stiffness, damping: 1.0 };
-                    m[f] = Muscle { target: bend(f, -delirium_data::kv!(201) + to.length().min(delirium_data::kv!(119))), stiffness: s.body_stiffness, damping: 1.0 };
+                    m[f] = Muscle { target: bend(f, -delirium_data::kv!(207) + to.length().min(delirium_data::kv!(119))), stiffness: s.body_stiffness, damping: 1.0 };
                 }
             }
             if t < 1.0 {
@@ -3162,7 +3217,7 @@ impl Agent {
             // RDR2 core's pointGun: its arms leave these parts alone (nothing without it)
             let off: Vec<(Vec<usize>, Vec<usize>)> = self.extras.pair_off.iter().map(|&(m, i)| (crate::extras_ysk_rdr2::parts(m), crate::extras_ysk_rdr2::parts(i))).collect();
             let off = |&(a, b): &(usize, usize)| off.iter().any(|(m, i)| (m.contains(&a) && i.contains(&b)) || (m.contains(&b) && i.contains(&a)));
-            let on = |p: &(usize, usize)| pair_on(*p, legs, hands) && !off(p) && !foot_met(p);
+            let on = |p: &(usize, usize)| pair_on(*p, legs, hands) && !self.apart.contains(p) && !self.apart.contains(&(p.1, p.0)) && !off(p) && !foot_met(p);
             if self.doll.pairs.len() != pairs.iter().filter(|p| on(p)).count() {
                 self.doll.pairs = game_pairs(pairs.iter().copied().filter(on));
             }
@@ -3253,7 +3308,7 @@ fn W_PD() -> u32 { 1 << delirium_data::kv!(114 int) }
 fn W_AW() -> u32 { 1 << delirium_data::kv!(56 int) }
 #[allow(non_snake_case)]
 #[inline]
-fn W_GR() -> u32 { 1 << delirium_data::kv!(198 int) }
+fn W_GR() -> u32 { 1 << delirium_data::kv!(189 int) }
 #[allow(non_snake_case)]
 #[inline]
 fn W_HEAD() -> u32 { 1 << delirium_data::kv!(54 int) }
@@ -3333,7 +3388,7 @@ pub fn task_shot_msgs(a: &mut Agent, build: &Build, world: &Collision, tp: &Task
     for m in msgs {
         if m.0 == "shot" && a.ch.is_none() {
             let st = |n: &str, or: f32| tp.get("NMShot_Standing", set, n, or);
-            a.body_balance(build, world, BodyBalance { body_stiffness: st("shotBodyStiffness", delirium_data::kv!(202)), damping: delirium_data::kv!(74), elbow: delirium_data::kv!(13), shoulder: 1.0,
+            a.body_balance(build, world, BodyBalance { body_stiffness: st("shotBodyStiffness", delirium_data::kv!(208)), damping: delirium_data::kv!(74), elbow: delirium_data::kv!(13), shoulder: 1.0,
                                                       max_steps: st("shotMaxSteps", delirium_data::kv!(35)) as u32, spine_stiffness: delirium_data::kv!(31), spine_damping: 1.0 });
         }
         crate::shottask::apply(a, build, world, &mut st, std::slice::from_ref(m));
@@ -3395,7 +3450,7 @@ pub fn relax_period(tp: &TaskParams, set: &str, dead: bool) -> f32 {
 }
 
 pub fn task_control(a: &mut Agent, task: Task, attacker: impl Fn(u16) -> Option<Vec3>) {
-    match (task, attacker(delirium_data::kv!(203 int)), attacker(delirium_data::kv!(204 int))) {
+    match (task, attacker(delirium_data::kv!(209 int)), attacker(delirium_data::kv!(210 int))) {
         (Task::Shot | Task::Balance, Some(pos), _) => match a.task_look {
             Some(true) => a.body_balance_look(pos),
             Some(false) => a.shot_look(pos),
@@ -3420,7 +3475,7 @@ pub struct PointGun {
 impl PointGun {
     #[allow(non_snake_case)]
     #[inline]
-    fn BONES() -> &'static [u16; 4] { static V: std::sync::OnceLock<[u16; 4]> = std::sync::OnceLock::new(); let f = || [delirium_data::kv!(205 int), delirium_data::kv!(206 int), delirium_data::kv!(207 int), delirium_data::kv!(203 int)]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
+    fn BONES() -> &'static [u16; 4] { static V: std::sync::OnceLock<[u16; 4]> = std::sync::OnceLock::new(); let f = || [delirium_data::kv!(211 int), delirium_data::kv!(212 int), delirium_data::kv!(213 int), delirium_data::kv!(209 int)]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
 
     pub fn pointing(&self) -> bool {
         self.started
@@ -3445,7 +3500,7 @@ impl PointGun {
         self.start -= dt;
         self.next -= dt;
         if !self.started && self.start <= 0.0 {
-            let (lo, hi) = if self.gang { (-delirium_data::kv!(116), delirium_data::kv!(60)) } else { (-delirium_data::kv!(208), delirium_data::kv!(209)) };
+            let (lo, hi) = if self.gang { (-delirium_data::kv!(116), delirium_data::kv!(60)) } else { (-delirium_data::kv!(214), delirium_data::kv!(215)) };
             let twist = lo + (hi - lo) * a.random.next();
             let arm_straightness = delirium_data::kv!(18) + delirium_data::kv!(60) * a.random.next();
             let p = crate::nmpa::PointArmParams { target, twist, arm_straightness, instance_index: -1, point_swing_limit: 1.0,
@@ -3472,7 +3527,7 @@ impl PointGun {
 }
 
 pub fn task_catch_fall(a: &mut Agent, tp: &TaskParams, set: &str) {
-    let k = tp.get("NMShot_Standing", set, "shotBodyStiffness", delirium_data::kv!(202));
+    let k = tp.get("NMShot_Standing", set, "shotBodyStiffness", delirium_data::kv!(208));
     a.catch_fall(CatchFall { torso_stiffness: k * delirium_data::kv!(74), legs_stiffness: k * 0.5, arms_stiffness: k, z_axis_spin_reduction: 0.0 });
 }
 
@@ -3550,7 +3605,7 @@ pub struct OnFire {
 
 impl OnFire {
     pub fn new(set: &'static str) -> OnFire {
-        OnFire { set, task: crate::onfire::OnFire::new(delirium_data::kv!(41 int), delirium_data::kv!(210 int), delirium_data::kv!(24), None), params: Default::default(), ms: delirium_data::kv!(82) }
+        OnFire { set, task: crate::onfire::OnFire::new(delirium_data::kv!(41 int), delirium_data::kv!(216 int), delirium_data::kv!(24), None), params: Default::default(), ms: delirium_data::kv!(82) }
     }
 
     pub fn start(&mut self, a: &mut Agent, build: &Build, world: &Collision, tp: &TaskParams, rand: &mut delirium_data::rng::Rand) {
@@ -3771,7 +3826,7 @@ fn finish_82617140(task: Task, since: f32, [min, max]: [f32; 2], v: f32, z: f32,
         Flinch => (delirium_data::kv!(104 int), 1),
         FallDown => (if matches!(fall, 4 | 5) { delirium_data::kv!(104 int) } else { delirium_data::kv!(23 int) }, 1),
         HighFall => (if failed && !(g.hands[0] || g.hands[1]) { delirium_data::kv!(104 int) } else { 0 } | (player && since > delirium_data::kv!(31)) as u32, 1),
-        Shot => (delirium_data::kv!(211 int) | failed as u32, 1),
+        Shot => (delirium_data::kv!(217 int) | failed as u32, 1),
         Relax => (delirium_data::kv!(0 int), 0),
         OnFire => return Finish::default(),
         ScriptControl(end) => return fin((end > 0.0 && since > end).then_some(Next::Blend)),
@@ -3804,11 +3859,11 @@ pub fn task_fails(task: Task, name: &str) -> bool {
 }
 
 pub fn gun_threat_failed(task: Task, name: &str, pointing: bool, rand: &mut delirium_data::rng::Rand) -> Option<u32> {
-    (matches!(task, Task::Shot | Task::Brace) && pointing && task_fails(task, name)).then(|| rand.int_in_range(delirium_data::kv!(40 int), delirium_data::kv!(212 int)) as u32)
+    (matches!(task, Task::Shot | Task::Brace) && pointing && task_fails(task, name)).then(|| rand.int_in_range(delirium_data::kv!(40 int), delirium_data::kv!(218 int)) as u32)
 }
 
 pub fn balance_bar(player: bool, kind: u8, health: f32) -> Option<f32> {
-    match (player, kind >= delirium_data::kv!(0 int), health > delirium_data::kv!(213)) {
+    match (player, kind >= delirium_data::kv!(0 int), health > delirium_data::kv!(219)) {
         (true, ..) | (false, true, true) => Some(1.0),
         (false, true, false) | (false, false, true) => Some(delirium_data::kv!(24)),
         (false, false, false) => None,

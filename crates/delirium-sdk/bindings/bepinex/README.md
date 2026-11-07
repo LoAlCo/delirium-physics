@@ -56,9 +56,17 @@ nm.LyingStill += (owner, faceUp, facing) => {               // lying still for h
 };
 ```
 
-Also: `nm.Explode(owner, at)`, `nm.MeleeHit(...)`, `nm.OnFire(owner)`, `nm.HighFall(owner)`, `nm.Kill(owner)`, and
+Also: `nm.Explode(owner, at)`, `nm.MeleeHit(...)`, `nm.OnFire(owner)`, `nm.Tase(owner, seconds)`, `nm.HighFall(owner)`, `nm.Kill(owner)`, and
 `nm.Sever(owner, point, impulse)` to cut off the limb nearest `point` (the piece goes limp, a leg gone it stays down;
-hide the limb's mesh and spawn your own gib yourself).
+hide the limb's mesh and spawn your own gib yourself). Also `nm.CatchFall(owner)`, `nm.FallDown(owner, heading)`, `nm.Grab(owner, left, leftNormal, right,
+rightNormal, hold)`, `nm.JumpRoll(owner)`, `nm.Flinch(owner, from)`, `nm.Tackle(owner, target)`, `nm.SetWater(owner, level)`,
+and leashes: `nm.Leash(owner, point, anchor, length)` (returns the part), `nm.LeashLength(owner, part, length)`,
+`nm.LeashAnchor(owner, part, anchor, length)`, `nm.Unleash(owner, part)`.
+Cars: `nm.RegisterCar(transform, size, playerDriven)` makes anything a car (zero size: its BoxCollider or renderers):
+ragdolls meet its box, characters in its way are ragdolled, hits react as the game's and raise `nm.CarHit(who, damage,
+car)`; `nm.UnregisterCar`, `nm.CarComing(owner, car)` (brace; config `ArmsOutEarly`), `nm.CarDoor(owner, car)`.
+`nm.React(owner, line)` starts any reaction as the Playroom
+console's line: `"rollUp start=true"`, `"bodyWrithe start=true"`, `"stopAllBehaviours"` (vectors x,y,z in NM's space, Z up).
 
 Ragdolls within 5 m of each other share one world: they push and pile on each other.
 
@@ -69,13 +77,34 @@ Or set `[Get up] After` to a number of seconds and give the Animator `GetUpFront
 `[Body] Adaptive` (on) fits each kind of character to its own shape: its weight from its skin (where the game left the
 mesh readable) and its balance settings, searched once per kind in the background. Off, every body takes the game man's
 weight share and balance on its own bones. `[Body] Strength` (1) scales every body's muscles: 1.5-2 for tough enemies
-or a movie giant (at 2 a person stands a push of 80 N s instead of 60). From code: `nm_agent_set_strength`.
+or a movie giant (at 2 a person stands a push of 80 N s instead of 60). One character's: `nm.SetStrength(enemy.transform, 1.5f)`. A custom body
+that won't stand: "Tuning a custom body" in `docs/modding.md`.
+
+`[Feel] EnginePhysics` (off; the component's `enginePhysics`): his parts as Unity bodies. NM's own physics still moves him (the game's
+exactly); his parts follow it as kinematic rigidbodies that push your rigidbodies and meet triggers, and loose rigidbodies within 5 m hit him
+as Object movers (sized as `RegisterMover` does). Checked in Unity 2022.3 PlayMode: every body stands, a thrown ball knocks him, he shoves a crate.
+
+`[Body] RecentreJoints` (off) re-centres each joint's range on the pose the character is handed over in, for rigs whose
+animation bends joints past NM's ranges (they would snap on the first step); not the game's. `[Body] Hold` (empty) keeps
+joints at least this stiff whatever the reactions set: `mask=stiffness:damping:gravity`, comma separated (`fb` the whole
+body, `ua` upper arms, `ub` upper body, `lb` lower body); `fb=6:1:0.5` stops a limp body folding. From code:
+`nm_agent_recentre_joint`, `nm_agent_hold`. `[Body] Follow` (empty) keeps joints playing the animation while the rest
+ragdolls (a boxer's guard, a held gun): `mask=weight`, `ua=1` the upper arms all the way; the Animator keeps running
+under the ragdoll. Give them strength with Hold (`ua=10:1:1`). From code: `nm_agent_follow` + `nm_rig_incoming`.
+
+`[Body] Body` gives every character one of the Playroom's bodies: `Fitted` (its own, the default), `Small`, `Average`,
+`Large`, `Lanky`, `Fat`, `Stocky`, `Waddler`, `Guard`, `Brute`, `Brawler`, `Bruiser`, `Random` (`Seed`, 0: each its own;
+`Variance`; `Symmetric`) or `Custom` (`CustomBody`: legs, arms, trunk, width, head, neck against the fitted body,
+weight in kg, height in m, 0 keeps it). `[Body] Overrides` changes behaviour parameters as the Playroom's Parameters
+tab does: `shot.bodyStiffness=7, bodyBalance.useHeadLook=0`. The mesh keeps its look, so pick a body near it.
 
 ## How hard hits land
 
 The `[Force]` settings scale every hit: `Shot`, `Melee` and `Explosion` (1 = as given). `Weapons` is a table for
 `nm.ShootWeapon(enemy.transform, camera.position, camera.forward, "shotgun", hp)`, which shoots and returns the health
-left. Each entry is `name=set:push:damage`. Starting points (our own, tune to taste):
+left; `nm.Shotgun(enemy.transform, camera.position, camera.forward, "shotgun", hp)` fans its pellets as the game does.
+Each entry is `name=set:push:damage[:pellets:between:clip:accuracy:range]`, or give the game's `weaponinfo.xml`. Empty
+(the default) is this table (our own starting points, tune to taste):
 
 | Hit | Call | Strength | Health taken |
 |---|---|---|---|
@@ -93,3 +122,37 @@ left. Each entry is `name=set:push:damage`. Starting points (our own, tune to ta
 - Mono games only (BepInEx 5). IL2CPP games need BepInEx 6.
 - The ragdoll hits the level's static colliders within 15 m (readable meshes, boxes, terrain), read once when you grab it; spheres, capsules and moving objects are left out.
 - The hips bone must be the parent of the spine and legs (true of nearly every Unity character).
+
+## State and events
+
+`nm.State(owner)` says what a ragdoll is doing now: Ragdolled, Balancing, Fallen, CatchingFall, RolledUp, Relaxing, Dead,
+InWater, Burning, Tackling (2 diving, 1 holding), LyingFor (s), Centre, Velocity, Mass. Events: `nm.Fell(owner)` once per
+fall, `nm.Feedback(owner, name, slot, value)` for NM's own behaviour messages (the Playroom's Feedback list), plus
+`LyingStill` and `CarHit`. It also has Settled, Awake, Jumping, TaskRunning, LearnedGetUp, Resting, Stance and Contacts.
+
+The rest of the Playroom's tools are calls on `nm` too: `SetReactions`, `NearMiss`, `SetDive`, `ThrownAt`, `Jump`,
+`Balance`, `Stop`, `Sit`, `Pose`, `RollUpRelax`, `Script`, `MuscleRise`, `LearnedGetUp` (`[Data] GetUpNet`),
+`LearnedWalk` (`[Data] WalkNet`) with `SetStick`, `SetAttacker` / `GunReady`, `GetParam`, `Raycast`, `CheckSetup`,
+`Messages()` (the Unity package's README has each). `[Feel] StepLimit` and `FireReaction` match the Playroom's switches.
+A collider's physics material reaches NM (ice slides). A panic in the SDK writes `delirium_physics-crash.txt` next to the config.
+
+
+## Tuning reactions
+
+Walls, floors and falls need nothing: ragdolls get the level's collision and catch, stagger and brace on it by
+themselves. Moving things that hit characters are registered once (`nm.RegisterMover(transform, kind, size, playerDriven, brace, knockDown, centre)`, kinds Car, Object, Train) and each picks
+its own: box size and centre, whether characters in its way brace (`brace`) or are knocked down at all (`knockDown`).
+Each character's health and agility (`nm.SetToughness(owner, health, agility)`) decide which reaction the game picks when hit (agility under 3 is weak).
+
+Every reaction's feel is an override (`behaviour.param=value`, comma-separated; see Overrides):
+
+| Reaction | Useful parameters |
+|---|---|
+| Bracing for a car or object | `braceForImpact.braceDistance` (how early the arms go out, m), `.targetPredictionTime` (s ahead), `.bodyStiffness` |
+| Catching a fall | `catchFall.armsStiffness`, `.legsStiffness`, `.torsoStiffness` |
+| Staggering | `staggerFall.lowerBodyStiffness` |
+| Rolling up | `bodyRollUp.stiffness` |
+| Keeping balance | `bodyBalance.armsOutOnPushTimeout` (how long the arms stay out after a push, s) |
+| Shot / high fall | `shot.bodyStiffness`, `highFall.bodyStiffness` |
+
+The Playroom's Parameters tab lists every parameter with its default and lets you try values live.
