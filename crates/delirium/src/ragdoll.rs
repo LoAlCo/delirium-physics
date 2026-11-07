@@ -1537,6 +1537,29 @@ fn rage_spare(a: RageElem, c: RageElem, pa: Vec3, pc: Vec3, n: Vec3, gap: f32, m
     }
 }
 
+/// 0x2a0db8c (on: 0x3cab178, same element only: 0x3cab179), from the contact pass at 0x9d7349 when a contact there is over .05 deep (0x9d729c): two joined parts touching the same triangle
+/// with normals opposed past -.5: the child's goes over to the parent's side, depth 0 (0x59af774). Its points stay.
+fn rage_opposing(held: &mut [Vec<Held>], build: &Build) {
+    if !held.iter().flatten().any(|r| r.gap < -0.05) {
+        return;
+    }
+    for child in 0..held.len() {
+        let Some(parent) = build.parts[child].parent else { continue };
+        let theirs: Vec<(u32, (u32, u32), Vec3)> = held[parent].iter().map(|r| (r.inst, r.tri, r.n)).collect();
+        for r in held[child].iter_mut() {
+            for &(inst, tri, n) in &theirs {
+                if (inst, tri) == (r.inst, r.tri) && r.n.dot(n) < -0.5 {
+                    let at = r.ground + r.n * WORLD_MARGIN();
+                    r.n = -r.n;
+                    r.ground = at - r.n * WORLD_MARGIN();
+                    r.gap = 0.0;
+                    crate::extras_core_rdr2::trace_once("rage opposing", || "two joined parts on one triangle with opposed normals: the child's turned over (0x2a0db8c)".to_string());
+                }
+            }
+        }
+    }
+}
+
 fn rage_round(s: &gjk::Shape) -> bool {
     matches!(s, gjk::Shape::Capsule(..) | gjk::Shape::Tapered(..) | gjk::Shape::Curved(..))
 }
@@ -3185,6 +3208,19 @@ impl Ragdoll {
         for (_, held) in self.held.iter_mut().enumerate().filter(|&(i, _)| pose[i].is_some() || self.fresh) {
             held.clear();
         }
+        if self.nm_first && !first && !skip {
+            for (i, p) in build.parts.iter().enumerate().filter(|&(i, _)| pose[i].is_none() && !self.fresh && self.ignore_parts >> i & 1 == 0) {
+                let (tm, x, xw) = (turns[i], self.bodies[i].x, self.bound_world(i));
+                let shape = match p.boxed {
+                    Some(e) if self.short_feet >> i & 1 == 1 => gjk::Shape::Box(e * Vec3::new(1.0, 1.0, 0.8) - Vec3::splat(BOX_MARGIN()), BOX_MARGIN()),
+                    Some(e) => gjk::Shape::Box(e - Vec3::splat(BOX_MARGIN()), BOX_MARGIN()),
+                    None => gjk::Shape::Capsule(p.half, p.radius * self.radius_scale.get(i).copied().unwrap_or(1.0)),
+                };
+                let rage = RageMeet { iters: if self.age < 0.04 { 3 } else { 1 }, moving: self.bodies[i].v.vd(self.bodies[i].v) >= 1e-4 };
+                world_meet(world, o, shape, bound_half(p), tm, x, xw, self.seen.get(i), self.seen_w.get(i), self.seen_r.get(i), &mut self.held[i], true, Some(rage));
+            }
+            rage_opposing(&mut self.held, build);
+        }
         let mut accs = vec![(Vec3::ZERO, Vec3::ZERO, 0.0, -1); build.parts.len()];
         for (i, p) in build.parts.iter().enumerate().filter(|&(i, _)| pose[i].is_none() && !self.fresh) {
             let (b, tm) = (&self.bodies[i], turns[i]);
@@ -3206,9 +3242,8 @@ impl Ragdoll {
                 Some(e) => gjk::Shape::Box(e - Vec3::splat(BOX_MARGIN()), BOX_MARGIN()),
                 None => gjk::Shape::Capsule(p.half, p.radius * self.radius_scale.get(i).copied().unwrap_or(1.0)),
             };
-            if !first && !skip {
-                let rage = self.nm_first.then(|| RageMeet { iters: if self.age < 0.04 { 3 } else { 1 }, moving: b.v.vd(b.v) >= 1e-4 });
-                world_meet(world, o, shape, bound_half(p), tm, x, xw, self.seen.get(i), self.seen_w.get(i), self.seen_r.get(i), held, true, rage);
+            if !first && !skip && !self.nm_first {
+                world_meet(world, o, shape, bound_half(p), tm, x, xw, self.seen.get(i), self.seen_w.get(i), self.seen_r.get(i), held, true, None);
             }
             let last = self.seen.get(i).map_or(x, |s| s.0);
             for (k, r) in held.iter().enumerate() {
