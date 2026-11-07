@@ -1602,11 +1602,14 @@ fn rage_refresh(world: &Collision, held: &mut Vec<Held>, shape: gjk::Shape, tm: 
                     held[k].ground = p - n * WORLD_MARGIN();
                 }
                 crate::extras_core_rdr2::trace_once("rage spared", || format!("rage manifold: a slid contact stays (0x285b248), {} point moves", if own { "the part's" } else { "the triangle's" }));
+            } else {
+                held.swap_remove(k);
+                crate::extras_core_rdr2::trace_once("rage slid", || format!("rage manifold: a contact slid {:.3} m goes", slid.1.sqrt()));
                 continue;
             }
-            held.swap_remove(k);
-            crate::extras_core_rdr2::trace_once("rage slid", || format!("rage manifold: a contact slid {:.3} m goes", slid.1.sqrt()));
-        } else if let (Some(k), true) = (far.0, far.1 > 0.04) {
+        }
+        // a contact spared still lets the most separated go, in the same step (0x2842988 goes on to that test when 0x285b248 keeps its contact)
+        if let (Some(k), true) = (far.0, far.1 > 0.04) {
             held.swap_remove(k);
             crate::extras_core_rdr2::trace_once("rage far", || format!("rage manifold: a contact {:.3} m off goes", far.1));
         }
