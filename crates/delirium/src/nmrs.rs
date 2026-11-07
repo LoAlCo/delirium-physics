@@ -1176,6 +1176,8 @@ impl Character {
     }
 
     pub fn rigid(&self, dt: f32, k: f32, most: f32) -> Vec<Rigid> {
+        // RDR2 (0x2a4e944): drive dt +0x47b4 = clamp(dt, 1/60, 1/+0x7cc): the softness is 1/60 s whatever the step
+        let dt = if self.rdr2 { 1.0 / 60.0 } else { dt };
         let mut out = vec![Rigid::default(); self.joints.len() + 1];
         for (i, (j, e)) in self.joints.iter().zip(&self.eff).enumerate() {
             let well = 1.0 - e.injury;
