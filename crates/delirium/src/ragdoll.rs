@@ -1932,6 +1932,10 @@ pub struct Ragdoll {
     pub contact_off: u32,
     /// RDR2 core: parts with no contacts at all this step (a hand whose arm state is 2, 0x2a7452c)
     pub ignore_parts: u32,
+    /// RDR2 core: the position solve goes after the move (`position_pass`), and the collide that came with it stands for the next step's rows
+    pass_after: bool,
+    skip_collide: bool,
+    push_shift: Vec3,
     /// RDR2 core: per part, a limit by `LimitRow`
     pub limit_row: Vec<Option<LimitRow>>,
     /// parts whose `limit_row` broke (the row's impulse over the strength): off until asked again by the caller clearing this
@@ -2092,7 +2096,7 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { limit_row: vec![], limit_broken: 0, fric_cap: vec![], ignore_parts: 0, short_feet: 0, override_elastic: vec![], hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+        Ragdoll { pass_after: false, skip_collide: false, push_shift: Vec3::ZERO, limit_row: vec![], limit_broken: 0, fric_cap: vec![], ignore_parts: 0, short_feet: 0, override_elastic: vec![], hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
                   sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, lim_warm: vec![], early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
@@ -3000,6 +3004,7 @@ impl Ragdoll {
                 -> (Vec<Row>, Vec<Block>, Vec<Block>, Vec<usize>, Vec<bool>, Option<Artic>) {
         let (mut rows, mut blocks, mut push_blocks) = (vec![], vec![], vec![]);
         let claw = self.nm_first;
+        let skip = std::mem::take(&mut self.skip_collide);
         let fv = |j: &[f64]| j.iter().zip(free).map(|(a, b)| a * b).sum::<f64>();
         let (o, turns) = (self.o, self.turns());
         let (r, ip) = (self.inst(), self.inst_place(&self.inst()));
@@ -3047,7 +3052,7 @@ impl Ragdoll {
                 Some(e) => gjk::Shape::Box(e - Vec3::splat(BOX_MARGIN()), BOX_MARGIN()),
                 None => gjk::Shape::Capsule(p.half, p.radius * self.radius_scale.get(i).copied().unwrap_or(1.0)),
             };
-            if !first {
+            if !first && !skip {
                 let rage = self.nm_first.then(|| RageMeet { iters: if self.age < 0.04 { 3 } else { 1 }, moving: b.v.vd(b.v) >= 1e-4 });
                 world_meet(world, o, shape, bound_half(p), tm, x, xw, self.seen.get(i), self.seen_w.get(i), self.seen_r.get(i), held, true, rage);
             }
@@ -3098,7 +3103,9 @@ impl Ragdoll {
                         continue;
                     }
                     let s = slot.unwrap_or_else(|| { self.held_car.push((i, ob.id, c, vec![])); self.held_car.len() - 1 });
-                    Self::manifold(&mut self.held_car[s].3, (shape, bound_half(p), (bw, tm), a_world), side_c, ob.first, claw);
+                    if !skip {
+                        Self::manifold(&mut self.held_car[s].3, (shape, bound_half(p), (bw, tm), a_world), side_c, ob.first, claw);
+                    }
                     if self.no_collision == Some(ob.id) {
                         self.no_collision_met |= !self.held_car[s].3.is_empty();
                         self.held_car[s].3.clear();
@@ -3157,7 +3164,9 @@ impl Ragdoll {
                 while old.get(next_old).is_some_and(|((oa, oc), _)| (*oc, *oa) < (c, a)) { next_old += 1; }
                 if old.get(next_old).is_some_and(|o| o.0 == (a, c)) { self.held_pairs[pi] = std::mem::take(&mut old[next_old].1); next_old += 1; }
                 self.held_keys[pi] = Some((a, c));
-                Self::manifold(&mut self.held_pairs[pi], (part_shape(&build.parts[a]), bound_half(&build.parts[a]), wa, sa), (part_shape(&build.parts[c]), bound_half(&build.parts[c]), wc, sc), false, claw);
+                if !skip {
+                    Self::manifold(&mut self.held_pairs[pi], (part_shape(&build.parts[a]), bound_half(&build.parts[a]), wa, sa), (part_shape(&build.parts[c]), bound_half(&build.parts[c]), wc, sc), false, claw);
+                }
             }
         }
         let (lock_axes, turned) = self.lock_slack(obstacles);
@@ -3743,7 +3752,83 @@ impl Ragdoll {
 
     pub fn step(&mut self, build: &Build, world: &Collision, dt: f32, drive: Drive, obstacles: &[Obstacle], others: &[Capsule]) {
         let Some(st) = self.begin(build, world, dt, &drive, obstacles, others) else { return };
+        self.pass_after = self.nm_first && !env_on!("RDR2_POS_BEFORE");
         self.finish(st, drive.lift);
+        if std::mem::take(&mut self.pass_after) && self.early.is_some() {
+            self.position_pass(build, world, dt, &drive, obstacles, others);
+        }
+    }
+
+    /// RDR2 core: 0x2839190 moves and collides, then 0x28423fc -> 0x284221c -> 0x28e4740(.., 1), the position solve, on the factors of the softness NM wrote for this step
+    /// (0x288ac48 rebuilds them at the move's end) and that collide's contacts. So NM and the muscles of the next step read the corrected pose, and that step's velocity solve
+    /// uses this collide's manifolds as they stand (0x285fa68), with their depth of before the correction: `begin`'s `contacts` builds its rows without colliding again.
+    fn position_pass(&mut self, build: &Build, world: &Collision, dt: f32, drive: &Drive, obstacles: &[Obstacle], others: &[Capsule]) {
+        let with_carried: Vec<Obstacle>;
+        let obstacles = match self.carried {
+            Some(c) => {
+                with_carried = obstacles.iter().copied().chain([c]).collect();
+                &with_carried[..]
+            }
+            None => obstacles,
+        };
+        let h = dt;
+        let joints: Vec<Option<Joint>> = build.parts.iter().enumerate().map(|(i, p)| p.parent.map(|j| {
+            let mut j = Joint::new(p, j, drive.rigid.get(i));
+            if let (Some(f), Kind::Ball { lean, twist }) = (self.lim_floor.get(i), &mut j.kind) {
+                (lean[0], lean[1], *twist) = (lean[0].max(f[0]), lean[1].max(f[1]), twist.max(f[2]));
+            }
+            if let (Some(f), Kind::Hinge { lo, hi }) = (self.lim_floor.get(i), &mut j.kind) {
+                if lo.abs() > hi.abs() { *lo = lo.min(-f[0]); } else { *hi = hi.max(f[0]); }
+            }
+            Joint { jc: self.jconst(build, i, &j, drive.rigid.get(i)), ..j }
+        })).collect();
+        let start: Vec<(Vec3, Quat)> = self.bodies.iter().map(|b| (b.x, b.q)).collect();
+        let pose: Vec<Option<(Vec3, Quat)>> = self.pins.iter().zip(&start).map(|(p, _)| p.map(|to| (to.translation, to.rotation))).collect();
+        (self.held_inst, self.ped_inst) = (None, None);
+        if let Some((w, r, now)) = self.early.clone() {
+            (self.seen_w, self.seen_r, self.seen) = (w, r, now);
+        }
+        self.coll = self.comp(&self.inst());
+        let artic = self.artic(&joints);
+        self.armature = artic.arm.clone();
+        self.self_met.clear();
+        for t in &mut self.touch {
+            *t = (*t & !delirium_data::kv!(409 int)) | ((*t >> delirium_data::kv!(0 int)) & delirium_data::kv!(1 int));
+        }
+        self.hit.iter_mut().for_each(|h| *h = None);
+        self.hit_out.iter_mut().for_each(|h| *h = None);
+        self.hit_out_id.resize(self.hit_out.len(), -1);
+        let n = self.bodies.len();
+        let zero = vec![(Vec3::ZERO, Vec3::ZERO); n];
+        let free = vec![0.0; 6 * n];
+        self.skip_collide = false;
+        let (_, blocks, mut push_blocks, order, ghosts, turned) = self.contacts(build, world, &artic, h, &pose, obstacles, others, &free, &artic.forces(&zero, h), &joints, false);
+        let artic = turned.unwrap_or(artic);
+        let (_, mut push) = self.limit_rows(&artic, &joints, h, &free, &zero);
+        let vb0 = vec![(DVec3::ZERO, DVec3::ZERO); obstacles.len()];
+        let mut qp = vec![0.0; free.len()];
+        let mut pv = None;
+        if impulses_g(&mut push, &mut push_blocks, &artic, zero.clone(), &vb0, PUSH_SOR, None) {
+            let acc = applied(&push, &push_blocks, zero.clone()).unwrap();
+            let xr = self.bodies[self.order[0]].x;
+            pv = Some(artic.solve_f(&acc).into_iter().zip(&self.bodies).map(|((w, l), b)| (artic::at_point((w, l), b.x - xr), w)).collect::<Vec<(Vec3, Vec3)>>());
+        } else {
+            impulses(&mut push, &mut push_blocks, &mut qp, &mut vb0.clone());
+        }
+        let pushed = !(push.is_empty() && push_blocks.is_empty());
+        let most = pv.as_ref().map_or(0.0f32, |p: &Vec<(Vec3, Vec3)>| p.iter().map(|x| x.0.length() * h).fold(0.0, f32::max));
+        if most > 0.0 {
+            crate::extras_core_rdr2::trace_once("position pass", || format!("position pass after the move: {} rows, {most:.5} m on a part", push.len() + push_blocks.len()));
+        }
+        let x0 = self.bodies[self.order[0]].x.as_dvec3();
+        let st = Stage { first: false, joints, pose, start, o0: self.o, artic, lt: zero.clone(), x0, pv, qd0: free.clone(), rows: vec![], blocks, push, push_blocks, h, spin: MAX_SPIN_NM(), free_vel: zero, damp: 1.0, free, vb: vb0, order, ghosts };
+        self.push_shift = Vec3::ZERO;
+        self.end(st, &qp, drive.lift, pushed, true);
+        if let Some(e) = self.early.as_mut() {
+            let s = self.push_shift;
+            e.2.iter_mut().for_each(|f| f.0 += s);
+        }
+        self.skip_collide = true;
     }
 
     fn finish(&mut self, mut st: Stage, lift: f32) {
@@ -3767,6 +3852,10 @@ impl Ragdoll {
             return;
         }
         let mut qp = vec![0.0; st.qd0.len()];
+        if self.pass_after {
+            self.end(st, &qp, lift, false, false);
+            return;
+        }
         let n = st.qd0.len() / delirium_data::kv!(6 int);
         if std::env::var("NM_NOPG").is_err() && impulses_g(&mut st.push, &mut st.push_blocks, &st.artic, solved.unwrap_or_else(|| vec![(Vec3::ZERO, Vec3::ZERO); n]), &vec![(DVec3::ZERO, DVec3::ZERO); st.vb.len()], PUSH_SOR, None) {
             let acc = applied(&st.push, &st.push_blocks, vec![(Vec3::ZERO, Vec3::ZERO); n]).unwrap();
@@ -3776,7 +3865,7 @@ impl Ragdoll {
             impulses(&mut st.push, &mut st.push_blocks, &mut qp, &mut vec![(DVec3::ZERO, DVec3::ZERO); st.vb.len()]);
         }
         let pushed = !(st.push.is_empty() && st.push_blocks.is_empty());
-        self.end(st, &qp, lift, pushed);
+        self.end(st, &qp, lift, pushed, false);
     }
 
     fn begin(&mut self, build: &Build, world: &Collision, dt: f32, drive: &Drive, obstacles: &[Obstacle], others: &[Capsule]) -> Option<Stage> {
@@ -3816,9 +3905,11 @@ impl Ragdoll {
             self.pins.iter_mut().flatten().for_each(|p| p.translation -= d);
         }
         self.age += dt;
-        self.self_met.clear();
-        for t in &mut self.touch {
-            *t = (*t & !delirium_data::kv!(409 int)) | ((*t >> delirium_data::kv!(0 int)) & delirium_data::kv!(1 int));
+        if !self.skip_collide {
+            self.self_met.clear();
+            for t in &mut self.touch {
+                *t = (*t & !delirium_data::kv!(409 int)) | ((*t >> delirium_data::kv!(0 int)) & delirium_data::kv!(1 int));
+            }
         }
         self.hit.iter_mut().for_each(|h| *h = None);
         self.hit_out.iter_mut().for_each(|h| *h = None);
@@ -4107,7 +4198,7 @@ impl Ragdoll {
         true
     }
 
-    fn end(&mut self, mut st: Stage, qp: &[f64], lift: f32, pushed: bool) {
+    fn end(&mut self, mut st: Stage, qp: &[f64], lift: f32, pushed: bool, pass: bool) {
         for (p, b) in st.push_blocks.iter().zip(&st.blocks) {
             match b.held {
                 Some(r) => self.rec_mut(r).pimp = p.lambda.as_vec3(),
@@ -4168,6 +4259,7 @@ impl Ragdoll {
                     vo[k] = b.v - b.w.vx(b.x);
                 }
                 let s = self.recentre(&mut st.pose);
+                self.push_shift = s;
                 for (k, (vo, b)) in vo.iter_mut().zip(&self.bodies).enumerate() {
                     let w = if k == root { w0 } else { b.w };
                     *vo = (-w.yzx()).mul_add(s.zxy(), w.zxy().mul_add(s.yzx(), *vo));
@@ -4183,6 +4275,9 @@ impl Ragdoll {
                 (b.x, b.v, b.w) = (x + back, Vec3::ZERO, Vec3::ZERO);
                 b.set_q(q);
             }
+        }
+        if pass {
+            return;
         }
         self.sleep();
         self.asleep = self.mode == 2 && lift == 0.0 && self.pins.iter().all(Option::is_none) && self.grips.is_empty() && self.joins.is_empty()
@@ -4573,7 +4668,7 @@ impl Ragdoll {
                 let s = st[i].take().unwrap();
                 if go[i] {
                     let len = s.qd0.len();
-                    ms[i].doll.end(s, &qp[off[i]..off[i] + len], ms[i].drive.lift, any_push);
+                    ms[i].doll.end(s, &qp[off[i]..off[i] + len], ms[i].drive.lift, any_push, false);
                 }
             }
         }
