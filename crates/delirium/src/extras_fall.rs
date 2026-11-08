@@ -2703,8 +2703,11 @@ impl SfRdr2 {
         self.recoverable &= (1.0 - slope) * v.dot(up) > -p.max_recoverable;
         let high = !impact && self.tti > 0.4 && !contact && self.height > 1.5;
         let vertical = share > 0.3;
-        // (ctx+0x1030: no health message reaches this port, so it stays 1 and this doesn't fire)
+        // ctx+0x1030, from setCharacterHealth (1 until one comes)
         let dead = c.ch.core.cfg.health <= 0.0 && !p.ignore_death;
+        if c.ch.core.cfg.health <= 0.0 && p.ignore_death {
+            crate::extras_core_rdr2::trace_first("smartFall: ignoredeath, no health isn't dead");
+        }
         c.ch.core.cfg.fall.force_head = p.force_head;
         self.orientate(c, dt);
         self.t += dt;

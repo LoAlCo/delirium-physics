@@ -892,6 +892,9 @@ pub fn elastic_step(r: &mut crate::nmrs::ElasticRec, dt: f32, vel: Vec3, peak: f
         return;
     }
     if r.triggered || (touching && peak > r.threshold) {
+        if !r.triggered {
+            trace(|| format!("OverrideElasticity: {peak:.1} past {}, the elasticity decays over {} s", r.threshold, r.decay));
+        }
         r.triggered = true;
         r.scale = (r.scale - dt / r.decay.max(1e-4)).max(0.0);
     }
