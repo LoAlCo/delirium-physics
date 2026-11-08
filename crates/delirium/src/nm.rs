@@ -1447,9 +1447,10 @@ impl Agent {
         }
         if out.rfw_release != [false; 2] {
             self.extras.on.iter_mut().filter(|(n, _)| *n == "reachForWound").for_each(|(_, e)| e.rfw_release(out.rfw_release));
-            if let Some(h) = out.pg_hold {
-                self.extras.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.hold(h));
-            }
+        }
+        // module 16 runs on every shot tick, not only when the arms let a wound go
+        if let Some(h) = out.pg_hold {
+            self.extras.on.iter_mut().filter(|(n, _)| *n == "pointGun").for_each(|(_, e)| e.hold(h));
         }
         // RDR2 core: what the start wrote is the shot's request, and what the balancer's start writes next is the balancer's
         if let (Some(r), Some(ch)) = (self.limb_reqs.as_mut(), self.ch.as_ref()) {
