@@ -1942,6 +1942,7 @@ impl Agent {
                             ch.core.foot_slip = (k, 2.0 * k.sqrt());
                             let rec = crate::nmdbm_rdr2::stay_live(&ch.core.stay, s.vel);
                             fall_assist = rec.fall_assist(r.time, s.vel, self.doll.mass());
+                            if std::env::var_os("NMX_FA").is_some() { eprintln!("FA t {:.4} age {:.4} v {:.3} {:.3} {:.3} f {:.1} anti {} {} {}", self.time, r.time, s.vel.x, s.vel.y, s.vel.z, fall_assist, rec.antigrav, rec.antigrav_time, rec.antigrav_speed); } // NMXHOOK
                         }
                         if let Some(r) = self.limb_reqs.as_mut() {
                             // its lean of the lowest spine joint and its ankles are defaults the others override (limbreq.rs)
@@ -2944,6 +2945,7 @@ impl Agent {
                 let rec = crate::nmdbm_rdr2::stay_live(&snap.core.stay, self.doll.com().1);
                 let righting = !self.fallen && !self.extras.on.iter().any(|(n, _)| *n == "staggerFall");
                 torque.resize(torque.len().max(build.parts.len()), Vec3::ZERO);
+                if std::env::var_os("NMX_FA").is_some() { let ft = [0, 1].map(|i| body.doll.touch[ch.joints[(*crate::nmrs::ANKLE())[i]].child]); eprintln!("SR t {:.4} uf {} vb {} fs {} thr {} sat {} touch {:?} k7 {} k95 {} k1 {}", self.time, rec.use_forces, rec.velocity_based, rec.force_strength, rec.force_threshold_vel, rec.force_saturation_vel, ft, delirium_data::kv!(7 int), delirium_data::kv!(95 int), delirium_data::kv!(1 int)); } // NMXHOOK
                 crate::nmdbm::stay_upright(&body, &rec, dt, righting, &mut torque, &mut stay_at);
                 if let (true, true, Some(heading)) = (rec.turn_towards_bullets, !self.fallen, snap.core.bullet) {
                     crate::nmdbm::turn_towards_bullets(&body, heading, dt, &mut torque);
@@ -2958,6 +2960,7 @@ impl Agent {
         for (k, p) in push.into_iter().enumerate().filter(|(_, p)| *p != Vec3::ZERO) {
             self.doll.impulse(k, self.doll.centre(k), p);
         }
+        if std::env::var_os("NMX_FA").is_some() { let t: Vec3 = stay_at.iter().map(|x| x.2).fold(Vec3::ZERO, |a, b| a + b); let tr: Vec3 = stay_at.iter().filter(|x| x.2.dot(t) <= 0.0 || true).map(|x| x.2).fold(Vec3::ZERO, |a, b| a + b); eprintln!("SU t {:.4} n {} sum {:.3} {:.3} {:.3} parts {:?}", self.time, stay_at.len(), tr.x, tr.y, tr.z, stay_at.iter().map(|x| (x.0, (x.2 * 1000.0).round() / 1000.0)).collect::<Vec<_>>()); } // NMXHOOK
         for (k, at, p) in stay_at {
             self.doll.impulse(k, at, p);
         }
