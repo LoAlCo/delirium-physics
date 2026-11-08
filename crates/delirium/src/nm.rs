@@ -2723,12 +2723,14 @@ impl Agent {
                     }
                     self.doll.short_feet = short;
                 }
-                // 0x2a5c018: OverrideElasticity's clock, on ctx+0x100c, the COM's acceleration [P]; the behaviours gating it (4, 0xc, 0xe: foetal, catchFall, rollUp) are "falling" here
+                // 0x2a5c018: OverrideElasticity's clock, on ctx+0x100c: the COM pass's |(v - v_ground) - ctx+0xfa0| / dt, the
+                // COM's acceleration over the floor's (the room's floor is still); the behaviours gating it (4, 0xc, 0xe: foetal,
+                // catchFall, rollUp) are "falling" here
                 {
                     let vel = self.doll.com().1;
                     let peak = ch.core.com_was.map_or(0.0, |w| (vel - w).length() / dt.max(1e-4));
                     ch.core.com_was = Some(vel);
-                    let (touching, gate) = (self.doll.touch.iter().any(|t| *t != 0), self.nm_cf.is_some() || self.roll_up.is_some());
+                    let (touching, gate) = (self.doll.touch.iter().any(|t| *t != 0), self.nm_cf.is_some() || self.roll_up.is_some() || self.nm_bf.active);
                     crate::extras_core_rdr2::elastic_step(&mut ch.core.elastic, dt, vel, peak, touching, gate);
                     let r = ch.core.elastic;
                     self.doll.override_elastic.clear();
