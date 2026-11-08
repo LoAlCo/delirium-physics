@@ -108,14 +108,14 @@ impl Default for Rdr2Params {
 impl Default for Params {
     fn default() -> Params {
         Params {
-            body_stiffness: delirium_data::kv!(137), elbow: delirium_data::kv!(13), shoulder: 1.0, damping: delirium_data::kv!(74), max_steps: delirium_data::kv!(197 int), head_look_pos: Vec3::ZERO,
+            body_stiffness: delirium_data::kv!(137), elbow: delirium_data::kv!(13), shoulder: 1.0, damping: delirium_data::kv!(74), max_steps: delirium_data::kv!(203 int), head_look_pos: Vec3::ZERO,
             head_look_instance_index: -1, spine_stiffness: delirium_data::kv!(31), head_look_at_vel_prob: -1.0,
             somersault_angle: 1.0, somersault_angle_threshold: delirium_data::kv!(17), side_somersault_angle: 1.0,
             side_somersault_angle_threshold: delirium_data::kv!(17), ang_vel_multiplier: Vec3::new(delirium_data::kv!(84), 1.0, delirium_data::kv!(84)),
             ang_vel_threshold: Vec3::new(delirium_data::kv!(136), delirium_data::kv!(5), delirium_data::kv!(136)), arms_out_on_push_multiplier: 0.0, arms_out_on_push_timeout: 1.0,
-            returning_to_balance_arms_out: 0.0, arms_out_straighten_elbows: 0.0, arms_out_min_lean2: -delirium_data::kv!(188),
+            returning_to_balance_arms_out: 0.0, arms_out_straighten_elbows: 0.0, arms_out_min_lean2: -delirium_data::kv!(194),
             spine_damping: 1.0, turn_off_prob: delirium_data::kv!(78), turn2_target_prob: delirium_data::kv!(60), turn2_vel_prob: delirium_data::kv!(24), turn_away_prob: delirium_data::kv!(9),
-            turn_left_prob: delirium_data::kv!(187), turn_right_prob: delirium_data::kv!(187), elbow_angle_on_contact: delirium_data::kv!(186), bend_elbows_time: 0.5,
+            turn_left_prob: delirium_data::kv!(193), turn_right_prob: delirium_data::kv!(193), elbow_angle_on_contact: delirium_data::kv!(192), bend_elbows_time: 0.5,
             bend_elbows_gait: delirium_data::kv!(74), use_head_look: false, arms_out_on_push: false, use_body_turn: false,
             rdr2: Rdr2Params::default(),
         }
@@ -131,6 +131,8 @@ pub struct Out {
     pub turn: Option<Vec3>,
     /// RDR2: a lean asked of the balancer (leaning away from a target moving past)
     pub lean: Option<(crate::nmdbm::LeanMode, f32, bool)>,
+    /// RDR2: bodyBalance's COM lean (owner 2, +0x760), posted beside its force lean on the balancer's COM channel
+    pub lean_com: Vec3,
     /// RDR2: this tick's turn is a real turn step (+0x139, the bump turn)
     pub turn_step: bool,
     /// RDR2: the arms' brace this tick: target, its velocity, distance, back time
@@ -265,14 +267,14 @@ impl BodyBalance {
             if !catching {
                 ch.stabilise = None;
                 let k = p.body_stiffness;
-                out.catch_fall = Some([k * delirium_data::kv!(218), k * delirium_data::kv!(219), k * delirium_data::kv!(220)]);
+                out.catch_fall = Some([k * delirium_data::kv!(224), k * delirium_data::kv!(225), k * delirium_data::kv!(226)]);
             }
             return out;
         }
         if stepping != 0 && self.stepping != stepping {
             self.stepping = stepping;
             self.cut = ch.random() * delirium_data::kv!(20);
-            if p.arms_out_on_push_timeout > delirium_data::kv!(221) && p.arms_out_on_push_timeout < delirium_data::kv!(222) {
+            if p.arms_out_on_push_timeout > delirium_data::kv!(227) && p.arms_out_on_push_timeout < delirium_data::kv!(228) {
                 out.step_clamp = Some(ch.random() * delirium_data::kv!(136) + delirium_data::kv!(24));
             }
         }
@@ -447,7 +449,7 @@ impl BodyBalance {
         for i in Character::mask("ub") {
             ch.eff[i].blend_to_zero(k);
         }
-        ch.stabilise = Some((2.0, delirium_data::kv!(223)));
+        ch.stabilise = Some((2.0, delirium_data::kv!(229)));
         out
     }
 }
@@ -730,7 +732,7 @@ impl BodyBalance {
         } else {
             self.rd.back_steps = 4;
         }
-        // lean away from a target moving past (the force lean only: our balancer has one lean channel)
+        // lean away from a target moving past: the force lean (+0x860) and the COM lean (+0x760), both owner 2
         let vt = self.rd.target_vel;
         let d = flat((snap.com - target) - vt * 0.05);
         if vt.length() > 0.2 && !r.move_when_bracing && d.length() < r.move_radius {
@@ -741,9 +743,9 @@ impl BodyBalance {
             // RDR2 also asks something of the balancer here (+0x44c, unknown) before the still amount
             let amount = if snap.vel.length() < 1.0 { r.move_amount_still } else { r.move_amount };
             out.lean = Some((crate::nmdbm::LeanMode::Dir(side.normalize_or_zero()), amount, true));
-            // the COM lean's channel (+0x760, 0.05, or leanamountstill still) has no second slot here: as far as the step, a hip lean
             let com = if snap.vel.length() < 1.0 { r.lean_still } else { 0.05 };
-            crate::extras_core_rdr2::trace_once("bodyBalance: lean away", || format!("force {amount}, COM {com} (COM's channel not applied)"));
+            out.lean_com = side.normalize_or_zero() * com;
+            crate::extras_core_rdr2::trace_once("bodyBalance: lean away", || format!("force {amount}, COM {com}"));
         }
         // spine and neck
         for i in (*NECK()) {

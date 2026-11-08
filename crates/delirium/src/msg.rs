@@ -1009,11 +1009,41 @@ fn intern(s: &str) -> &'static str {
     k
 }
 
+pub fn parse_value(kind: Kind, v: &str) -> Option<Value> {
+    Some(match kind {
+        Kind::Float => Value::Float(v.parse().ok()?),
+        Kind::Int => Value::Int(v.parse().ok()?),
+        Kind::Bool => Value::Bool(match v {
+            "true" | "1" => true,
+            "false" | "0" => false,
+            _ => return None,
+        }),
+        Kind::Vec3 => {
+            let f: Vec<f32> = v.split(',').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+            Value::Vec3(crate::prelude::Vec3::new(*f.first()?, *f.get(1)?, *f.get(2)?))
+        }
+        Kind::Str => Value::Str(v.to_string()),
+    })
+}
+
 pub fn find(name: &str) -> Option<&'static Message> {
     MESSAGES.iter().chain(crate::extras::messages()).find(|m| m.name == name)
 }
 
 pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg: &str, params: &[(&str, Value)]) -> Result<usize, Error> {
+    if a.overrides.iter().any(|(m, ..)| *m == msg) {
+        let over = std::mem::take(&mut a.overrides);
+        let mut ps = params.to_vec();
+        for (_, k, v) in over.iter().filter(|(m, ..)| *m == msg) {
+            match ps.iter_mut().find(|(n, _)| n == k) {
+                Some(slot) => slot.1 = v.clone(),
+                None => ps.push((k, v.clone())),
+            }
+        }
+        let r = send(a, build, world, st, msg, &ps);
+        a.overrides = over;
+        return r;
+    }
     // RDR2 core: ctx+0x2bf0 on a body that isn't the rig's own male (0x2a4e1dc)
     if let Some(t) = a.rdr2_core.is_some().then(|| crate::dims_rdr2::table(build)).flatten() {
         if crate::dims_rdr2::SCALED.iter().any(|r| r.0 == msg.to_ascii_lowercase()) {
@@ -1849,7 +1879,7 @@ pub fn get(st: &State, msg: &str, name: &str) -> Option<Value> {
         ("defineAttachedObject", "partIndex") => { let p = &st.define_attached_object; Value::Int(p.part_index) }
         ("defineAttachedObject", "worldPos") => { let p = &st.define_attached_object; Value::Vec3(p.world_pos) }
         ("defineAttachedObject", "objectMass") => { let p = &st.define_attached_object; Value::Float(p.object_mass) }
-        ("fallOverWall", "bodyTwist") => { let p = &st.fall_over_wall; Value::Float(p.twist_max / delirium_data::kv!(189)) }
+        ("fallOverWall", "bodyTwist") => { let p = &st.fall_over_wall; Value::Float(p.twist_max / delirium_data::kv!(195)) }
         ("fallOverWall", "useSpecifiedPoint") => { let p = &st.fall_over_wall; Value::Bool(p.use_specified_point) }
         ("fallOverWall", "maxDistanceFromPelToHitPoint") => { let p = &st.fall_over_wall; Value::Float(p.max_distance_from_pel_to_hit_point) }
         ("fallOverWall", "fallOverEdge") => { let p = &st.fall_over_wall; Value::Vec3(p.fall_over_edge) }

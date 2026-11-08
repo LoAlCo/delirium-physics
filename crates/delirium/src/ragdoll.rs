@@ -19,7 +19,7 @@ fn MARGIN() -> f32 { delirium_data::kv!(133) }
 fn LOCK_SLACK() -> f32 { delirium_data::kv!(119) }
 #[allow(non_snake_case)]
 #[inline]
-fn WORLD_MARGIN() -> f32 { delirium_data::kv!(566) }
+fn WORLD_MARGIN() -> f32 { delirium_data::kv!(570) }
 fn clamp_fric(c: Option<(f32, f32)>, x: f32) -> f32 {
     match c {
         Some((lo, hi)) => x.clamp(lo, hi.max(lo)),
@@ -42,13 +42,13 @@ pub static SURFACES: std::sync::RwLock<Vec<[f32; 2]>> = std::sync::RwLock::new(V
 fn SLEEP_V2() -> f32 { delirium_data::kv!(51) }
 #[allow(non_snake_case)]
 #[inline]
-fn SLEEP_W2() -> f32 { delirium_data::kv!(566) }
+fn SLEEP_W2() -> f32 { delirium_data::kv!(570) }
 #[allow(non_snake_case)]
 #[inline]
 fn SLEEP_MEAN2() -> f32 { delirium_data::kv!(60) }
 #[allow(non_snake_case)]
 #[inline]
-fn SLEEP_STOP() -> u32 { delirium_data::kv!(198 int) }
+fn SLEEP_STOP() -> u32 { delirium_data::kv!(189 int) }
 #[allow(non_snake_case)]
 #[inline]
 fn SLEEP_SLEEP() -> u32 { delirium_data::kv!(127 int) }
@@ -133,15 +133,15 @@ pub struct PartDef {
 
 fn box_unit(e: Vec3) -> Vec3 {
     let [x, y, z] = [e.x * 2.0, e.y * 2.0, e.z * 2.0].map(|s| s * s);
-    Vec3::new(z + y, x + z, x + y) * delirium_data::kv!(567 f32)
+    Vec3::new(z + y, x + z, x + y) * delirium_data::kv!(571 f32)
 }
 
 fn capsule_unit(r: f32, l: f32) -> Vec3 {
     let (rr, ll) = (r * r, l * l);
-    let k = 1.0 / r.mul_add(delirium_data::kv!(568 f32), l);
-    let y = r.mul_add(delirium_data::kv!(569 f32), l) * rr * k * 0.5;
-    let s = (ll * l).mul_add(delirium_data::kv!(17), (rr * r).mul_add(delirium_data::kv!(486), ll * r));
-    let x = (rr * l).mul_add(delirium_data::kv!(141), s) * k * delirium_data::kv!(548 f32);
+    let k = 1.0 / r.mul_add(delirium_data::kv!(572 f32), l);
+    let y = r.mul_add(delirium_data::kv!(573 f32), l) * rr * k * 0.5;
+    let s = (ll * l).mul_add(delirium_data::kv!(17), (rr * r).mul_add(delirium_data::kv!(491), ll * r));
+    let x = (rr * l).mul_add(delirium_data::kv!(141), s) * k * delirium_data::kv!(553 f32);
     Vec3::new(x, y, x)
 }
 
@@ -184,15 +184,15 @@ impl Build {
                 Some(k) if w[k + 1] == "h" => Limit::BoneHinge { pf: q(k + 2), cf: q(k + delirium_data::kv!(6 int)), lo: f(k + delirium_data::kv!(81 int)), hi: f(k + delirium_data::kv!(113 int)) },
                 Some(_) => Limit::Locked,
                 None if w[delirium_data::kv!(105 int)] == "c" => Limit::Cone { swing: f(delirium_data::kv!(106 int)), twist: f(delirium_data::kv!(107 int)) },
-                None => Limit::Hinge { axis: v(delirium_data::kv!(106 int)), lo: f(delirium_data::kv!(109 int)), hi: f(delirium_data::kv!(331 int)), twist: f(delirium_data::kv!(85 int)) },
+                None => Limit::Hinge { axis: v(delirium_data::kv!(106 int)), lo: f(delirium_data::kv!(109 int)), hi: f(delirium_data::kv!(337 int)), twist: f(delirium_data::kv!(85 int)) },
             };
             parts.push(PartDef { size: 1.0, heft: 1.0, grown: 1.0, bone: parts.len(), parent: w[1].parse::<i32>().ok().filter(|&j| j >= 0).map(|j| j as usize), mass: f(2), radius: f(delirium_data::kv!(0 int)), half: f(delirium_data::kv!(1 int)),
-                                 offset: Transform::from_translation(v(delirium_data::kv!(2 int))).with_rotation(q(delirium_data::kv!(23 int))), rest: q(delirium_data::kv!(55 int)), anchor_parent: v(delirium_data::kv!(54 int)), anchor: v(delirium_data::kv!(199 int)),
-                                 limit, lower: w[delirium_data::kv!(476 int)] == "1", reach: w[delirium_data::kv!(276 int)] == "1", name: w[0].to_string(),
-                                 bind: w.iter().position(|&t| t == "B").map_or(q(delirium_data::kv!(437 int)), |k| q(k + 1)), boxed: (w.get(delirium_data::kv!(385 int)) == Some(&"b")).then(|| v(delirium_data::kv!(421 int))),
+                                 offset: Transform::from_translation(v(delirium_data::kv!(2 int))).with_rotation(q(delirium_data::kv!(23 int))), rest: q(delirium_data::kv!(55 int)), anchor_parent: v(delirium_data::kv!(54 int)), anchor: v(delirium_data::kv!(204 int)),
+                                 limit, lower: w[delirium_data::kv!(481 int)] == "1", reach: w[delirium_data::kv!(282 int)] == "1", name: w[0].to_string(),
+                                 bind: w.iter().position(|&t| t == "B").map_or(q(delirium_data::kv!(443 int)), |k| q(k + 1)), boxed: (w.get(delirium_data::kv!(391 int)) == Some(&"b")).then(|| v(delirium_data::kv!(427 int))),
                                  inertia: w.iter().position(|&t| t == "i").map_or(Vec3::ZERO, |k| v(k + 1)),
                                  length: w.iter().position(|&t| t == "L").map_or(0.0, |k| f(k + 1)) });
-            frames.push(Transform::from_translation(v(delirium_data::kv!(456 int))).with_rotation(q(delirium_data::kv!(437 int))));
+            frames.push(Transform::from_translation(v(delirium_data::kv!(462 int))).with_rotation(q(delirium_data::kv!(443 int))));
         }
         let mut build = Build { parts, nm, links: crate::nmdbm::asset_links(nm) };
         crate::nmrs::asset_layout(&mut build, &mut frames);
@@ -222,6 +222,34 @@ impl Build {
     }
 
     pub fn fit(&self, frames: &[Transform], joints: &[Vec3]) -> (Build, Vec<Transform>) {
+        self.fit_capped(frames, joints, 1.0)
+    }
+
+    pub fn fit_neck(&self, frames: &[Transform], joints: &[Vec3], neck: f32) -> (Build, Vec<Transform>) {
+        let (mut b, mut f) = self.fit_capped(frames, joints, neck);
+        if neck != 1.0 && let Some(k) = b.parts.iter().position(|p| p.name.ends_with("Head")) {
+            let (one, fo) = self.fit(frames, joints);
+            let at = f[k].translation + f[k].rotation * b.parts[k].anchor;
+            let ap = b.parts[k].anchor_parent;
+            b.parts[k] = one.parts[k].clone();
+            b.parts[k].anchor_parent = ap;
+            f[k] = Transform { translation: at - fo[k].rotation * one.parts[k].anchor, ..fo[k] };
+        }
+        (b, f)
+    }
+
+    pub fn shift_part(&mut self, frames: &mut [Transform], k: usize, raise: f32, grow: f32) {
+        let p = &mut self.parts[k];
+        let way = -p.anchor.normalize_or_zero();
+        p.anchor -= way * raise;
+        p.radius *= grow;
+        frames[k].translation += frames[k].rotation * way * raise;
+        for c in self.parts.iter_mut().filter(|c| c.parent == Some(k)) {
+            c.anchor_parent -= way * raise;
+        }
+    }
+
+    fn fit_capped(&self, frames: &[Transform], joints: &[Vec3], neck: f32) -> (Build, Vec<Transform>) {
         let n = self.parts.len();
         let mut j = joints.to_vec();
         if n == delirium_data::kv!(111 int) {
@@ -229,8 +257,8 @@ impl Build {
         if j[delirium_data::kv!(22 int)].distance(j[0]) > delirium_data::kv!(125) * leg {
             j[delirium_data::kv!(22 int)] = j[0] + (j[delirium_data::kv!(22 int)] - j[0]).normalize_or_zero() * delirium_data::kv!(125) * leg;
         }
-        if j[delirium_data::kv!(55 int)].distance(j[delirium_data::kv!(113 int)]) > delirium_data::kv!(125) * leg {
-            j[delirium_data::kv!(55 int)] = j[delirium_data::kv!(113 int)] + (j[delirium_data::kv!(55 int)] - j[delirium_data::kv!(113 int)]).normalize_or_zero() * delirium_data::kv!(125) * leg;
+        if j[delirium_data::kv!(55 int)].distance(j[delirium_data::kv!(113 int)]) > delirium_data::kv!(125) * leg * neck {
+            j[delirium_data::kv!(55 int)] = j[delirium_data::kv!(113 int)] + (j[delirium_data::kv!(55 int)] - j[delirium_data::kv!(113 int)]).normalize_or_zero() * delirium_data::kv!(125) * leg * neck;
         }
         }
         let joints = &j[..];
@@ -274,7 +302,7 @@ impl Build {
         let mid = { let mut v = size.clone(); v.sort_by(f32::total_cmp); v[n / 2] };
         for (k, p) in build.parts.iter_mut().enumerate() {
             let s = size[k];
-            let z = s.clamp(mid * delirium_data::kv!(119), mid * delirium_data::kv!(486));
+            let z = s.clamp(mid * delirium_data::kv!(119), mid * delirium_data::kv!(491));
             (p.size, p.radius, p.half, p.length, p.anchor) = (p.size * s, p.radius * z, p.half * s, p.length * s, p.anchor * s);
             p.heft *= (mid / s).powi(3);
             p.offset.translation *= s;
@@ -609,7 +637,7 @@ pub fn joint_info(build: &Build, k: usize, rigid: Option<&Rigid>) -> Option<Join
     let p = build.parts.get(k)?;
     let j = Joint::new(p, p.parent?, rigid);
     let (hinge, limits) = match j.kind {
-        Kind::Ball { lean, twist } => (false, [lean[0], lean[1], twist]),
+        Kind::Ball { lean, twist } => (false, [lean[1], lean[0], twist]),
         Kind::Hinge { lo, hi } => (true, [lo, hi, 0.0]),
     };
     Some(JointInfo { parent: j.parent, hinge, in_parent: j.pf, in_child: j.cf, limits, anchor_parent: p.anchor_parent, anchor_child: p.anchor })
@@ -683,7 +711,7 @@ fn rage_drag(v: Vec3, h: f32) -> Vec3 {
 fn solve3(a: [Vec3; 3], b: Vec3) -> Vec3 {
     let [r0, r1, r2] = a;
     let big = a.iter().flat_map(|r| r.to_array()).fold(0.0f32, |m, v| if m < v.abs() { v.abs() } else { m });
-    if big < delirium_data::kv!(244) {
+    if big < delirium_data::kv!(250) {
         return Vec3::ZERO;
     }
     let row = a.iter().position(|r| r.to_array().iter().any(|v| v.abs() == big)).unwrap_or(0);
@@ -695,7 +723,7 @@ fn solve3(a: [Vec3; 3], b: Vec3) -> Vec3 {
     let rowmax = cof.map(|c| c.abs().max_element());
     let top = rowmax.iter().fold(0.0f32, |m, &v| if m < v { v } else { m });
     let det = c1.y.mul_add(r0.y, r0.x.mul_add(c1.x, c1.z * r0.z));
-    let tol = big * delirium_data::kv!(570 f32);
+    let tol = big * delirium_data::kv!(574 f32);
     let (t3, tm) = (tol * tol * tol, top * tol);
     let thr = if t3 - tm >= 0.0 { t3 } else { tm };
     if !(det.abs() > thr && rowmax[(row + 1) % delirium_data::kv!(0 int)] > tol * tol && rowmax[(row + 2) % delirium_data::kv!(0 int)] > tol * tol) {
@@ -935,7 +963,7 @@ impl Block {
         let way = DVec3::new(l.x - an, l.y, l.z);
         let over = g.dot(l);
         if over > 0.0 && !self.pin {
-            l -= way * (over / (g.dot(way) + delirium_data::kv!(244)));
+            l -= way * (over / (g.dot(way) + delirium_data::kv!(250)));
         }
         if an < 0.0 && !self.pin {
             l = DVec3::ZERO;
@@ -949,7 +977,7 @@ impl Block {
 
 fn ldl_inverse(k: DMat3) -> DMat3 {
     let (a00, a10, a20, a11, a21, a22) = (k.x_axis.x, k.x_axis.y, k.x_axis.z, k.y_axis.y, k.y_axis.z, k.z_axis.z);
-    let eps = (a11 + a22 + a00) * delirium_data::kv!(571);
+    let eps = (a11 + a22 + a00) * delirium_data::kv!(575);
     let d0 = a00.max(eps);
     let i0 = 1.0 / d0;
     let (l10, l20) = (a10 * i0, a20 * i0);
@@ -1139,7 +1167,7 @@ fn impulses_g(rows: &mut [Row], blocks: &mut [Block], artic: &Artic, base: Vec<a
             let gv = Vec3::new(fneg(1.0f32.mul_add(s, -tang.x)), fneg(0.0f32.mul_add(s, -l.y)), fneg(0.0f32.mul_add(s, -l.z)));
             let way = l - Vec3::new(an, 0.0 * an, 0.0 * an);
             let over = gv.vd(l);
-            let den = gv.vd(way) + delirium_data::kv!(244);
+            let den = gv.vd(way) + delirium_data::kv!(250);
             let rc = crate::estimate::vrefp(den);
             let rc = rc.mul_add(fneg(rc.mul_add(den, -1.0)), rc);
             let f = if over > 0.0 { over * rc } else { 0.0 };
@@ -1189,7 +1217,7 @@ fn contact_b(x: f32, h: f32) -> f32 {
 
 #[allow(non_snake_case)]
 #[inline]
-fn ALLOW() -> f32 { delirium_data::kv!(572) }
+fn ALLOW() -> f32 { delirium_data::kv!(576) }
 macro_rules! env_on {
     ($n:literal) => {{ static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ON.get_or_init(|| std::env::var($n).is_ok()) }};
 }
@@ -1270,7 +1298,7 @@ impl MapPoints {
     }
 
     pub fn points(&self, rot: Mat3, centre: Vec3) -> Vec<MapPoint> {
-        self.0.held.iter().map(|r| MapPoint { on_part: crate::vm4(rot.x_axis, rot.y_axis, rot.z_axis, centre, r.local), ground: r.ground, n: r.n, gap: r.gap,
+        self.0.held.iter().map(|r| MapPoint { on_part: crate::vm4(rot.x_axis, rot.y_axis, rot.z_axis, centre, r.local), ground: r.ground - r.n * WORLD_MARGIN(), n: r.n, gap: r.gap,
                                               inst: r.inst, push: r.imp.x, off: r.off, flags: r.fl }).collect()
     }
 
@@ -1327,7 +1355,8 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
             let new = |q: gjk::Closest, at: Vec3, t0: Vec3| {
                 let (back, world) = (t0 - o, q.a + t0);
                 let local = tm.transpose() * (q.a + back - at);
-                let ground = q.b + back - q.n * WORLD_MARGIN() + o;
+                // GTA IV (0.7.0): the point on the ground's margin. Rage's laws keep it on the triangle (rage_refresh and on)
+                let ground = if rage.is_some() { q.b + back - q.n * WORLD_MARGIN() + o } else { q.b + back + o };
                 Held { local, ground, gap: q.dist, age: 0, m: 0, fl: 0, imp: Vec3::ZERO, pimp: Vec3::ZERO, n: q.n, inst: 0, off: false, world, wc: Vec3::ZERO, tri: (0, 0) }
             };
             let frame = |m: Mat3, at: Vec3| crate::bvh::Frame { rows: [m.x_axis, m.y_axis, m.z_axis], t: at + o };
@@ -1384,7 +1413,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                     dirs[k + 1].dot(across) >= dirs[0].dot(dirs[k + 1]).min(1.0 - delirium_data::kv!(50)) - delirium_data::kv!(134)
                 });
                 // GTA IV's two filters. Rage has neither: 0x284038c, 0x28e9fbc and 0x2821184 keep a point within the query's reach whichever way the part moves, and the normal's own test is `edge_law`
-                if rage.is_none() && careful && (leaving(h.local, dirs[0]) || !across_ok(h.ground + h.n * WORLD_MARGIN(), h.n)) {
+                if rage.is_none() && careful && (leaving(h.local, dirs[0]) || !across_ok(h.ground, h.n)) {
                     return None;
                 }
                 Some((Held { m, fl: world.poly_flags(poly.first), inst, tri: poly.first, ..h }, poly, rage.map(|_| (t0, tri, turn, pen))))
@@ -1436,26 +1465,26 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                     }
                 }
             }
-            let mut hits: Vec<(Vec3, Vec3)> = kept.iter().map(|&(g, i)| (groups[g].1[i].ground + groups[g].1[i].n * WORLD_MARGIN(), groups[g].1[i].n)).collect();
+            let mut hits: Vec<(Vec3, Vec3)> = kept.iter().map(|&(g, i)| { let r = &groups[g].1[i]; (if rage.is_some() { r.ground + r.n * WORLD_MARGIN() } else { r.ground }, r.n) }).collect();
             if rage.is_none() {
                 poly.clamp(&mut hits, WORLD_MARGIN());
             }
             for (&(g, i), (at, n)) in kept.iter().zip(hits) {
                 let r = &mut groups[g].1[i];
-                (r.ground, r.n) = (at - n * WORLD_MARGIN(), n);
+                (r.ground, r.n) = (if rage.is_some() { at - n * WORLD_MARGIN() } else { at }, n);
             }
         }
         groups.sort_by_key(|g| world.level_index(g.0));
         for (_, held) in groups.iter_mut().filter(|_| rage.is_none()) {
             for r in held.iter_mut() {
                 if r.age != 0 {
-                    r.gap = (crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) - (r.ground + r.n * WORLD_MARGIN())).vd(r.n);
+                    r.gap = (crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local) - r.ground).vd(r.n);
                 }
                 r.age += if r.age == 1 { 2 } else { 1 };
             }
             let slid = |r: &Held| {
                 let a = crate::vm4(tm.x_axis, tm.y_axis, tm.z_axis, bw, r.local);
-                let d = (r.ground + r.n * WORLD_MARGIN()) - (-r.n).mul_add(Vec3::splat(r.gap), a);
+                let d = r.ground - (-r.n).mul_add(Vec3::splat(r.gap), a);
                 d.vd(d)
             };
             let (mut k, mut worst) = (0, (None, 0.0));
@@ -1465,7 +1494,7 @@ fn world_meet(world: &Collision, o: Vec3, shape: gjk::Shape, half: Vec3, tm: Mat
                     continue;
                 }
                 let d = slid(&held[k]);
-                if held[k].age > delirium_data::kv!(1 int) && d > worst.1 && d > delirium_data::kv!(573) {
+                if held[k].age > delirium_data::kv!(1 int) && d > worst.1 && d > delirium_data::kv!(577) {
                     worst = (Some(k), d);
                 }
                 k += 1;
@@ -1800,7 +1829,7 @@ fn hold(held: &mut Vec<Held>, new: Held) -> Option<usize> {
     if new.gap >= delirium_data::kv!(118) {
         return None;
     }
-    let mut near = (None, delirium_data::kv!(573));
+    let mut near = (None, delirium_data::kv!(577));
     for (k, r) in held.iter().enumerate() {
         let d = r.local.distance_squared(new.local);
         if d < near.1 && r.age != 0 {
@@ -1827,7 +1856,7 @@ fn replaced(kept: &[Held], new: Vec3) -> Option<usize> {
         n = a.vx(p[k] - p[0]);
     }
     let d = n.vx(a);
-    let (mut m, mut bar) = (0, Vec3::splat(delirium_data::kv!(574)));
+    let (mut m, mut bar) = (0, Vec3::splat(delirium_data::kv!(578)));
     for (i, q) in p.iter().enumerate() {
         if d.vd(*q) < bar.max_element() {
             (m, bar) = (i, *q);
@@ -1848,7 +1877,7 @@ fn replaced(kept: &[Held], new: Vec3) -> Option<usize> {
             break;
         }
     }
-    let (mut at, mut least) = (0, delirium_data::kv!(574));
+    let (mut at, mut least) = (0, delirium_data::kv!(578));
     for k in 0..len {
         let (j, l) = ((k + 1) % len, (k + 2) % len);
         let s = n.vd((p[j] - p[k]).vx(p[l] - p[k]));
@@ -1912,7 +1941,7 @@ fn boxes_meet(ca: Vec3, a: Mat3, ha: Vec3, cb: Vec3, b: Mat3, hb: Vec3) -> bool 
     let bx = [b.x_axis, b.y_axis, b.z_axis];
     let d = cb - ca;
     let reach = |u: Vec3, ax: &[Vec3; 3], h: Vec3| (0..delirium_data::kv!(0 int)).map(|i| ax[i].dot(u).abs() * h[i]).sum::<f32>();
-    let crosses = ax.into_iter().flat_map(|u| bx.map(|v| u.cross(v))).filter(|c| c.length_squared() > delirium_data::kv!(250));
+    let crosses = ax.into_iter().flat_map(|u| bx.map(|v| u.cross(v))).filter(|c| c.length_squared() > delirium_data::kv!(256));
     ax.into_iter().chain(bx).chain(crosses).all(|u| d.dot(u).abs() <= reach(u, &ax, ha) + reach(u, &bx, hb))
 }
 
@@ -1964,7 +1993,7 @@ fn bound_half(p: &PartDef) -> Vec3 {
 
 #[allow(non_snake_case)]
 #[inline]
-fn PUSH_KEEP() -> f32 { delirium_data::kv!(572) }
+fn PUSH_KEEP() -> f32 { delirium_data::kv!(576) }
 fn out(gap: f32) -> f32 {
     -gap - (-gap * 0.5).clamp(0.0, PUSH_KEEP())
 }
@@ -2155,6 +2184,7 @@ pub struct Ragdoll {
     stiff: Vec<f32>,
     pins: Vec<Option<Transform>>,
     cons: Vec<(Option<Vec3>, Option<Quat>)>,
+    tethers: Vec<Option<(Vec3, f32)>>,
     pub grips: Vec<(usize, Vec3, Vec3, f32, f32)>,
     pub joins: Vec<(usize, Vec3, i32, Vec3, f32)>,
     pub carried: Option<Obstacle>,
@@ -2192,6 +2222,7 @@ pub struct Ragdoll {
     pub inertia: Option<Vec<Vec3>>,
     pub inst: Option<[Vec3; 4]>,
     pending: Vec<(usize, Vec3, Vec3, Vec3)>,
+    pub kicks: Option<Vec<(usize, Vec3, Vec3)>>,
     pub out: Vec<(Vec3, Vec3)>,
     pub joint_torque: Vec<Vec3>,
     pub armature: Vec<f32>,
@@ -2276,8 +2307,8 @@ impl Ragdoll {
             at += 1;
             order.extend((0..n).filter(|&c| build.parts[c].parent == Some(k)));
         }
-        Ragdoll { pass_after: false, skip_collide: false, push_shift: Vec3::ZERO, limit_row: vec![], limit_broken: 0, fric_cap: vec![], ignore_parts: 0, short_feet: 0, override_elastic: vec![], hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
-                  sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, lim_warm: vec![], early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
+        Ragdoll { pass_after: false, skip_collide: false, push_shift: Vec3::ZERO, limit_row: vec![], limit_broken: 0, fric_cap: vec![], ignore_parts: 0, short_feet: 0, override_elastic: vec![], hit_out_id: vec![], fric_clamp: None, ignore_depth: -100.0, nm: build.nm, links: build.links.clone(), radius_scale: vec![], pins: vec![None; n], cons: vec![(None, None); n], tethers: vec![None; n], grips: vec![], gone: 0, joins: vec![], carried: None, carried_hits: vec![], carried_push: vec![], ob_push: vec![], carried_touch: vec![], locks: vec![], snapped: vec![], grip_rows: vec![], join_rows: vec![], touch: vec![0; n], self_met: vec![], slip_legs: None, leg_gap: [-1.0; 2], contact_off: 0, hit: vec![None; n], hit_out: vec![None; n], fric: vec![], lim_floor: vec![], contact: crate::bump::ContactRecord::new(), ob_hits: vec![], ob_hit_left: vec![], wall: vec![], ped_world: Default::default(), held: vec![vec![]; n], stage_vel: vec![], stage_lt: vec![], root_moment: vec![], roll_push: None, stage_lim: vec![], stiff: vec![], bodies, order, mode: 1, still: [SLEEP_STOP() - 2, SLEEP_SLEEP() - 2],
+                  sleep_tol: [SLEEP_V2(), SLEEP_W2(), SLEEP_MEAN2()], asleep: false, age: 0.0, fresh: false, wake_step: false, pending: vec![], kicks: None, pairs: vec![], pushed: vec![], seen: vec![], coll: vec![], last_a: vec![], seen_w: vec![], seen_r: vec![], nm_first: false, lim_warm: vec![], early: None, held_pairs: vec![], held_keys: vec![], held_car: vec![], ghost_on: vec![], no_collision: None, no_collision_met: false, prep_twist: vec![], hinge_b: vec![], rigid: None, rage_vo: None, inertia: None, inst: None, out: vec![(Vec3::ZERO, Vec3::ZERO); n], joint_torque: vec![Vec3::ZERO; n], armature: vec![0.0; n], o, bound_c: crate::nmrs::cg(build.nm),
                   rejuv: 0, mwc: (1, 0), held_inst: None, ped_inst: None, pool: 0 }
     }
 
@@ -2318,6 +2349,13 @@ impl Ragdoll {
     pub fn constrain(&mut self, k: usize, at: Option<Vec3>, turn: Option<Quat>) {
         self.cons[k] = (at, turn);
         if at.is_some() || turn.is_some() {
+            self.wake();
+        }
+    }
+
+    pub fn tether(&mut self, k: usize, to: Option<(Vec3, f32)>) {
+        self.tethers[k] = to;
+        if to.is_some() {
             self.wake();
         }
     }
@@ -2372,7 +2410,7 @@ impl Ragdoll {
             let sq = |v: Vec3| if k < n4 { v.z.fma(v.z, v.x.fma(v.x, v.y * v.y)) } else { v.x.fma(v.x, v.y.fma(v.y, v.z * v.z)) };
             e = (sq(v) * m).fma(0.5, e);
             let i = b.i;
-            e = (sq(w) * ((i.z + i.y + i.x) * delirium_data::kv!(575))).fma(0.5, e);
+            e = (sq(w) * ((i.z + i.y + i.x) * delirium_data::kv!(579))).fma(0.5, e);
             mass += m;
         }
         e / mass
@@ -2437,6 +2475,12 @@ impl Ragdoll {
 
     pub fn centre(&self, k: usize) -> Vec3 {
         self.bodies[k].x + self.o
+    }
+
+    pub fn mass_inertia(&self, k: usize) -> (f32, Vec3) {
+        let b = &self.bodies[k];
+        let m = Mat3::from_quat(b.l);
+        (b.m, Vec3::from_array([0, 1, 2].map(|a| (0..delirium_data::kv!(0 int)).map(|j| m.row(a)[j] * m.row(a)[j] * b.i[j]).sum())))
     }
 
     pub fn held_world(&self, i: usize) -> Vec<(Vec3, Vec3, f32, u16)> {
@@ -2586,6 +2630,14 @@ impl Ragdoll {
         r[2].mul_add(Vec3::splat(a.z), r[1].mul_add(Vec3::splat(a.y), r[0].mul_add(Vec3::splat(a.x), ip)))
     }
 
+    pub fn overlapping(&self, build: &Build, pairs: &[(usize, usize)]) -> Vec<(usize, usize)> {
+        let t = self.turns();
+        let at = |k: usize| (self.bodies[k].x + self.o, t[k]);
+        pairs.iter().copied().filter(|&(a, c)| {
+            Self::shape_contacts((&part_shape(&build.parts[a]), &part_shape(&build.parts[c])), at(a), at(c), 0.0, Vec3::Z).first().is_some_and(|x| x.3 < -delirium_data::kv!(51))
+        }).collect()
+    }
+
     pub(crate) fn turns(&self) -> Vec<Mat3> {
         let inst = self.inst();
         self.comp(&inst).iter().map(|(_, c)| turn(&crate::rigid::rows_mul(c, &inst))).collect()
@@ -2622,6 +2674,9 @@ impl Ragdoll {
         let b = &self.bodies[k];
         let ang = (b.tensor() * w.as_dvec3()).as_vec3();
         self.pending.push((k, b.x, Vec3::ZERO, ang));
+        if let Some(q) = &mut self.kicks {
+            q.push((k, Vec3::ZERO, ang));
+        }
         self.wake();
     }
 
@@ -2703,6 +2758,10 @@ impl Ragdoll {
 
     pub fn impulse(&mut self, k: usize, at: Vec3, impulse: Vec3) {
         self.pending.push((k, at - self.o, impulse, Vec3::ZERO));
+        let c = self.centre(k);
+        if let Some(q) = &mut self.kicks {
+            q.push((k, impulse, (at - c).cross(impulse)));
+        }
         self.wake();
     }
 
@@ -3241,6 +3300,7 @@ impl Ragdoll {
         let held_lv: Vec<u16> = self.held.iter().flatten().map(|r| world.level_index(r.inst)).collect();
         let held_ob: Vec<i32> = self.held_car.iter().filter(|h| !h.3.is_empty()).map(|h| h.1).collect();
         let mut hit_ob: Vec<(usize, i32, Vec3, Vec3)> = vec![];
+        let mut taken: Vec<usize> = vec![];
         let (mut ghosts, mut ghost_ob): (Vec<bool>, Vec<i32>) = (vec![], vec![]);
         for (_, held) in self.held.iter_mut().enumerate().filter(|&(i, _)| pose[i].is_some() || self.fresh) {
             held.clear();
@@ -3323,12 +3383,13 @@ impl Ragdoll {
                     let (lm, la) = cp.last.unwrap_or((cp.m, cp.at));
                     let side_c = (cp.shape, own_half, (ob.at + rot * cp.at, cq), (lat + lrot * la, lrot * lm));
                     let a_world = (self.seen_w.get(i).map_or(a_last.0 + o, |&w| w), a_last.1);
-                    let slot = self.held_car.iter().position(|h| (h.0, h.1, h.2) == (i, ob.id, c));
+                    let slot = (0..self.held_car.len()).find(|&s| (self.held_car[s].0, self.held_car[s].1, self.held_car[s].2) == (i, ob.id, c) && !taken.contains(&s));
                     if !meet {
                         if let Some(s) = slot { self.held_car[s].3.clear(); }
                         continue;
                     }
                     let s = slot.unwrap_or_else(|| { self.held_car.push((i, ob.id, c, vec![])); self.held_car.len() - 1 });
+                    taken.push(s);
                     if !skip {
                         Self::manifold(&mut self.held_car[s].3, (shape, bound_half(p), (bw, tm), a_world), side_c, ob.first, claw);
                     }
@@ -3433,6 +3494,20 @@ impl Ragdoll {
                 }
             }
         }
+        for (k, &(at, len)) in self.tethers.iter().enumerate().filter_map(|(k, t)| Some((k, t.as_ref()?))).filter(|&(k, _)| pose[k].is_none()) {
+            let b = &self.bodies[k];
+            let to_pin = at - o - b.x;
+            let dist = to_pin.length();
+            if dist < delirium_data::kv!(72) {
+                continue;
+            }
+            let j = lrow(k, d(b.x), d(to_pin / dist), DVec3::ZERO);
+            let fvj = fv(&j);
+            if dist + (-fvj as f32).max(0.0) * h * 2.0 < len - delirium_data::kv!(68) {
+                continue;
+            }
+            rows.push(Row::new(artic, j, ((dist - len).min(delirium_data::kv!(60)) / h) as f64 - fvj, RowKind::Push));
+        }
         let mut self_touch: Vec<(usize, Vec3, Vec3, f32)> = vec![];
         let mut self_seq: Vec<Option<usize>> = vec![];
         for (pi, &(a, c)) in self.pairs.clone().iter().enumerate() {
@@ -3510,7 +3585,7 @@ impl Ragdoll {
         let mut gwarm = vec![];
         for (k, held) in self.held.iter_mut().enumerate() {
             let on = self.contact_off >> k & 1 == 0;
-            held.iter_mut().for_each(|r| r.off = crate::rigid::contact_pass(if r.off { 0 } else { delirium_data::kv!(251 int) }, 0, on) < delirium_data::kv!(251 int));
+            held.iter_mut().for_each(|r| r.off = crate::rigid::contact_pass(if r.off { 0 } else { delirium_data::kv!(257 int) }, 0, on) < delirium_data::kv!(257 int));
         }
         let on = |&(_, h): &(usize, &(usize, Vec3, Vec3, f32, f32, Vec3, f32, Option<(usize, usize)>, Vec3))| self.contact_off >> h.0 & 1 == 0 && h.7.map_or(true, |r| !self.rec(r).off);
         let mut hits: Vec<_> = hits.iter().enumerate().filter(on).map(|(i, h)| (i, *h)).collect();
@@ -3865,7 +3940,7 @@ impl Ragdoll {
                 continue;
             }
             let d = slid(&held[k]);
-            if held[k].age > delirium_data::kv!(1 int) && d > worst.1 && d > delirium_data::kv!(573) {
+            if held[k].age > delirium_data::kv!(1 int) && d > worst.1 && d > delirium_data::kv!(577) {
                 worst = (Some(k), d);
             }
             k += 1;
@@ -3907,7 +3982,7 @@ impl Ragdoll {
                 }
                 prev = t;
                 q = query(t)?;
-                if q.dist <= delirium_data::kv!(576) {
+                if q.dist <= delirium_data::kv!(580) {
                     break;
                 }
                 step = q.dist - delirium_data::kv!(118);
@@ -3955,13 +4030,23 @@ impl Ragdoll {
     fn jconst(&self, build: &Build, k: usize, j: &Joint, rigid: Option<&Rigid>) -> crate::rigid::JointConst {
         let grown = |jc: crate::rigid::JointConst| {
             let (ps, cs) = (build.parts[j.parent].size, build.parts[k].size);
-            if ps == 1.0 && cs == 1.0 { jc } else { crate::rigid::JointConst { pa: jc.pa * ps, ca: jc.ca * cs, ..jc } }
+            if ps == 1.0 && cs == 1.0 { jc } else {
+                let (lp, lc, part) = (self.bodies[j.parent].l.inverse(), self.bodies[k].l.inverse(), &build.parts[k]);
+                crate::rigid::JointConst { pa: lp * part.anchor_parent, ca: lc * part.anchor, ..jc }
+            }
         };
         rigid.and_then(|r| r.jc).map(grown).unwrap_or_else(|| {
             let (lp, lc, part) = (self.bodies[j.parent].l.inverse(), self.bodies[k].l.inverse(), &build.parts[k]);
             let rows = |q: Quat| { let m = Mat3::from_quat(q); [m.row(0), m.row(1), m.row(2)] };
             crate::rigid::JointConst { pm: rows(lp * j.pf), pa: lp * part.anchor_parent, ca: lc * part.anchor, cm: rows(lc * j.cf) }
         })
+    }
+
+    pub fn centred_cm(&self, parent: usize, child: usize, pm: &[Vec3; 3], bend: Quat) -> [Vec3; 3] {
+        let pm = Quat::from_mat3(&Mat3::from_cols(pm[0], pm[1], pm[2]).transpose());
+        let (p, c) = (&self.bodies[parent], &self.bodies[child]);
+        let m = Mat3::from_quat((c.q * c.l).inverse() * (p.q * p.l) * pm * bend);
+        [m.row(0), m.row(1), m.row(2)]
     }
 
     fn recentre(&mut self, pose: &mut [Option<(Vec3, Quat)>]) -> Vec3 {
@@ -3985,9 +4070,9 @@ impl Ragdoll {
         }
         self.held_inst = Some(crate::rigid::resquare(self.inst()));
         self.bodies.iter_mut().for_each(|b| b.set_r(crate::rigid::resquare(b.r)));
-        let x = self.mwc.0 as u64 * delirium_data::kv!(192 int) + self.mwc.1 as u64;
+        let x = self.mwc.0 as u64 * delirium_data::kv!(198 int) + self.mwc.1 as u64;
         self.mwc = (x as u32, (x >> delirium_data::kv!(7 int)) as u32);
-        self.rejuv = (x as u32 & delirium_data::kv!(527 int)) % delirium_data::kv!(54 int);
+        self.rejuv = (x as u32 & delirium_data::kv!(532 int)) % delirium_data::kv!(54 int);
         true
     }
 
@@ -4034,7 +4119,7 @@ impl Ragdoll {
         self.armature = artic.arm.clone();
         self.self_met.clear();
         for t in &mut self.touch {
-            *t = (*t & !delirium_data::kv!(409 int)) | ((*t >> delirium_data::kv!(0 int)) & delirium_data::kv!(1 int));
+            *t = (*t & !delirium_data::kv!(415 int)) | ((*t >> delirium_data::kv!(0 int)) & delirium_data::kv!(1 int));
         }
         self.hit.iter_mut().for_each(|h| *h = None);
         self.hit_out.iter_mut().for_each(|h| *h = None);
@@ -4130,6 +4215,7 @@ impl Ragdoll {
             for (k, (p, c)) in self.pins.iter_mut().zip(&mut self.cons).enumerate().filter(|(k, _)| g >> k & 1 != 0) {
                 let _ = k;
                 (*p, *c) = (None, (None, None));
+                self.tethers[k] = None;
             }
         }
         let moving = obstacles.iter().any(|o| o.vel.length() > 0.5 || o.spin.length() > 0.5);
@@ -4150,7 +4236,7 @@ impl Ragdoll {
         if !self.skip_collide {
             self.self_met.clear();
             for t in &mut self.touch {
-                *t = (*t & !delirium_data::kv!(409 int)) | ((*t >> delirium_data::kv!(0 int)) & delirium_data::kv!(1 int));
+                *t = (*t & !delirium_data::kv!(415 int)) | ((*t >> delirium_data::kv!(0 int)) & delirium_data::kv!(1 int));
             }
         }
         self.hit.iter_mut().for_each(|h| *h = None);
@@ -4491,7 +4577,7 @@ impl Ragdoll {
                     }
                 };
                 let cap = |v: Vec3, c: f32| delirium_data::collider::held(v.to_array(), c).map_or(v, |s| v * s);
-                b.moved(cap(v, delirium_data::kv!(554) / st.h) * st.damp, cap(w, delirium_data::kv!(577) / st.h) * st.damp, st.h);
+                b.moved(cap(v, delirium_data::kv!(558) / st.h) * st.damp, cap(w, delirium_data::kv!(581) / st.h) * st.damp, st.h);
             }
             let root = &mut self.bodies[self.order[0]];
             let (p, w) = (root.x, root.w);
@@ -4525,7 +4611,7 @@ impl Ragdoll {
         }
         self.sleep();
         self.asleep = self.mode == 2 && lift == 0.0 && self.pins.iter().all(Option::is_none) && self.grips.is_empty() && self.joins.is_empty()
-            && self.cons.iter().all(|c| c.0.is_none() && c.1.is_none());
+            && self.cons.iter().all(|c| c.0.is_none() && c.1.is_none()) && self.tethers.iter().all(Option::is_none);
         if self.nm_first && !self.asleep {
             self.move_early(&st.joints, &mut st.pose, st.h);
         }
@@ -5107,6 +5193,224 @@ impl Rig {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Sizes {
+    pub legs: f32,
+    pub arms: f32,
+    pub trunk: f32,
+    pub width: f32,
+    pub head: f32,
+    pub neck: f32,
+    pub kg: f32,
+    pub height: f32,
+}
+
+pub fn spread(v: f32) -> ((f32, f32), (f32, f32)) {
+    let t = v.clamp(1.0, delirium_data::kv!(84)).ln() / delirium_data::kv!(84 f32).ln();
+    ((delirium_data::kv!(60 f32).powf(t), delirium_data::kv!(84 f32).powf(t)), (0.5f32.powf(t), 2f32.powf(t)))
+}
+
+impl Build {
+    pub fn height(&self, frames: &[Transform]) -> f32 {
+        let low = self.parts.iter().zip(frames).map(|(p, f)| f.translation.z - p.radius - p.half).fold(f32::MAX, f32::min);
+        let top = self.parts.iter().zip(frames).map(|(p, f)| f.translation.z + p.radius + p.half).fold(f32::MIN, f32::max);
+        top - low
+    }
+
+    fn pivot(&self, frames: &[Transform], k: usize) -> Vec3 {
+        self.parts[k].parent.map_or(frames[k].translation, |_| frames[k].translation + frames[k].rotation * self.parts[k].anchor)
+    }
+
+    pub fn sized(&self, frames: &[Transform], s: Sizes) -> (Build, Vec<Transform>, Vec<f32>, f32) {
+        self.sized_as(frames, s, s.width, |n| if n.ends_with("Pelvis") || n.ends_with("_Spine") { s.legs.min(1.0) } else { 1.0 })
+    }
+
+    pub fn brawler(&self, frames: &[Transform]) -> (Build, Vec<Transform>, Vec<f32>, f32) {
+        self.sized_as(frames, (*BRAWLER_BODY()), (*BRAWLER_BODY()).width, |_| 1.0)
+    }
+
+    fn sized_as(&self, frames: &[Transform], s: Sizes, hips: f32, girth: impl Fn(&str) -> f32) -> (Build, Vec<Transform>, Vec<f32>, f32) {
+        let Sizes { legs: leg, arms: arm, trunk: torso, width: w, head, neck, kg, height: tall } = s;
+        let pivot = |k: usize| self.pivot(frames, k);
+        let across = (pivot(1) - pivot(delirium_data::kv!(1 int))).normalize();
+        let make = |s: f32| {
+            let len: Vec<f32> = self.parts.iter()
+                .map(|p| s * if p.lower { leg } else if (p.name.contains("_L_") || p.name.contains("_R_")) && !p.name.ends_with("Clavicle") { arm } else if p.name.ends_with("Head") { head } else { torso }).collect();
+            let mut j = vec![pivot(0); self.parts.len()];
+            for (c, p) in self.parts.iter().enumerate() {
+                if let Some(q) = p.parent {
+                    let n = if self.parts[c].name.ends_with("Head") { neck } else { 1.0 };
+                    j[c] = j[q] + (pivot(c) - pivot(q)) * len[c] * n;
+                }
+            }
+            let mid = (pivot(1) + pivot(delirium_data::kv!(1 int))) * 0.5;
+            let limb = |c: usize| self.parts[c].name.contains("_L_") || self.parts[c].name.contains("_R_");
+            let mut out = vec![Vec3::ZERO; j.len()];
+            for (c, p) in self.parts.iter().enumerate() {
+                out[c] = match p.parent {
+                    Some(q) if limb(q) && !self.parts[q].name.ends_with("Clavicle") => out[q],
+                    _ => across * (across.dot(j[c] - mid) * (if p.lower { hips } else { w } - 1.0)),
+                };
+            }
+            let j: Vec<Vec3> = j.iter().zip(&out).map(|(v, o)| *v + *o).collect();
+            let (mut b, f) = self.fit_neck(frames, &j, neck);
+            for (p, o) in b.parts.iter_mut().zip(&self.parts) {
+                let fat = if p.name.ends_with("Head") { head * w } else if p.name.ends_with("Neck") { w / neck.sqrt() } else if p.name.ends_with("Pelvis") || p.name.ends_with("_Spine") { 1.0 } else { w };
+                let (r, fat) = if p.name.ends_with("Thigh") { (o.radius, 1.0) } else if p.lower { (p.radius, 1.0) } else { (p.radius, fat) };
+                (p.radius, p.grown) = (r * fat * girth(&p.name) * s, p.grown * leg * s);
+            }
+            let h = b.height(&f);
+            (b, f, len, h)
+        };
+        let s = if tall > 0.0 { let s = tall / make(1.0).3; s * tall / make(s).3 } else { 1.0 };
+        let (mut b, f, len, _) = make(s);
+        let k = kg / Ragdoll::new(&b, &f, Vec3::ZERO).mass();
+        for p in &mut b.parts {
+            p.heft *= k;
+        }
+        (b, f, len, leg * s)
+    }
+
+    pub fn roll(&self, seed: u64, variance: f32, symmetric: bool) -> (Vec<f32>, Vec<f32>) {
+        let ((l0, l1), (g0, g1)) = spread(variance);
+        let draw = |u: f32, lo: f32, hi: f32| lo * (hi / lo).powf(u);
+        let mut x = seed.wrapping_mul(delirium_data::kv!(582 int)) | 1;
+        let mut u = || {
+            x ^= x << delirium_data::kv!(114 int);
+            x ^= x >> delirium_data::kv!(22 int);
+            x ^= x << delirium_data::kv!(110 int);
+            (x >> delirium_data::kv!(95 int)) as f32 / (1u64 << delirium_data::kv!(107 int)) as f32
+        };
+        let n = self.parts.len();
+        let (mut len, mut girth): (Vec<f32>, Vec<f32>) = (0..n).map(|_| (draw(u(), l0, l1), draw(u(), g0, g1))).unzip();
+        if let Some(t) = self.parts.iter().position(|p| p.name.contains("Spine")) {
+            for k in 0..n {
+                if self.parts[k].name.contains("Spine") || self.parts[k].name.ends_with("Pelvis") {
+                    (len[k], girth[k]) = (len[t], girth[t]);
+                }
+            }
+        }
+        if symmetric {
+            for k in 0..n {
+                let twin = self.parts[k].name.replace("_R_", "_L_");
+                if let Some(l) = (twin != self.parts[k].name).then(|| self.parts.iter().position(|p| p.name == twin)).flatten() {
+                    (len[k], girth[k]) = (len[l], girth[l]);
+                }
+            }
+        }
+        (len, girth)
+    }
+
+    pub fn rolled(&self, frames: &[Transform], len: &[f32], girth: &[f32]) -> (Build, Vec<Transform>) {
+        let pivot = |k: usize| self.pivot(frames, k);
+        let mut j = vec![pivot(0); self.parts.len()];
+        for (c, p) in self.parts.iter().enumerate() {
+            if let Some(q) = p.parent {
+                j[c] = j[q] + (pivot(c) - pivot(q)) * len[c];
+            }
+        }
+        let legs = |j: &dyn Fn(usize) -> Vec3| (j(1).distance(j(2)) + j(2).distance(j(delirium_data::kv!(0 int))) + j(delirium_data::kv!(1 int)).distance(j(delirium_data::kv!(2 int))) + j(delirium_data::kv!(2 int)).distance(j(delirium_data::kv!(6 int)))) / 2.0;
+        let leg = legs(&|i| j[i]) / legs(&pivot);
+        let (mut b, f) = self.fit(frames, &j);
+        for (p, g) in b.parts.iter_mut().zip(girth) {
+            let belly = if p.name.ends_with("Pelvis") || p.name.ends_with("_Spine") { leg.min(1.0) } else { 1.0 };
+            (p.radius, p.heft, p.grown) = (p.radius * g * belly, p.heft * g * g / leg, p.grown * leg);
+        }
+        (b, f)
+    }
+}
+
+#[allow(non_snake_case)]
+#[inline]
+pub fn PROFILES() -> &'static [(&'static str, f32, f32, f32); 6] { static V: std::sync::OnceLock<[(&'static str, f32, f32, f32); 6]> = std::sync::OnceLock::new(); let f = || [("Small", delirium_data::kv!(491), delirium_data::kv!(583), 1.0), ("Average", delirium_data::kv!(13), delirium_data::kv!(584), 1.0), ("Large", delirium_data::kv!(192), delirium_data::kv!(46), 1.0), ("Lanky", delirium_data::kv!(192), delirium_data::kv!(569), delirium_data::kv!(506)), ("Fat", delirium_data::kv!(585), delirium_data::kv!(586), delirium_data::kv!(19)), ("Stocky", delirium_data::kv!(587), delirium_data::kv!(588), delirium_data::kv!(28))]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
+#[allow(non_snake_case)]
+#[inline]
+pub fn SHAPES() -> &'static [(&'static str, f32, f32, f32, f32, f32); 3] { static V: std::sync::OnceLock<[(&'static str, f32, f32, f32, f32, f32); 3]> = std::sync::OnceLock::new(); let f = || [("Waddler", delirium_data::kv!(119), delirium_data::kv!(80), delirium_data::kv!(136), delirium_data::kv!(207), delirium_data::kv!(589)), ("Guard", delirium_data::kv!(80), delirium_data::kv!(28), delirium_data::kv!(138), delirium_data::kv!(20), delirium_data::kv!(103)), ("Brute", delirium_data::kv!(80), delirium_data::kv!(207), 1.0, delirium_data::kv!(80), delirium_data::kv!(47))]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
+#[allow(non_snake_case)]
+#[inline]
+pub fn BRAWLER_BODY() -> &'static Sizes { static V: std::sync::OnceLock<Sizes> = std::sync::OnceLock::new(); let f = || Sizes { legs: delirium_data::kv!(10), arms: delirium_data::kv!(74), trunk: 1.0, width: delirium_data::kv!(179), head: delirium_data::kv!(12), neck: 1.0, kg: delirium_data::kv!(63), height: 0.0 }; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
+#[allow(non_snake_case)]
+#[inline]
+pub fn BRUISER_BODY() -> &'static Sizes { static V: std::sync::OnceLock<Sizes> = std::sync::OnceLock::new(); let f = || Sizes { legs: delirium_data::kv!(492), arms: delirium_data::kv!(18), trunk: delirium_data::kv!(28), width: delirium_data::kv!(80), head: delirium_data::kv!(192), neck: 1.0, kg: delirium_data::kv!(195), height: 0.0 }; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
+
+impl Build {
+    pub fn profile(&self, frames: &[Transform], height: f32, kg: f32, limbs: f32) -> (Build, Vec<Transform>, Vec<f32>, f32) {
+        let (_, h, m, _) = (*PROFILES())[1];
+        let s = height / h / (delirium_data::kv!(590) * limbs + delirium_data::kv!(591));
+        let len: Vec<f32> = self.parts.iter().map(|p| if p.name.contains("_L_") || p.name.contains("_R_") { s * limbs } else { s }).collect();
+        let (b, f) = self.scaled(frames, &len, kg / m);
+        (b, f, len, s * limbs)
+    }
+
+    pub fn shape(&self, frames: &[Transform], leg: f32, arm: f32, torso: f32, w: f32, kg: f32) -> (Build, Vec<Transform>) {
+        let o = self.pivot(frames, 0);
+        let f: Vec<Vec3> = (0..self.parts.len()).map(|k| self.pivot(frames, k) - o).collect();
+        let mut j = f.clone();
+        let wide = |v: Vec3| (v * w).with_z(v.z);
+        for (hip, kids) in [(1, [2, delirium_data::kv!(0 int)]), (delirium_data::kv!(1 int), [delirium_data::kv!(2 int), delirium_data::kv!(6 int)])] {
+            for k in kids {
+                j[k] = wide(f[hip]) + (f[k] - f[hip]) * leg;
+            }
+            j[hip] = wide(f[hip]);
+        }
+        for v in &mut j[delirium_data::kv!(22 int)..] {
+            v.z *= torso;
+        }
+        for (sh, kids) in [(delirium_data::kv!(56 int), [delirium_data::kv!(189 int), delirium_data::kv!(54 int)]), (delirium_data::kv!(217 int), [delirium_data::kv!(204 int), delirium_data::kv!(127 int)])] {
+            let s = j[sh];
+            for k in kids {
+                j[k] = wide(s) + (j[k] - s) * arm;
+            }
+            j[sh] = wide(s);
+        }
+        let j: Vec<Vec3> = j.iter().map(|v| o + *v / leg).collect();
+        let (mut b, f) = self.fit(frames, &j);
+        for p in b.parts.iter_mut().filter(|p| !p.lower && !p.name.ends_with("Pelvis")) {
+            p.radius *= w;
+        }
+        let k = kg / Ragdoll::new(&b, &f, Vec3::ZERO).mass();
+        for p in &mut b.parts {
+            p.heft *= k;
+        }
+        (b, f)
+    }
+
+    pub fn bruiser(&self, frames: &[Transform]) -> (Build, Vec<Transform>, Vec<f32>, f32) {
+        self.sized_as(frames, (*BRUISER_BODY()), delirium_data::kv!(559), |n| match n.rsplit('_').next().unwrap_or("") {
+            "Thigh" => delirium_data::kv!(124),
+            "Calf" => delirium_data::kv!(136),
+            "UpperArm" => delirium_data::kv!(20),
+            "Forearm" => delirium_data::kv!(28),
+            "Pelvis" | "Spine" => delirium_data::kv!(119),
+            "Spine1" | "Spine2" => delirium_data::kv!(124),
+            "Spine3" => delirium_data::kv!(20),
+            "Clavicle" => delirium_data::kv!(74),
+            _ => 1.0,
+        })
+    }
+
+    pub fn named(&self, frames: &[Transform], name: &str) -> Option<(Build, Vec<Transform>)> {
+        if name.eq_ignore_ascii_case((*PROFILES())[1].0) {
+            return Some((self.clone(), frames.to_vec()));
+        }
+        if let Some(&(_, h, m, l)) = (*PROFILES()).iter().find(|p| p.0.eq_ignore_ascii_case(name)) {
+            let (b, f, _, _) = self.profile(frames, h, m, l);
+            return Some((b, f));
+        }
+        if let Some(&(_, leg, arm, torso, w, kg)) = (*SHAPES()).iter().find(|p| p.0.eq_ignore_ascii_case(name)) {
+            return Some(self.shape(frames, leg, arm, torso, w, kg));
+        }
+        if name.eq_ignore_ascii_case("Bruiser") {
+            let (b, f, _, _) = self.bruiser(frames);
+            return Some((b, f));
+        }
+        name.eq_ignore_ascii_case("Brawler").then(|| {
+            let (b, f, _, _) = self.brawler(frames);
+            (b, f)
+        })
+    }
+}
+
 pub(crate) fn island_order(nodes: &[(Option<usize>, Option<usize>)]) -> Vec<usize> {
     struct Forest {
         parent: Vec<Option<usize>>,
@@ -5288,9 +5592,9 @@ fn sgi_sort<T>(v: &mut [T], key: impl Fn(&T) -> usize + Copy) {
 fn island_sort_as_the_game() {
     let sorted = |n: usize| { let mut v: Vec<usize> = (0..n).collect(); sgi_sort(&mut v, |_| 0); v };
     assert_eq!(sorted(delirium_data::kv!(54 int)), (0..delirium_data::kv!(54 int)).collect::<Vec<_>>());
-    assert_eq!(sorted(delirium_data::kv!(456 int)), (0..delirium_data::kv!(456 int)).rev().collect::<Vec<_>>());
+    assert_eq!(sorted(delirium_data::kv!(462 int)), (0..delirium_data::kv!(462 int)).rev().collect::<Vec<_>>());
     assert_eq!(sorted(delirium_data::kv!(95 int)), (delirium_data::kv!(127 int)..delirium_data::kv!(95 int)).chain(0..delirium_data::kv!(127 int)).collect::<Vec<_>>());
-    let mut v: Vec<usize> = (0..delirium_data::kv!(253 int)).map(|i| if i % 2 == 0 { i } else { delirium_data::kv!(253 int) - i }).collect();
+    let mut v: Vec<usize> = (0..delirium_data::kv!(188 int)).map(|i| if i % 2 == 0 { i } else { delirium_data::kv!(188 int) - i }).collect();
     sgi_sort(&mut v, |&x| x);
     assert!(v.windows(2).all(|w| w[0] <= w[1]));
 }
@@ -5299,10 +5603,10 @@ fn island_sort_as_the_game() {
 fn touch_as_the_game() {
     let f = f32::from_bits;
     let mut a = (Vec3::ZERO, Vec3::ZERO, 0.0, -1);
-    let (at, n) = (Vec3::new(f(delirium_data::kv!(578 int)), f(delirium_data::kv!(579 int)), f(delirium_data::kv!(580 int))), Vec3::new(f(delirium_data::kv!(581 int)), f(delirium_data::kv!(582 int)), 0.0));
-    touch_add(&mut a, at, n, f(delirium_data::kv!(583 int)), delirium_data::kv!(22 int));
+    let (at, n) = (Vec3::new(f(delirium_data::kv!(592 int)), f(delirium_data::kv!(593 int)), f(delirium_data::kv!(594 int))), Vec3::new(f(delirium_data::kv!(595 int)), f(delirium_data::kv!(596 int)), 0.0));
+    touch_add(&mut a, at, n, f(delirium_data::kv!(597 int)), delirium_data::kv!(22 int));
     let (p, m, id) = touch_hit(a).unwrap();
-    assert_eq!((p.x.to_bits(), m.x.to_bits(), m.y.to_bits(), m.z.to_bits(), id), (delirium_data::kv!(578 int), delirium_data::kv!(584 int), delirium_data::kv!(585 int), 0, delirium_data::kv!(22 int)));
+    assert_eq!((p.x.to_bits(), m.x.to_bits(), m.y.to_bits(), m.z.to_bits(), id), (delirium_data::kv!(592 int), delirium_data::kv!(598 int), delirium_data::kv!(599 int), 0, delirium_data::kv!(22 int)));
     assert!(touch_hit((Vec3::ZERO, Vec3::ZERO, 0.0, -1)).is_none());
 }
 
@@ -5315,7 +5619,7 @@ fn island_order_as_the_game() {
     assert_eq!(island_order(&[(Some(2), None), (Some(1), None), (Some(2), Some(1)), (Some(1), Some(1))]), [0, 2, 1, delirium_data::kv!(0 int)]);
     assert_eq!(island_order(&[(Some(2), None), (Some(1), None), (Some(1), None), (Some(2), Some(1)), (Some(1), Some(1))]), [1, 2, 0, delirium_data::kv!(0 int), delirium_data::kv!(1 int)]);
     let mut nodes = vec![(Some(2), None)];
-    nodes.extend(std::iter::repeat_n((Some(1), None), delirium_data::kv!(586 int)));
+    nodes.extend(std::iter::repeat_n((Some(1), None), delirium_data::kv!(600 int)));
     nodes.push((Some(1), Some(2)));
     let want: Vec<usize> = [0, delirium_data::kv!(181 int)].into_iter().chain(1..delirium_data::kv!(181 int)).collect();
     assert_eq!(island_order(&nodes), want);

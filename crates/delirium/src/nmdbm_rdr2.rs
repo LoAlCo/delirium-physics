@@ -989,16 +989,17 @@ impl Rdr2 {
         self.p.fall_reduce_gravity_comp.then(|| 1.0 / ((0.4 + self.asym) * self.p.fall_mult * t + 1.1))
     }
 
-    /// 0x2ab617c: how deep a crouch goes, from `h` the pelvis's height over the lower foot (the same sum as the start's).
+    /// 0x2ab617c: how deep a crouch goes, from `h` the pelvis's world height over the lower foot's and `straight` ctx+0x34d0
+    /// (the same sum as the start's).
     pub fn crouch_depth(h: f32, leg: f32, straight: f32) -> f32 {
         let l = leg - 0.5 * FOOT_HEIGHT;
         if l > 0.1 { (straight - h / l) * 0.79235 } else { 0.0 }
     }
 
-    /// Crouch start, at his first step: `h` the COM's height over the lower foot, `leg` the leg scale, `straight` his
-    /// standing leg straightness, `hip` the hips' pitch now; `legs` whether both shins lie (which vetoes it) and the
-    /// thighs' turn-out, asked only when it would start. The turn-out (clamped to 0.35) becomes the legs' twist rest
-    /// offset.
+    /// Crouch start (activate 0x2ab728c; here at his first tick): `h` the pelvis's world height over the lower foot's,
+    /// `leg` the leg scale, `straight` his standing leg straightness, `hip` the hips' pitch now; `legs` whether both
+    /// shins lie (which vetoes it) and the thighs' turn-out, asked only when it would start. The turn-out (clamped to
+    /// 0.35) becomes the legs' twist rest offset.
     pub fn crouch_start(&mut self, h: f32, leg: f32, straight: f32, hip: f32, legs: impl FnOnce() -> (bool, f32)) {
         if std::mem::replace(&mut self.started, true) || !self.p.crouch {
             return;

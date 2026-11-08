@@ -22,6 +22,7 @@ pub const MARGE: usize = 1;
 /// tables as Homer's and Marge's, in the same layout.
 pub const RDR2_FRED: usize = 2;
 pub const RDR2_WILMA: usize = 3;
+pub fn is_rdr2(nm: usize) -> bool { nm == RDR2_FRED || nm == RDR2_WILMA }
 pub fn asset_of(ped_type: &str) -> usize {
     if ped_type.eq_ignore_ascii_case("CIVFEMALE") { MARGE } else { HOMER }
 }
@@ -31,7 +32,7 @@ pub static PARTS: [std::sync::OnceLock<Vec<[[f32; 3]; 4]>>; 4] = [const { std::s
 pub static MASSES: [std::sync::OnceLock<Vec<f32>>; 4] = [const { std::sync::OnceLock::new() }; 4];
 
 pub fn load(nm: usize, d: &[u8]) {
-    set(nm, nm_asset::read(d), nm_asset::parts(d), nm_asset::masses(d), nm_asset::self_collision(d));
+    nm_asset::in_order(d, || set(nm, nm_asset::read(d), nm_asset::parts(d), nm_asset::masses(d), nm_asset::self_collision(d)));
 }
 
 pub fn set(nm: usize, joints: Vec<nm_asset::Joint>, parts: Vec<[[f32; 3]; 4]>, masses: Vec<f32>, pairs: Vec<(usize, usize)>) {
@@ -97,13 +98,13 @@ pub fn CLAVICLE() -> &'static [usize; 2] { static V: std::sync::OnceLock<[usize;
 pub fn SHOULDER() -> &'static [usize; 2] { static V: std::sync::OnceLock<[usize; 2]> = std::sync::OnceLock::new(); let f = || [delirium_data::kv!(114 int), delirium_data::kv!(110 int)]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
 #[allow(non_snake_case)]
 #[inline]
-pub fn ELBOW() -> &'static [usize; 2] { static V: std::sync::OnceLock<[usize; 2]> = std::sync::OnceLock::new(); let f = || [delirium_data::kv!(56 int), delirium_data::kv!(211 int)]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
+pub fn ELBOW() -> &'static [usize; 2] { static V: std::sync::OnceLock<[usize; 2]> = std::sync::OnceLock::new(); let f = || [delirium_data::kv!(56 int), delirium_data::kv!(217 int)]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
 #[allow(non_snake_case)]
 #[inline]
-pub fn WRIST() -> &'static [usize; 2] { static V: std::sync::OnceLock<[usize; 2]> = std::sync::OnceLock::new(); let f = || [delirium_data::kv!(198 int), delirium_data::kv!(199 int)]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
+pub fn WRIST() -> &'static [usize; 2] { static V: std::sync::OnceLock<[usize; 2]> = std::sync::OnceLock::new(); let f = || [delirium_data::kv!(189 int), delirium_data::kv!(204 int)]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
 #[allow(non_snake_case)]
 #[inline]
-pub fn LIMBS() -> &'static [(usize, usize); 4] { static V: std::sync::OnceLock<[(usize, usize); 4]> = std::sync::OnceLock::new(); let f = || [(delirium_data::kv!(114 int), delirium_data::kv!(56 int)), (delirium_data::kv!(110 int), delirium_data::kv!(211 int)), (0, 1), (delirium_data::kv!(0 int), delirium_data::kv!(1 int))]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
+pub fn LIMBS() -> &'static [(usize, usize); 4] { static V: std::sync::OnceLock<[(usize, usize); 4]> = std::sync::OnceLock::new(); let f = || [(delirium_data::kv!(114 int), delirium_data::kv!(56 int)), (delirium_data::kv!(110 int), delirium_data::kv!(217 int)), (0, 1), (delirium_data::kv!(0 int), delirium_data::kv!(1 int))]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
 
 #[derive(Clone, Debug)]
 pub struct JointDef {
@@ -221,7 +222,7 @@ fn frames(p: Vec3, c: Vec3, x: Vec3, b: Vec3, (ra, ta): (&[Vec3; 3], Vec3), (rb,
 }
 
 pub(crate) fn joint_limits(f: [f32; 3]) -> ([f32; 6], [bool; 2]) {
-    let g = |x: f32| { let v = x - delirium_data::kv!(520 f32); if -v >= 0.0 { 0.0 } else { v } };
+    let g = |x: f32| { let v = x - delirium_data::kv!(525 f32); if -v >= 0.0 { 0.0 } else { v } };
     let l = [g(f[0]), g(f[0]), g(f[1]), g(f[1]), g(f[2]), g(f[2])];
     (l, [f[0] != f[1], l[delirium_data::kv!(2 int)] != f32::MAX])
 }
@@ -242,7 +243,7 @@ pub struct PhJoint {
 
 pub fn ph_joint(s: &mut nm_asset::Stream, off: Vec3, a: (&[Vec3; 3], Vec3), b: (&[Vec3; 3], Vec3)) -> Option<PhJoint> {
     let three = match s.byte().ok()? { b'3' => true, b'1' => false, _ => return None };
-    let eps = delirium_data::kv!(521 f32);
+    let eps = delirium_data::kv!(526 f32);
     let mut v = || s.vec3().ok().map(Vec3::from);
     let p = v()? - off;
     let ax = v()?;
@@ -261,7 +262,7 @@ pub fn ph_joint(s: &mut nm_asset::Stream, off: Vec3, a: (&[Vec3; 3], Vec3), b: (
         Vec3::ZERO
     };
     let (centred, effector) = (s.flag().ok()? != 0, s.flag().ok()? != 0);
-    let n = if three { delirium_data::kv!(324 int) } else { delirium_data::kv!(7 int) };
+    let n = if three { delirium_data::kv!(330 int) } else { delirium_data::kv!(7 int) };
     let blob = s.string(Some(n)).ok()?;
     if blob.len() != n {
         return None;
@@ -273,7 +274,7 @@ pub fn ph_joint(s: &mut nm_asset::Stream, off: Vec3, a: (&[Vec3; 3], Vec3), b: (
         return Some(PhJoint { three, effector, jc, limits: None });
     }
     if !three {
-        let c = delirium_data::kv!(520 f32);
+        let c = delirium_data::kv!(525 f32);
         let (lo, hi) = (c + f(delirium_data::kv!(23 int)), f(delirium_data::kv!(55 int)) - c);
         let (lo, hi) = if lo <= hi { (lo, hi) } else { let m = (f(delirium_data::kv!(23 int)) + f(delirium_data::kv!(55 int))) * 0.5; (m, m) };
         return Some(PhJoint { three, effector, jc, limits: Some(([lo, hi, lo, hi, 0.0, 0.0], [false; 2])) });
@@ -360,7 +361,7 @@ pub fn angles(q: Quat) -> [f32; 3] {
         return [0.0; 3];
     }
     let wz = w.fma(w, z * z);
-    let (tq, a, b) = if wz > delirium_data::kv!(522) {
+    let (tq, a, b) = if wz > delirium_data::kv!(527) {
         let s = wz.sqrt();
         let tq = if w >= 0.0 { z / (s + w) } else { z / (w - s) };
         let k = 1.0 / ((s + 1.0) * s);
@@ -418,7 +419,7 @@ pub fn rotation([tw, l1, l2]: [f32; 3]) -> Quat {
 }
 
 pub fn quat_rows(q: [f32; 4]) -> [Vec3; 3] {
-    let c = delirium_data::kv!(523 f32);
+    let c = delirium_data::kv!(528 f32);
     let (x, y, z, w) = (q[0] * c, q[1] * c, q[2] * c, q[delirium_data::kv!(0 int)] * c);
     let (zx, yx, wz, wy, zy, wx) = (z * x, y * x, w * z, w * y, z * y, w * x);
     let (zz, yy, xx) = (z * z, y * y, x * x);
@@ -794,7 +795,7 @@ fn targets_rdr2(j: &JointDef, e: &Effector, wide: [f32; 3]) -> [f32; 3] {
 fn targets(j: &JointDef, e: &Effector) -> [f32; 3] {
     let mid = |k: usize| (j.limits[k].0 + j.limits[k].1) * 0.5;
     let half = |k: usize| (j.limits[k].1 - j.limits[k].0) * 0.5;
-    let k = delirium_data::kv!(25) / (e.strength + delirium_data::kv!(250)) + 1.0;
+    let k = delirium_data::kv!(25) / (e.strength + delirium_data::kv!(256)) + 1.0;
     let flip = |n: usize, x: f32| if j.flip[n] { -x } else { x };
     let (mut d1, mut d2, d3) = (flip(0, e.aim(0)), flip(1, e.aim(1)), flip(2, e.aim(2)));
     let (u, v) = ((d1 - mid(0)) / half(0), (d2 - mid(1)) / half(1));
@@ -822,18 +823,18 @@ impl Character {
     }
 
     pub fn seed(&mut self, s: u32) {
-        let s = (s << delirium_data::kv!(0 int)) & delirium_data::kv!(524 int) & delirium_data::kv!(525 int);
+        let s = (s << delirium_data::kv!(0 int)) & delirium_data::kv!(529 int) & delirium_data::kv!(530 int);
         self.rng = (s + (s == 0) as u32, s.rotate_left(delirium_data::kv!(54 int)) ^ s);
     }
 
     pub fn random(&mut self) -> f32 {
-        (self.random_bits() & delirium_data::kv!(190 int)) as f32 / delirium_data::kv!(526)
+        (self.random_bits() & delirium_data::kv!(196 int)) as f32 / delirium_data::kv!(531)
     }
 
     pub fn random_bits(&mut self) -> u32 {
-        let n = self.rng.0 as u64 * delirium_data::kv!(192 int) + self.rng.1 as u64;
+        let n = self.rng.0 as u64 * delirium_data::kv!(198 int) + self.rng.1 as u64;
         self.rng = (n as u32, (n >> delirium_data::kv!(7 int)) as u32);
-        self.rng.0 & delirium_data::kv!(527 int)
+        self.rng.0 & delirium_data::kv!(532 int)
     }
 
     pub fn actual(&self, i: usize, frames: &[Transform]) -> [f32; 3] {
@@ -1163,7 +1164,7 @@ impl Character {
                 let [l1, l2, tw] = targets(j, e);
                 rotation([tw, l1, l2])
             } else {
-                let d = e.aim(0).clamp((-half(0)).fma(delirium_data::kv!(486), mid(0)), half(0).fma(delirium_data::kv!(486), mid(0)));
+                let d = e.aim(0).clamp((-half(0)).fma(delirium_data::kv!(491), mid(0)), half(0).fma(delirium_data::kv!(491), mid(0)));
                 e.desired[0] = if e.offset[0] == 0.0 { d } else { d - e.offset[0] };
                 rotation([d, 0.0, 0.0])
             };

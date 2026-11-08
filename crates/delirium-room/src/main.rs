@@ -12,7 +12,7 @@ use delirium::collision::Collision;
 use delirium::msg::{self, Kind, Value};
 use delirium::nm::{Agent, Hit};
 use delirium::shottask::{self, ShotTask};
-use delirium::ragdoll::{Build, Capsule, Ragdoll};
+use delirium::ragdoll::{Build, Capsule, Ragdoll, Sizes, spread, BRAWLER_BODY, BRUISER_BODY, PROFILES, SHAPES};
 use std::collections::VecDeque;
 use std::io::Write;
 
@@ -73,6 +73,24 @@ const THIGH_R: usize = 4;
 
 const BEHAVIOURS: [&str; 21] = ["balance", "drunk", "windmill", "pedal", "writhe", "rollup", "catchfall", "highfall", "stairs", "shot",
                                 "flinch", "brace", "look", "point", "lean", "relax", "stayup", "foetal", "grab", "overwall", "STOP all"];
+fn reaction_label(b: &str) -> &str {
+    match b {
+        "balance" => "Balance", "drunk" => "Drunk", "windmill" => "Windmill arms", "pedal" => "Pedal legs",
+        "writhe" => "Writhe", "rollup" => "Roll up", "catchfall" => "Catch a fall", "highfall" => "High fall",
+        "stairs" => "Tumble on stairs", "shot" => "Shot reaction", "flinch" => "Flinch", "brace" => "Brace for impact",
+        "look" => "Look around", "point" => "Point", "lean" => "Lean", "relax" => "Relax",
+        "stayup" => "Stay upright", "foetal" => "Foetal curl", "grab" => "Grab", "overwall" => "Climb over wall", _ => b,
+    }
+}
+const REACTION_OF: [(&str, &str); 19] = [("bodyBalance", "balance"), ("armsWindmillAdaptive", "windmill"), ("pedalLegs", "pedal"),
+    ("bodyWrithe", "writhe"), ("bodyRollUp", "rollup"), ("catchFall", "catchfall"), ("highFall", "highfall"), ("rollDownStairs", "stairs"),
+    ("shot", "shot"), ("upperBodyFlinch", "flinch"), ("braceForImpact", "brace"), ("headLook", "look"), ("pointArm", "point"),
+    ("leanInDirection", "lean"), ("bodyRelax", "relax"), ("stayUpright", "stayup"), ("bodyFoetal", "foetal"), ("grab", "grab"),
+    ("fallOverWall", "overwall")];
+pub(crate) fn reaction_for(message: &str) -> Option<(&'static str, &'static str)> {
+    REACTION_OF.iter().find(|r| r.0 == message).map(|r| (r.1, reaction_label(r.1)))
+        .or_else(|| delirium::extras::messages().find(|m| m.name == message).map(|m| (m.name, m.name)))
+}
 const POKE: f32 = 8.0;
 const TOUCH_GLOW: (LinearRgba, f32) = (LinearRgba::rgb(2.0, 1.7, 0.4), 3.0);
 const SHOT_GLOW: (LinearRgba, f32) = (LinearRgba::rgb(3.0, 0.35, 0.15), 0.5);
@@ -92,7 +110,7 @@ struct Frame {
     links: Vec<Transform>,
     props: Vec<Transform>,
     cars: Vec<(Vec3, Vec3, f32)>,
-    pusher: Option<(Vec3, Vec3, f32)>,
+    pusher: Option<(Vec3, Vec3, f32, Vec3)>,
 }
 const BLOOD_PIX: usize = 14;
 const BLOOD_MAX: usize = 400;
@@ -262,6 +280,13 @@ const SETTINGS: &str = "settings.txt";
 const STARTING: &str = "starting";
 const STARTED: u32 = 60;
 const FALLBACK: &str = "graphics-fallback";
+static RENDERER: std::sync::OnceLock<(usize, bool)> = std::sync::OnceLock::new();
+
+fn pick_renderer(step: usize) {
+    let f = getup::config_dir().join(FALLBACK);
+    let _ = if step == 0 { std::fs::remove_file(f) } else { std::fs::write(f, format!("{}
+manual", ["", "plain", "dx12"][step])) };
+}
 
 const SAFE: &str = "water_quality 0
 shadows 0
@@ -429,12 +454,15 @@ vorticity {}
 spray_physics {}
 skate3_bails {}
 rdr2_reactions {}
+step_limit {}
+bone_skin {}
+fullscreen {}
 ",
             sim.ped_color, b(sim.eyes), b(sim.brows), b(sim.skel), sim.skel_style, b(sim.clean), b(sim.look), b(sim.avoid), b(sim.tasks), sim.getup_mode, b(sim.god), b(sim.weak),
             b(sim.passive), b(sim.walk), b(sim.hero_physics), b(sim.super_punch), b(sim.even), b(sim.homer_wild), b(sim.gun_ai), b(sim.dive), b(sim.shadows), sim.body_alpha,
             b(sim.soft), sim.shadow, sim.fill_k, sim.sun_color[0], sim.sun_color[1], sim.sun_color[2], b(sim.sound),
             sim.volume[0], sim.volume[1], sim.volume[2], sim.dodge_gap, b(sim.extra), sim.extra_pick, sim.hero_alpha, sim.render_scale, sim.msaa, sim.shadow_q, sim.gpu, sim.aa, sim.smaa_q, sim.dlss_q, sim.sharpen, sim.fps_limit, sim.upscaler, sim.fsr_q, sim.xess_q,
-            sim.ssao, sim.ao_strength, sim.bloom, sim.dof, sim.sharp_by.map(|x| x.to_string()).join(","), sim.contact, sim.contact_k, sim.vignette, sim.lens, sim.chroma, sim.rt, sim.sky, b(sim.god_rays), b(sim.restir), sim.fire, b(sim.real_fire), b(sim.smoke), b(sim.fire_react), sim.water_q, b(sim.voxel_water), b(sim.photons), b(sim.water_caustics), b(sim.water_spray), b(sim.water_waves), b(sim.water_pixels), b(sim.water_haze), b(sim.water_mirror), b(sim.water_foam), b(sim.water_wet), b(sim.wet_film), b(sim.wet_drips), b(sim.sky_shade), b(sim.water_traced), b(sim.glass_tint), b(sim.glass_shade), b(sim.water_ripples), b(sim.water_refract), b(sim.real_surface), b(sim.real_ripples), b(sim.water_clear), b(sim.wet_trail), b(sim.water_impact), b(sim.water_faucet), b(sim.fire_light), b(sim.fire_homer), sim.shadow_filter, b(sim.water_mist), b(sim.water_fine), b(sim.water_depth), b(sim.water_relax), b(sim.water_ghost), b(sim.water_vort), b(sim.water_spray_phys), b(sim.skate3_bails), b(sim.rdr2)) + &params::save(&sim.param_edits, &sim.rdr2_pick)
+            sim.ssao, sim.ao_strength, sim.bloom, sim.dof, sim.sharp_by.map(|x| x.to_string()).join(","), sim.contact, sim.contact_k, sim.vignette, sim.lens, sim.chroma, sim.rt, sim.sky, b(sim.god_rays), b(sim.restir), sim.fire, b(sim.real_fire), b(sim.smoke), b(sim.fire_react), sim.water_q, b(sim.voxel_water), b(sim.photons), b(sim.water_caustics), b(sim.water_spray), b(sim.water_waves), b(sim.water_pixels), b(sim.water_haze), b(sim.water_mirror), b(sim.water_foam), b(sim.water_wet), b(sim.wet_film), b(sim.wet_drips), b(sim.sky_shade), b(sim.water_traced), b(sim.glass_tint), b(sim.glass_shade), b(sim.water_ripples), b(sim.water_refract), b(sim.real_surface), b(sim.real_ripples), b(sim.water_clear), b(sim.wet_trail), b(sim.water_impact), b(sim.water_faucet), b(sim.fire_light), b(sim.fire_homer), sim.shadow_filter, b(sim.water_mist), b(sim.water_fine), b(sim.water_depth), b(sim.water_relax), b(sim.water_ghost), b(sim.water_vort), b(sim.water_spray_phys), b(sim.skate3_bails), b(sim.rdr2), b(sim.step_limit), b(sim.bone_skin), b(sim.fullscreen)) + &params::save(&sim.param_edits, &sim.rdr2_pick)
         + if sim.rdr2_core { "rdr2_core 1\n" } else { "" }
         + if sim.rig_rdr2 { "rig rdr2\n" } else { "" }
         + &if sim.rig_dir.is_empty() { String::new() } else { format!("rdr2_rig_dir {}\n", sim.rig_dir) }
@@ -443,7 +471,7 @@ rdr2_reactions {}
         + &if sim.horse_frag.is_empty() { String::new() } else { format!("rdr2_horse_frag {}\n", sim.horse_frag) }
 }
 
-const XR: [(&str, &str); 8] = [
+const XR: [(&str, &str); 9] = [
     ("Windmill arms", "Sometimes he windmills his arms as he loses his balance."),
     ("Curl up before getting up", "Sometimes he curls up on the ground a while before he gets up."),
     ("Curl up when shot at lying down", "Down, he curls up with his head at the shot."),
@@ -452,6 +480,7 @@ const XR: [(&str, &str); 8] = [
     ("smartFall when dropped", "Dropped from the panel, a smartFall."),
     ("Dodge from above", "He dodges what's coming down at him."),
     ("Brace on a wall", "Staggering into a wall or rail, a hand flat on it or a hold on its top."),
+    ("Arms out early when bracing", "Bracing for something coming at him (the push tests, Brace for impact, a taxi), both arms thrown out straight well before it hits, as the original demo. Off: the game's, a late bent-arm brace."),
 ];
 
 fn coin() -> bool {
@@ -663,6 +692,9 @@ fn apply_settings(sim: &mut Sim, t: &str) {
             "god" => sim.god = on,
             "weak" => sim.weak = on,
             "skate3_bails" => sim.skate3_bails = on,
+            "step_limit" => sim.step_limit = on,
+            "bone_skin" => sim.bone_skin = on,
+            "fullscreen" => sim.fullscreen = on,
             "passive" => sim.passive = on,
             "walk" => sim.walk = on,
             "hero_physics" => sim.hero_physics = on,
@@ -684,7 +716,7 @@ fn apply_settings(sim: &mut Sim, t: &str) {
             "vol_portal" => sim.volume[2] = x.clamp(0.0, 1.0),
             "dodge_gap" => sim.dodge_gap = x.clamp(0.0, 10.0),
             "extra_reactions" => sim.extra = on,
-            "extra_pick" => sim.extra_pick = x as u32,
+            "extra_pick" => sim.extra_pick = if x as u32 == 0xff { 0x1ff } else { x as u32 },
             "rdr2_reactions" => sim.rdr2 = on,
             "rdr2_core" => sim.rdr2_core = on,
             _ => {}
@@ -699,6 +731,7 @@ fn reset_settings(sim: &mut Sim, keys: &[&str]) {
 
 fn save_settings(sim: NonSend<Sim>, mut last: Local<Option<Option<String>>>) {
     let now = settings(&sim);
+    crate::crash::note_settings(&now);
     let last = last.get_or_insert_with(|| sim.script.is_empty().then(|| now.clone()));
     if let Some(l) = last && *l != now {
         let _ = std::fs::create_dir_all(getup::config_dir()).and_then(|_| std::fs::write(getup::config_dir().join(SETTINGS), &now));
@@ -807,40 +840,86 @@ fn taxi_of(id: i32) -> i32 {
     if id >= CABIN_ID { id - CABIN_ID } else { id - TAXI_ID }
 }
 const PLANK_ID: i32 = 200;
-const BODIES: [(&str, &str, f32, f32, f32); 10] = [("S", "Small", 1.60, 55.0, 1.0), ("A", "Average", 1.75, 77.0, 1.0), ("L", "Large", 1.90, 110.0, 1.0),
-                                                 ("K", "Lanky", 1.90, 64.0, 1.12), ("F", "Fat", 1.72, 125.0, 0.95), ("T", "Stocky", 1.63, 88.0, 0.9),
+#[allow(non_snake_case)]
+#[inline]
+fn BODIES() -> &'static [(&'static str, &'static str, f32, f32, f32); 13] { static V: std::sync::OnceLock<[(&'static str, &'static str, f32, f32, f32); 13]> = std::sync::OnceLock::new(); let f = || [("S", "Small", (*PROFILES())[0].1, (*PROFILES())[0].2, (*PROFILES())[0].3), ("A", "Average", (*PROFILES())[1].1, (*PROFILES())[1].2, (*PROFILES())[1].3),
+                                                 ("L", "Large", (*PROFILES())[2].1, (*PROFILES())[2].2, (*PROFILES())[2].3), ("K", "Lanky", (*PROFILES())[3].1, (*PROFILES())[3].2, (*PROFILES())[3].3),
+                                                 ("F", "Fat", (*PROFILES())[4].1, (*PROFILES())[4].2, (*PROFILES())[4].3), ("T", "Stocky", (*PROFILES())[5].1, (*PROFILES())[5].2, (*PROFILES())[5].3),
                                                  ("W", "Waddler", HW.0, HW.1, 1.0), ("G", "Guard", HG.0, HG.1, 1.0), ("B", "Brute", HB.0, HB.1, 1.0),
-                                                 ("R", "Random", 0.0, 0.0, 1.0)];
+                                                 ("R", "Random", 0.0, 0.0, 1.0), ("C", "Custom", 0.0, 0.0, 1.0),
+                                                 ("X", "Brawler", 0.0, (*BRAWLER_BODY()).kg, 1.0), ("U", "Bruiser", 0.0, (*BRUISER_BODY()).kg, 1.0)]; if delirium_data::kv::open() { V.get_or_init(f) } else { Box::leak(Box::new(f())) } }
 const RANDOM: usize = 9;
-static SYMMETRIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-static VARIANCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x4040_0000);
+const CUSTOM: usize = 10;
+const BRAWLER: usize = 11;
+const BRUISER: usize = 12;
+static CUSTOM_SIZE: std::sync::Mutex<(f32, f32, f32, f32, f32, f32)> = std::sync::Mutex::new((1.0, 1.0, 1.0, 1.0, 77.0, 1.0));
+static CUSTOM_HEIGHT: std::sync::Mutex<f32> = std::sync::Mutex::new(0.0);
+static CUSTOM_NECK: std::sync::Mutex<f32> = std::sync::Mutex::new(1.0);
 
-fn spread(v: f32) -> ((f32, f32), (f32, f32)) {
-    let t = v.clamp(1.0, 4.0).ln() / 4f32.ln();
-    ((0.2f32.powf(t), 4f32.powf(t)), (0.5f32.powf(t), 2f32.powf(t)))
+fn custom_ui(ui: &mut egui::Ui) {
+    let mut c = CUSTOM_SIZE.lock().unwrap();
+    let (leg, arm, torso, w, kg, head) = &mut *c;
+    let mut moved = ui.add(egui::Slider::new(leg, 0.4..=2.0).text("Legs").suffix("x")).on_hover_text("Leg length against his").changed();
+    moved |= ui.add(egui::Slider::new(arm, 0.4..=2.0).text("Arms").suffix("x")).on_hover_text("Arm length against his").changed();
+    moved |= ui.add(egui::Slider::new(torso, 0.5..=2.0).text("Trunk").suffix("x")).on_hover_text("Trunk height against his").changed();
+    moved |= ui.add(egui::Slider::new(w, 0.5..=2.0).text("Width").suffix("x")).on_hover_text("Shoulders, hips and thickness against his").changed();
+    moved |= ui.add(egui::Slider::new(head, 0.5..=2.0).text("Head").suffix("x")).on_hover_text("Head size against his").changed();
+    moved |= ui.add(egui::Slider::new(&mut *CUSTOM_NECK.lock().unwrap(), 0.5..=6.0).text("Neck").suffix("x"))
+        .on_hover_text("Custom and Brawler bodies only: Homer (Average) keeps the game's own neck, untouched.
+            The neck bone this many times his length (1x: his), thinner as it gets longer. It's still one stiff bone hinged             at the shoulders and the head (no extra joints), so a long neck swings the head further but doesn't bend in             the middle. The head keeps its size, on the neck's end.
+            To compare: Legs/Arms/Trunk/Width/Head 1x and 77 kg is Homer refitted (close to him, not bit for bit); spawn             an Average Homer beside it.").changed();
+    moved |= ui.add(egui::Slider::new(kg, 30.0..=300.0).text("Weight").suffix(" kg")).on_hover_text("His weight: 77 kg").changed();
+    let mut tall = CUSTOM_HEIGHT.lock().unwrap();
+    let mut set = *tall > 0.0;
+    if ui.checkbox(&mut set, "Set height").on_hover_text("Off: as tall as the sizes above make him").changed() {
+        (*tall, moved) = (if set { 1.75 } else { 0.0 }, true);
+    }
+    if set {
+        moved |= ui.add(egui::Slider::new(&mut *tall, 0.8..=3.0).text("Height").suffix(" m")).on_hover_text("His height: 1.75 m").changed();
+    }
+    if moved {
+        *HOLO.lock().unwrap() = Some(std::time::Instant::now());
+    }
 }
+static HOLO: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+const HOLO_SHOW: f32 = 3.0;
 
-fn roll_body(build: &Build) -> (Vec<f32>, Vec<f32>) {
-    let ((l0, l1), (g0, g1)) = spread(f32::from_bits(VARIANCE.load(std::sync::atomic::Ordering::Relaxed)));
-    let draw = |u: f32, lo: f32, hi: f32| lo * (hi / lo).powf(u);
-    let mut x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1;
-    let mut u = || {
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        (x >> 40) as f32 / (1u64 << 24) as f32
-    };
-    let n = build.parts.len();
-    let (mut len, mut girth): (Vec<f32>, Vec<f32>) = (0..n).map(|_| (draw(u(), l0, l1), draw(u(), g0, g1))).unzip();
-    if SYMMETRIC.load(std::sync::atomic::Ordering::Relaxed) {
-        for k in 0..n {
-            let twin = build.parts[k].name.replace("_R_", "_L_");
-            if let Some(l) = (twin != build.parts[k].name).then(|| build.parts.iter().position(|p| p.name == twin)).flatten() {
-                (len[k], girth[k]) = (len[l], girth[l]);
-            }
+fn holo(sim: NonSend<Sim>, mut g: Gizmos, mut made: Local<Option<((f32, f32, f32, f32, f32, f32), (f32, f32), Build, Vec<Transform>)>>) {
+    let Some(t) = *HOLO.lock().unwrap() else { return };
+    let age = t.elapsed().as_secs_f32();
+    if age > HOLO_SHOW {
+        return;
+    }
+    let key = (*CUSTOM_SIZE.lock().unwrap(), (*CUSTOM_HEIGHT.lock().unwrap(), *CUSTOM_NECK.lock().unwrap()));
+    if made.as_ref().is_none_or(|m| (m.0, m.1) != key) {
+        let (b, f, _) = body_of(&sim.base.0, &sim.base.1, CUSTOM);
+        *made = Some((key.0, key.1, b, f));
+    }
+    let Some((_, _, b, f)) = made.as_ref() else { return };
+    let s = sim.ours();
+    let spot = (s.p(THIGH_L) + s.p(THIGH_R)) * 0.5 + s.fwd.with_z(0.0) * 2.0;
+    let start = Side::new(f.iter().map(|f| f.translation).collect());
+    let ground = sim.world.ground(spot + Vec3::Z * 0.3, 4.0).unwrap_or(0.0);
+    let floor = b.parts.iter().zip(f).map(|(p, f)| f.translation.z - p.radius - p.half).fold(f32::MAX, f32::min);
+    let turn = Quat::from_rotation_z(start.fwd.cross(s.fwd).z.atan2(start.fwd.dot(s.fwd)));
+    let (from, to) = (((start.p(THIGH_L) + start.p(THIGH_R)) * 0.5).with_z(floor), spot.with_z(ground));
+    let c = Color::srgba(0.3, 0.9, 1.0, (1.0 - (age - HOLO_SHOW + 0.5).max(0.0) * 2.0) * 0.8);
+    for (k, (p, f)) in b.parts.iter().zip(f).enumerate() {
+        let (at, rot) = (to + turn * (f.translation - from), turn * f.rotation * delirium::nmdbm::rage_link(getup::links(nm()), k));
+        match p.boxed {
+            Some(e) => g.cube(Transform { translation: at, rotation: rot, scale: e * 2.0 }, c),
+            None => { g.primitive_3d(&Capsule3d::new(p.radius, p.half * 2.0), Isometry3d::new(at, rot), c); }
         }
     }
-    (len, girth)
+}
+static SYMMETRIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static VARIANCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3FC0_0000);
+static SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn roll_body(build: &Build) -> (Vec<f32>, Vec<f32>) {
+    let seed = SEED.load(std::sync::atomic::Ordering::Relaxed);
+    let seed = if seed != 0 { seed } else { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) };
+    build.roll(seed, f32::from_bits(VARIANCE.load(std::sync::atomic::Ordering::Relaxed)), SYMMETRIC.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 thread_local! {
@@ -848,11 +927,11 @@ thread_local! {
     static TUNED: std::cell::RefCell<std::collections::HashMap<usize, Vec<(&'static str, f32)>>> = Default::default();
     static TUNING: std::cell::RefCell<Vec<(usize, usize, std::sync::mpsc::Receiver<(Vec<(&'static str, f32)>, i32)>)>> = Default::default();
 }
-const SHAPES: [(f32, f32, f32, f32, f32); 3] = [(0.6, 1.3, 1.2, 1.8, 300.0), (1.3, 0.9, 1.1, 0.8, 60.0), (1.3, 1.8, 1.0, 1.3, 160.0)];
-const HW: (f32, f32) = (2.68, 300.0);
+const HW: (f32, f32) = (2.63, 300.0);
 const HG: (f32, f32) = (1.61, 60.0);
 const HB: (f32, f32) = (1.63, 160.0);
 const PLAT_ID: i32 = 300;
+const PUSHER_ID: i32 = 310;
 const INJURY_MAX: f32 = 0.8;
 const CRUSH_SPEED: f32 = 2.5;
 const DODGE_GAP: f32 = 3.0;
@@ -954,6 +1033,8 @@ const HERO: usize = usize::MAX;
 
 const SWING: f32 = 0.35;
 const BAT_SWING: f32 = 0.7;
+const BAT_DAMAGE: f32 = 30.0;
+const KNIFE_DAMAGE: f32 = 8.0;
 const BAT_PUSH: f32 = 2.5;
 const BAT_BLOOD: usize = 3;
 const KNIFE_BLOOD: usize = 8;
@@ -983,6 +1064,7 @@ fn bat_swing(s: f32) -> (f32, f32) {
 const THROW_SPEED: f32 = 15.0;
 const FUSE: f32 = 3.0;
 const BOUNCE: f32 = 0.35;
+const BODY_BOUNCE: f32 = 0.08;
 const FIRE_R: f32 = 1.5;
 const FIRE_LIFE: f32 = 8.0;
 const BURN: f32 = 6.0;
@@ -1006,7 +1088,7 @@ struct HeroDoll {
     rise: Option<getup::Rise>,
 }
 
-const HOMERS: usize = 8;
+const HOMERS: usize = 50;
 
 struct Benched {
     homer_id: usize,
@@ -1139,6 +1221,7 @@ struct Sim {
     meat_on: bool,
     meat_wipe: bool,
     skate3_bails: bool,
+    step_limit: bool,
     meat_screen: Option<Option<hom::Screen>>,
     shot_scene: String,
     photo_note: String,
@@ -1232,6 +1315,8 @@ struct Sim {
     cab_gas: f32,
     shot_task: Option<(ShotTask, u64)>,
     rand: delirium_data::rng::Rand,
+    sg_seed: u32,
+    sg_aim: Option<(Vec3, Vec3, u32)>,
     getup: Option<getup::Clips>,
     rises: [Option<getup::Rise>; 2],
     still: [f32; 2],
@@ -1251,11 +1336,18 @@ struct Sim {
     group: delirium::ragdoll::Group,
     cars: Vec<(Vec3, Vec3, f32)>,
     lanes: Option<[f32; 2]>,
-    pusher: Option<(Vec3, Vec3, f32)>,
+    pusher: Option<(Vec3, Vec3, f32, Vec3)>,
     pile_fuse: Option<(f32, Vec3)>,
     ice: Option<(usize, [f32; 2])>,
     click_shoots: bool,
     grab: Option<Grab>,
+    ties: Vec<Tie>,
+    line_k: f32,
+    line_leash: bool,
+    line_wrap: bool,
+    drag_hold: Option<usize>,
+    drag_len: f32,
+    tie_hover: Option<usize>,
     glow: Vec<Vec<(f32, (LinearRgba, f32))>>,
     rings: Vec<(usize, usize, Vec3, Vec3, f32)>,
     ripples: Vec<(Vec3, f32, f32)>,
@@ -1409,7 +1501,9 @@ struct Sim {
     upscaler: u8,
     dlss_ok: bool,
     fps_limit: f32,
+    fullscreen: bool,
     eyes: bool,
+    bone_skin: bool,
     skel: bool,
     skel_style: u8,
     clean: bool,
@@ -1471,6 +1565,82 @@ struct Grab {
     horse: bool,
 }
 
+struct Tie {
+    homer: usize,
+    part: usize,
+    local: Vec3,
+    anchor: Vec3,
+    k: f32,
+    len: f32,
+    leash: bool,
+    on: bool,
+    bends: Vec<Vec3>,
+    last: Option<Vec3>,
+}
+
+impl Tie {
+    fn pivot(&self) -> (Vec3, f32) {
+        let mut used = 0.0;
+        let mut p = self.anchor;
+        for &b in &self.bends {
+            used += p.distance(b);
+            p = b;
+        }
+        (p, used)
+    }
+
+    fn wrap(&mut self, world: &Collision, at: Vec3) {
+        let clear = |from: Vec3, to: Vec3| {
+            let d = to.distance(from);
+            d < 0.06 || world.cast(from, (to - from) / d, d - 0.05).is_none()
+        };
+        while let Some(&b) = self.bends.last() {
+            let before = self.bends.len().checked_sub(2).map_or(self.anchor, |i| self.bends[i]);
+            if !clear(at, before) || b.distance(before) < 1e-3 {
+                break;
+            }
+            self.bends.pop();
+        }
+        let p = self.pivot().0;
+        let d = at.distance(p);
+        if d > 0.06 && self.bends.len() < 16 && !clear(at, p) {
+            let prev = self.last.filter(|&l| clear(l, p)).unwrap_or(at);
+            let (mut lo, mut hi) = (0.0f32, 1.0f32);
+            for _ in 0..8 {
+                let mid = (lo + hi) / 2.0;
+                if clear(prev.lerp(at, mid), p) { lo = mid } else { hi = mid }
+            }
+            let (to, free) = (prev.lerp(at, hi), prev.lerp(at, lo));
+            let dir = (to - p).normalize_or_zero();
+            let hit = world.cast(p + dir * 0.05, dir, p.distance(to) - 0.05).map(|(t, n)| {
+                let h = p + dir * (t + 0.05);
+                let s = (h - p).dot(free - p) / (free - p).length_squared().max(1e-6);
+                h + n * 0.03 + (p.lerp(free, s.clamp(0.0, 1.0)) - h).normalize_or_zero() * 0.03
+            });
+            let corner = hit.or_else(|| world.cast(at, (p - at) / d, d - 0.05).map(|(t, n)| at + (p - at) / d * t + n * 0.03));
+            self.bends.extend(corner.filter(|c| c.distance(p) > 0.05));
+        }
+        self.last = Some(at);
+    }
+}
+
+fn line_imp(a: &Agent, part: usize, local: Vec3, to: Vec3, k: f32, len: f32) -> Option<(Vec3, Vec3)> {
+    let f = a.doll.frames().nth(part)?;
+    let at = f.translation + f.rotation * local;
+    let (v, w) = a.doll.vel(part);
+    let heavy = (a.doll.mass() / (*BODIES())[1].3).max(1.0);
+    let kk = PULL_K * heavy * k;
+    let damp = (2.0 * (kk * a.doll.mass()).sqrt()).min(30.0 * a.doll.part_mass(part));
+    let (d, vel) = (to - at, v + w.cross(at - f.translation));
+    let force = if len > 0.0 {
+        let n = d.normalize_or_zero();
+        n * (kk * (d.length() - len) - damp * vel.dot(n)).max(0.0) * (d.length() > len) as u8 as f32
+    } else {
+        kk * d - damp * vel
+    };
+    Some((at, force.clamp_length_max(PULL_MAX * heavy * k.max(1.0)) / 60.0))
+}
+
 const MUSC_STIFF: (f32, f32) = (11.0, 12.0);
 static MUSC_HELP: std::sync::LazyLock<f32> = std::sync::LazyLock::new(|| std::env::var("DELIRIUM_HELP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5));
 
@@ -1508,71 +1678,42 @@ fn hero_task(tp: &TaskParams, task: &str, set: &str, head: Vec3, me: Vec3, fwd: 
 }
 
 fn body_of(build: &Build, frames: &[Transform], body: usize) -> (Build, Vec<Transform>, Option<(Vec<f32>, f32)>) {
-    let (_, name, h, m, l) = BODIES[body];
+    let (_, name, h, m, l) = (*BODIES())[body];
     let pivot = |k: usize| build.parts[k].parent.map_or(frames[k].translation, |_| frames[k].translation + frames[k].rotation * build.parts[k].anchor);
     if body == RANDOM {
         let (len, girth) = ROLLED.with_borrow_mut(|r| r.get_or_insert_with(|| roll_body(build)).clone());
-        let mut j = vec![pivot(0); build.parts.len()];
-        for (c, p) in build.parts.iter().enumerate() {
-            if let Some(q) = p.parent {
-                j[c] = j[q] + (pivot(c) - pivot(q)) * len[c];
-            }
-        }
-        let legs = |j: &dyn Fn(usize) -> Vec3| (j(1).distance(j(2)) + j(2).distance(j(3)) + j(4).distance(j(5)) + j(5).distance(j(6))) / 2.0;
-        let k = legs(&pivot) / legs(&|i| j[i]);
-        let j: Vec<Vec3> = j.iter().map(|v| pivot(0) + (*v - pivot(0)) * k).collect();
-        let (mut b, f) = build.fit(frames, &j);
-        for (p, g) in b.parts.iter_mut().zip(&girth) {
-            (p.radius, p.heft) = (p.radius * g, p.heft * g * g);
-        }
-        let low = b.parts.iter().zip(&f).map(|(p, f)| f.translation.z - p.radius - p.half).fold(f32::MAX, f32::min);
-        let top = b.parts.iter().zip(&f).map(|(p, f)| f.translation.z + p.radius + p.half).fold(f32::MIN, f32::max);
-        eprintln!("body  {name}: {:.2} m, {:.0} kg", top - low, Ragdoll::new(&b, &f, Vec3::ZERO).mass());
-        return (b, f, None);
+        let (b, f) = build.rolled(frames, &len, &girth);
+        eprintln!("body  {name}: {:.2} m, {:.0} kg", b.height(&f), Ragdoll::new(&b, &f, Vec3::ZERO).mass());
+        let leg = b.parts[0].grown;
+        return (b, f, Some((len, leg)));
     }
-    if let Some(&(leg, arm, torso, w, kg)) = body.checked_sub(6).and_then(|i| SHAPES.get(i)) {
-        let o = pivot(0);
-        let f: Vec<Vec3> = (0..build.parts.len()).map(|k| pivot(k) - o).collect();
-        let mut j = f.clone();
-        let wide = |v: Vec3| (v * w).with_z(v.z);
-        for (hip, kids) in [(1, [2, 3]), (4, [5, 6])] {
-            for k in kids {
-                j[k] = wide(f[hip]) + (f[k] - f[hip]) * leg;
-            }
-            j[hip] = wide(f[hip]);
-        }
-        for v in &mut j[7..] {
-            v.z *= torso;
-        }
-        for (sh, kids) in [(14, [15, 16]), (18, [19, 20])] {
-            let s = j[sh];
-            for k in kids {
-                j[k] = wide(s) + (j[k] - s) * arm;
-            }
-            j[sh] = wide(s);
-        }
-        let j: Vec<Vec3> = j.iter().map(|v| o + *v / leg).collect();
-        let (mut b, f) = build.fit(frames, &j);
-        for p in &mut b.parts {
-            p.radius *= w;
-        }
-        let k = kg / Ragdoll::new(&b, &f, Vec3::ZERO).mass();
-        for p in &mut b.parts {
-            p.heft *= k;
-        }
-        let low = b.parts.iter().zip(&f).map(|(p, f)| f.translation.z - p.radius - p.half).fold(f32::MAX, f32::min);
-        let top = b.parts.iter().zip(&f).map(|(p, f)| f.translation.z + p.radius + p.half).fold(f32::MIN, f32::max);
-        eprintln!("body  {name}: {:.2} m, {:.0} kg", top - low, Ragdoll::new(&b, &f, Vec3::ZERO).mass());
+    if body == BRUISER {
+        let (b, f, len, leg) = build.bruiser(frames);
+        eprintln!("body  {name}: {:.2} m, {:.0} kg", b.height(&f), Ragdoll::new(&b, &f, Vec3::ZERO).mass());
+        return (b, f, Some((len, leg)));
+    }
+    if body == CUSTOM || body == BRAWLER {
+        let sizes = if body == BRAWLER { (*BRAWLER_BODY()) } else {
+            let (legs, arms, trunk, width, kg, head) = *CUSTOM_SIZE.lock().unwrap();
+            Sizes { legs, arms, trunk, width, head, neck: *CUSTOM_NECK.lock().unwrap(), kg, height: *CUSTOM_HEIGHT.lock().unwrap() }
+        };
+        let Sizes { arms, trunk, width, head, neck, .. } = sizes;
+        let (b, f, len, leg) = if body == BRAWLER { build.brawler(frames) } else { build.sized(frames, sizes) };
+        eprintln!("body  {name}: legs x{leg:.2}, arms x{arms:.2}, trunk x{trunk:.2}, width x{width:.2}, head x{head:.2}, neck x{neck:.2}, {:.2} m, {:.0} kg", b.height(&f), Ragdoll::new(&b, &f, Vec3::ZERO).mass());
+        return (b, f, Some((len, leg)));
+    }
+    if let Some(&(_, leg, arm, torso, w, kg)) = body.checked_sub(6).and_then(|i| (*SHAPES()).get(i)) {
+        let (b, f) = build.shape(frames, leg, arm, torso, w, kg);
+        eprintln!("body  {name}: {:.2} m, {:.0} kg", b.height(&f), Ragdoll::new(&b, &f, Vec3::ZERO).mass());
         return (b, f, None);
     }
     if body == 1 {
         return (build.clone(), frames.to_vec(), None);
     }
-    let s = h / BODIES[1].2 / (0.53 * l + 0.47);
-    let len: Vec<f32> = build.parts.iter().map(|p| if p.name.contains("_L_") || p.name.contains("_R_") { s * l } else { s }).collect();
-    let (b, f) = build.scaled(frames, &len, m / BODIES[1].3);
-    eprintln!("body  {name}: trunk x{s:.3}, limbs x{:.3}, girth x{:.3}", s * l, b.parts[0].radius / build.parts[0].radius / s);
-    (b, f, Some((len, s * l)))
+    let (b, f, len, limbs) = build.profile(frames, h, m, l);
+    let s = len[0];
+    eprintln!("body  {name}: trunk x{s:.3}, limbs x{limbs:.3}, girth x{:.3}", b.parts[0].radius / build.parts[0].radius / s);
+    (b, f, Some((len, limbs)))
 }
 
 /// An RDR2 reaction as a message line.
@@ -1601,7 +1742,10 @@ impl Sim {
             self.hat = Some(sever::Hat::On);
         }
         let frames = self.frames.clone();
-        let a = Agent::new(&self.build, Ragdoll::new(&self.build, &frames, Vec3::ZERO), Quat::IDENTITY, 0.3);
+        let mut a = Agent::new(&self.build, Ragdoll::new(&self.build, &frames, Vec3::ZERO), Quat::IDENTITY, 0.3);
+        if let Some(r) = self.agent.rng() {
+            a.set_rng(r);
+        }
         (self.agent, self.msgs, self.steps, self.held) = (a, msg::State::default(), 0, true);
         self.homer = None;
         self.hero_doll = None;
@@ -1852,7 +1996,7 @@ impl Sim {
     }
 
     fn spawn(&mut self, key: &str) {
-        let Some(body) = BODIES.iter().position(|b| b.0 == key.trim()) else { return self.say(format!("room  spawn: no body {key} (S A L K F T W G B R)")) };
+        let Some(body) = (*BODIES()).iter().position(|b| b.0 == key.trim()) else { return self.say(format!("room  spawn: no body {key} (S A L K F T W G B R C X)")) };
         if body == RANDOM {
             ROLLED.set(Some(roll_body(&self.base.0)));
         }
@@ -1881,7 +2025,7 @@ impl Sim {
             self.button("balance");
         }
         self.held = false;
-        self.say(format!("room  spawned Homer {} ({}) at {}: {} Homers", self.bench[i].homer_id + 1, BODIES[body].1, v3(to), self.bench.len() + 1));
+        self.say(format!("room  spawned Homer {} ({}) at {}: {} Homers", self.bench[i].homer_id + 1, (*BODIES())[body].1, v3(to), self.bench.len() + 1));
     }
 
     fn stand_homer(&mut self, body: usize, spot: Vec3, fwd: Vec3) -> (usize, Vec3) {
@@ -1905,10 +2049,10 @@ impl Sim {
     }
 
     fn tune_homer(&mut self, id: usize, body: usize, build: &Build, frames: &[Transform]) {
-        if body < 6 {
+        if body < 6 || body >= CUSTOM {
             return;
         }
-        if let Some(t) = (body != RANDOM).then(|| TUNED.with_borrow(|m| m.get(&body).cloned())).flatten() {
+        if let Some(t) = (body < RANDOM).then(|| TUNED.with_borrow(|m| m.get(&body).cloned())).flatten() {
             return self.retune(id, &t);
         }
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1927,7 +2071,7 @@ impl Sim {
             Err(e) => e == std::sync::mpsc::TryRecvError::Empty,
         }));
         for (id, body, (tune, got)) in done {
-            if body != RANDOM {
+            if body < RANDOM {
                 TUNED.with_borrow_mut(|m| m.insert(body, tune.clone()));
             }
             self.retune(id, &tune);
@@ -1947,7 +2091,7 @@ impl Sim {
     }
 
     fn rebody(&mut self, key: &str) {
-        let Some(body) = BODIES.iter().position(|b| b.0 == key.trim()) else { return self.say(format!("room  body: no body {key} (S A L K F T W G B R)")) };
+        let Some(body) = (*BODIES()).iter().position(|b| b.0 == key.trim()) else { return self.say(format!("room  body: no body {key} (S A L K F T W G B R C X)")) };
         if body == RANDOM {
             ROLLED.set(Some(roll_body(&self.base.0)));
         }
@@ -1957,7 +2101,7 @@ impl Sim {
         self.take_control(i);
         self.drop_homer(i);
         self.homer_id = id;
-        self.say(format!("room  body: Homer {} now {}", id + 1, BODIES[body].1));
+        self.say(format!("room  body: Homer {} now {}", id + 1, (*BODIES())[body].1));
     }
 
     fn swap_homer(&mut self, i: usize) {
@@ -2005,7 +2149,7 @@ impl Sim {
         }
         self.take_control(i);
         let at = self.agent.doll.com().0;
-        self.say(format!("room  control: Homer {} ({}) at {}", self.homer_id + 1, BODIES[self.body].1, v3(at)));
+        self.say(format!("room  control: Homer {} ({}) at {}", self.homer_id + 1, (*BODIES())[self.body].1, v3(at)));
     }
 
     fn take_control(&mut self, i: usize) {
@@ -2119,18 +2263,21 @@ impl Sim {
         self.say("ours  car: 8 m/s from his left (ours only)".into());
     }
 
-    fn push(&mut self, front: bool) {
+    fn push(&mut self, front: bool, box_: bool) {
         let s = self.ours();
         let fwd = s.fwd.with_z(0.0).normalize_or_zero() * if front { 1.0 } else { -1.0 };
         let ground = self.cast(s.p(0), -Vec3::Z, 50.0).map_or(0.0, |(t, _)| s.p(0).z - t);
-        let c = s.p(0).with_z(ground + 0.9) + fwd * 1.6;
-        self.pusher = Some((c, -fwd * 1.2, 3.5));
+        let (half, z, from, speed, secs) = if box_ { (Vec3::splat(0.45), 1.3, 4.0, 3.6, 2.5) } else { (Vec3::new(0.7, 0.25, 0.9), 0.9, 1.6, 1.2, 3.5) };
+        let c = s.p(0).with_z(ground + z) + fwd * from;
+        self.pusher = Some((c, -fwd * speed, secs, half));
         self.held = false;
         if front {
-            self.button("brace");
-            self.both(|s| vec![format!("braceForImpact start=true pos={} look={}", v3(s.p(0).with_z(1.2) + s.fwd * 1.4), v3(s.p(0).with_z(1.5) + s.fwd * 1.4))]);
+            let (face, reach) = (Vec3::new(0.0, half.y, ground + 1.3 - c.z), self.brace_reach());
+            self.both(|s| vec![format!("braceForImpact start=true instanceIndex={PUSHER_ID} pos={} look={}{reach}",
+                                       v3(face), v3(s.p(0).with_z(1.5) + s.fwd * 1.4))]);
         }
-        self.say(format!("ours  push {}: a slab at 1.2 m/s{}", if front { "front" } else { "back" }, if front { ", he braces" } else { "" }));
+        self.say(format!("ours  push {}: a {} at {speed} m/s{}", if box_ { "box" } else if front { "front" } else { "back" }, if box_ { "box" } else { "slab" },
+                         if front { ", he braces" } else { "" }));
     }
 
     fn traffic(&mut self) {
@@ -2263,12 +2410,11 @@ impl Sim {
                 _ => continue,
             };
             self.taxis[k].braced = true;
-            self.button("brace");
             let rel = c - ours.p(0);
-            let (rf, rl) = (rel.dot(ours.fwd), rel.dot(ours.left()));
+            let (rf, rl, reach) = (rel.dot(ours.fwd), rel.dot(ours.left()), self.brace_reach());
             self.both(|s| {
                 let p = s.p(0) + s.fwd * rf + s.left() * rl + Vec3::Z * rel.z;
-                vec![format!("braceForImpact start=true pos={} look={}", v3(p), v3(p))]
+                vec![format!("braceForImpact start=true pos={} look={}{reach}", v3(p), v3(p))]
             });
             self.say(format!("room  taxi {}: {:.0} km/h at Homer, he braces{}", k + 1, speed.abs() * 3.6, if weak { " (weak)" } else { "" }));
         }
@@ -2417,6 +2563,10 @@ impl Sim {
 
     fn xr(&self, i: usize) -> bool {
         self.extra && self.extra_pick & (1 << i) != 0
+    }
+
+    fn brace_reach(&self) -> &'static str {
+        if self.xr(8) { " braceDistance=1.3 targetPredictionTime=0.45" } else { "" }
     }
 
     fn riding(&self) -> bool {
@@ -3250,7 +3400,7 @@ impl Sim {
             "highfall" => vec!["highFall start=true".into()],
             "stairs" => vec!["rollDownStairs start=true".into()],
             "flinch" => vec![format!("upperBodyFlinch start=true pos={}", v3(head + s.fwd * 2.0))],
-            "brace" => vec![format!("braceForImpact start=true pos={} look={}", v3(chest + s.fwd), v3(chest + s.fwd))],
+            "brace" => vec![format!("braceForImpact start=true pos={} look={}{}", v3(chest + s.fwd), v3(chest + s.fwd), self.brace_reach())],
             "look" => vec![format!("headLook start=true alwaysLook=true pos={}", v3(head + s.fwd * 2.0 + s.left()))],
             // the RDR2 core's pointArm has a target and a use flag per arm (none on by default)
             "point" if self.rdr2_core => vec![format!("pointArm start=true useRightArm=true targetRight={}", v3(chest + s.fwd * 2.0 - s.left()))],
@@ -3285,7 +3435,7 @@ impl Sim {
         }
     }
 
-    fn fire(&mut self, part: usize, aim: Option<(Vec3, Vec3, Vec3)>, fatal: bool, more: &[usize]) {
+    fn fire(&mut self, part: usize, aim: Option<(Vec3, Vec3, Vec3)>, fatal: bool, more: &[(usize, Vec3, Vec3, Vec3)]) {
         let (at, dir) = aim.map_or((self.agent.doll.centre(part), Vec3::NEG_Y), |a| (a.0, a.1));
         let part = self.sever_shot(part, at, dir);
         self.shot_hand(part);
@@ -3298,7 +3448,7 @@ impl Sim {
             use delirium_data::ped;
             let mut h = ped::Health { health: self.health, ..Default::default() };
             let (mut lost, mut instant) = (0.0, false);
-            for &p in std::iter::once(&part).chain(more) {
+            for p in std::iter::once(part).chain(more.iter().map(|m| m.0)) {
                 let hit = ped::Hit::new(w.damage, w, delirium_data::nm_asset::PART_BONES[p], ped::Attacker::Player { sure: true });
                 let o = ped::damage(&mut h, &hit, &ped::Victim::default(), &mut self.rand);
                 (lost, instant) = (lost + o.lost, instant || o.flags & ped::INSTANT() != 0);
@@ -3335,8 +3485,35 @@ impl Sim {
         let set = w.map_or("*", |w| delirium::nm::weapon_set(w, if self.weak { 2 } else { 3 }));
         let (at, d, n) = aim.unwrap_or((ours.p(part) + ours.fwd * 0.1, -ours.fwd, ours.fwd));
         let force = w.map_or(WEAPONS[self.weapon].2, |w| w.force);
+        let bullet = |at: Vec3, d: Vec3| shottask::bullet(at, at - d.normalize() * BULLET_BACK(), force, false);
+        let mut vel = bullet(at, d);
+        let (hit, now) = (self.hit(), self.now());
+        // RDR2's reactions and core take one bullet's path, as before 0.7.0; the other pellets count for damage above
+        if w.is_some_and(|w| w.slot == "SHOTGUN") && !self.rdr2 && !self.rdr2_core {
+            let all: Vec<_> = std::iter::once((part, at, d, n)).chain(more.iter().copied()).collect();
+            for &(p, a, dd, _) in &all {
+                let f = bullet(a, dd) * self.agent.doll.share(p) * 60.0;
+                self.agent.push.push((p, a, f));
+            }
+            if was_dead {
+                return;
+            }
+            let mut o = vec![];
+            match self.shot_task.as_mut() {
+                Some((t, _)) => {
+                    for &(p, a, dd, nn) in &all {
+                        o.extend(t.next_hit(&mut self.rand, &self.tp, &hit, now, set, p, a, bullet(a, dd), nn).iter().map(shottask::text));
+                    }
+                }
+                None => {
+                    let &(p, a, dd, nn) = all.last().unwrap();
+                    self.shot_task = Some((ShotTask::new(&hit, set, p, a, bullet(a, dd), nn), self.steps));
+                }
+            }
+            self.send_ours(o);
+            return;
+        }
         let mut o_root = None;
-        let mut vel = shottask::bullet(at, at - d.normalize() * BULLET_BACK(), force, false);
         // RDR2 core: the game's applyBulletImpulse, which NM spreads over 0.1 s, with an extra share on the trunk for a
         // trunk hit, and for a leg hit its applyImpulse on the root at once (extras_rdr2.rs)
         let mut o = vec![if self.rdr2_core && !was_dead {
@@ -3356,7 +3533,6 @@ impl Sim {
         if was_dead {
             return self.send_ours(o);
         }
-        let (hit, now) = (self.hit(), self.now());
         // with the game's sets on, what runs is what they send: not the room's reactions (rdr2_tasks.md 5)
         let game_sets = self.game_sets();
         let mut rdr2 = if self.rdr2 && !game_sets { self.rdr2_shot(part, at, d) } else { vec![] };
@@ -3923,12 +4099,23 @@ impl Sim {
         if self.grab.as_ref().is_some_and(|g| g.horse) {
             return self.pull_horse();
         }
-        let Some((part, local, target)) = self.grab.as_ref().filter(|g| g.pulling).map(|g| (g.part, g.local, g.target)) else { return };
-        let Some(f) = self.agent.doll.frames().nth(part) else { return };
-        let at = f.translation + f.rotation * local;
-        let (v, w) = self.agent.doll.vel(part);
-        let damp = (2.0 * (PULL_K * self.agent.doll.mass()).sqrt()).min(30.0 * self.agent.doll.part_mass(part));
-        let imp = (PULL_K * (target - at) - damp * (v + w.cross(at - f.translation))).clamp_length_max(PULL_MAX) / 60.0;
+        let drag = self.grab.as_ref().filter(|g| g.pulling).map(|g| (g.part, g.local, g.target));
+        if let Some(k) = self.drag_hold.filter(|&k| drag.is_none_or(|d| d.0 != k) || !self.line_leash) {
+            self.drag_hold = None;
+            self.agent.doll.tether(k, None);
+        }
+        let Some((part, local, target)) = drag else {
+            self.drag_len = 0.0;
+            return;
+        };
+        if self.line_leash {
+            let Some(f) = self.agent.doll.frames().nth(part) else { return };
+            let at = f.translation + f.rotation * local;
+            self.agent.doll.tether(part, Some((target - f.rotation * local, self.drag_len.max(at.distance(target) - 0.2).max(0.05))));
+            self.drag_hold = Some(part);
+            return;
+        }
+        let Some((at, imp)) = line_imp(&self.agent, part, local, target, self.line_k, self.drag_len) else { return };
         self.held = false;
         let ps = [("start", Value::Bool(true)), ("partIndex", Value::Int(part as i32)), ("hitPoint", Value::Vec3(at)), ("impulse", Value::Vec3(imp))];
         let _ = msg::send(&mut self.agent, &self.build, &self.world, &mut self.msgs, "applyImpulse", &ps);
@@ -3948,6 +4135,126 @@ impl Sim {
         let most = PULL_MAX * heavier.min(1.0 + h.doll.part_mass(part) / HORSE_PULL_KG);
         let imp = (PULL_K * heavier * (target - at) - damp * (v + w.cross(at - f.translation))).clamp_length_max(most) / 60.0;
         h.pull(part, at, imp);
+    }
+
+    fn pull_ties(&mut self) {
+        let ids: Vec<usize> = std::iter::once(self.homer_id).chain(self.bench.iter().map(|b| b.homer_id)).collect();
+        self.ties.retain(|t| ids.contains(&t.homer));
+        for t in &mut self.ties {
+            let (agent, msgs, build) = if t.homer == self.homer_id {
+                (&mut self.agent, &mut self.msgs, &self.build)
+            } else {
+                let Some(i) = self.bench.iter().position(|b| b.homer_id == t.homer) else { continue };
+                let c = &mut self.crowd[i];
+                (&mut c.0, &mut c.1, &self.bench[i].build)
+            };
+            let Some(f) = agent.doll.frames().nth(t.part) else { continue };
+            if self.line_wrap {
+                t.wrap(&self.world, f.translation + f.rotation * t.local);
+            } else {
+                t.bends.clear();
+            }
+            let (pivot, used) = t.pivot();
+            let left = (t.len - used).max(0.05);
+            if t.leash {
+                agent.doll.tether(t.part, Some((pivot - f.rotation * t.local, left)));
+                t.on = true;
+                continue;
+            }
+            if std::mem::take(&mut t.on) {
+                agent.doll.tether(t.part, None);
+            }
+            let Some((at, imp)) = line_imp(agent, t.part, t.local, pivot, t.k, left) else { continue };
+            if imp == Vec3::ZERO {
+                continue;
+            }
+            let ps = [("start", Value::Bool(true)), ("partIndex", Value::Int(t.part as i32)), ("hitPoint", Value::Vec3(at)), ("impulse", Value::Vec3(imp))];
+            let _ = msg::send(agent, build, &self.world, msgs, "applyImpulse", &ps);
+        }
+    }
+
+    fn tie(&mut self, pin: Option<Vec3>, all: bool) {
+        // the drag is on the RDR2 horse, whose part numbers aren't Homer's
+        if self.grab.as_ref().is_some_and(|g| g.pulling && g.horse) {
+            return self.say("room  lines tie Homer, not the horse".into());
+        }
+        if let Some(g) = self.grab.take_if(|g| g.pulling) {
+            let Some(f) = self.agent.doll.frames().nth(g.part) else { return };
+            let at = f.translation + f.rotation * g.local;
+            let anchor = pin.filter(|p| p.distance(g.target) < 3.0).unwrap_or(g.target);
+            let len = at.distance(anchor).max(0.05);
+            self.ties.push(Tie { homer: self.homer_id, part: g.part, local: g.local, anchor, k: self.line_k, len, leash: self.line_leash, on: false, bends: vec![], last: None });
+            let what = if self.line_leash { "leash".into() } else { format!("rope, strength {:.2}x", self.line_k) };
+            return self.say(format!("room  tied part {} to {} with a {len:.2} m {what}", g.part, v3(anchor)));
+        }
+        match self.picked_tie().filter(|_| !all) {
+            Some(i) => self.cut_tie(i),
+            None => while !self.ties.is_empty() {
+                self.cut_tie(self.ties.len() - 1);
+            },
+        }
+        self.say(format!("room  cut, {} line(s) left", self.ties.len()));
+    }
+
+    fn cut_tie(&mut self, i: usize) {
+        let t = self.ties.remove(i);
+        let agent = if t.homer == self.homer_id { Some(&mut self.agent) } else {
+            self.bench.iter().position(|b| b.homer_id == t.homer).and_then(|i| self.crowd.get_mut(i)).map(|c| &mut c.0)
+        };
+        if let Some(a) = agent.filter(|_| t.on) {
+            a.doll.tether(t.part, None);
+        }
+    }
+
+    fn tie_ends(&self, i: usize) -> Option<(Vec3, Vec3)> {
+        let t = self.ties.get(i)?;
+        let a = if t.homer == self.homer_id { &self.agent } else { &self.crowd.get(self.bench.iter().position(|b| b.homer_id == t.homer)?)?.0 };
+        let f = a.doll.frames().nth(t.part)?;
+        Some((f.translation + f.rotation * t.local, t.pivot().0))
+    }
+
+    fn picked_tie(&self) -> Option<usize> {
+        self.tie_hover.filter(|&i| i < self.ties.len()).or(self.ties.len().checked_sub(1))
+    }
+
+    fn line_wheel(&mut self, notches: f32, length: bool) {
+        let dragging = self.grab.as_ref().is_some_and(|g| g.pulling);
+        let picked = self.picked_tie().filter(|_| !dragging);
+        if length && dragging {
+            self.drag_len = (self.drag_len - notches * 0.1).clamp(0.0, 10.0);
+            let l = self.drag_len;
+            return self.say(format!("room  drag line length {l:.2} m"));
+        }
+        if length {
+            let Some(t) = picked.map(|i| &mut self.ties[i]) else { return };
+            t.len = (t.len * (1.0 - notches * 0.1)).clamp(0.05, 100.0);
+            let l = t.len;
+            return self.say(format!("room  line length {l:.2} m"));
+        }
+        let k = match picked {
+            Some(i) => &mut self.ties[i].k,
+            None => &mut self.line_k,
+        };
+        *k = (*k * 1.25f32.powf(notches)).clamp(0.05, 5.0);
+        let k = *k;
+        self.say(format!("room  line strength {k:.2}x"));
+    }
+
+    fn line_leash_key(&mut self) {
+        let picked = self.picked_tie().filter(|_| !self.grab.as_ref().is_some_and(|g| g.pulling));
+        let Some(i) = picked else {
+            self.line_leash = !self.line_leash;
+            let what = if self.line_leash { "leash (locks at its length)" } else { "stretchy rope" };
+            return self.say(format!("room  line: {what}"));
+        };
+        let now = self.tie_ends(i).map(|(a, b)| a.distance(b) + self.ties[i].pivot().1);
+        let t = &mut self.ties[i];
+        t.leash = !t.leash;
+        if t.leash {
+            t.len = now.unwrap_or(t.len).max(0.05);
+        }
+        let what = if t.leash { format!("leash, locked at {:.2} m", t.len) } else { "stretchy rope".into() };
+        self.say(format!("room  line {}: {what}", i + 1));
     }
 
     fn cue(&mut self) {
@@ -4240,8 +4547,9 @@ impl Sim {
             "grid" => return self.grid(),
             "stress" => return self.stress(),
             "car" => return self.car(),
-            "push front" => return self.push(true),
-            "push back" => return self.push(false),
+            "push front" => return self.push(true, false),
+            "push back" => return self.push(false, false),
+            "push fast" => return self.push(true, true),
             "taxi" => {
                 while self.taxis.len() < TAXIS {
                     self.spawn_taxi();
@@ -4277,6 +4585,18 @@ impl Sim {
         #[cfg(feature = "portal")]
         if self.portal.gun {
             return;
+        }
+        match kind(self.weapon) {
+            1 => {
+                let to = self.aim_at(from, dir);
+                return self.throw_weapon(self.eye.lerp(to, 0.15), to);
+            }
+            2 => {
+                let to = self.aim_at(from, dir);
+                (self.gun.at, self.gun.aim) = (to - dir * 0.5, to);
+                return self.swing_weapon();
+            }
+            _ => {}
         }
         if WEAPONS[self.weapon].0 == "rpg" {
             self.sounds.push(sfx::Snd::Shot(self.weapon));
@@ -4370,12 +4690,12 @@ impl Sim {
         true
     }
 
-    fn bullet_any(&mut self, from: Vec3, dir: Vec3) -> Option<(usize, (usize, Vec3, Vec3))> {
+    fn bullet_any(&mut self, from: Vec3, dir: Vec3, reach: f32) -> Option<(usize, (usize, Vec3, Vec3))> {
         self.sounds.push(sfx::Snd::Shot(self.weapon));
         let hit = std::iter::once(&self.agent).chain(self.crowd.iter().map(|c| &c.0)).enumerate()
-            .filter_map(|(i, a)| a.doll.probe(self.build_of(i), from, from + dir * 60.0).map(|h| (i, h)))
+            .filter_map(|(i, a)| a.doll.probe(self.build_of(i), from, from + dir * reach).map(|h| (i, h)))
             .min_by(|a, b| a.1 .1.distance(from).total_cmp(&b.1 .1.distance(from)));
-        let end = hit.map(|h| h.1 .1).or_else(|| self.world.contact(from, dir, 60.0).map(|c| from + dir * c.0)).unwrap_or(from + dir * 60.0);
+        let end = hit.map(|h| h.1 .1).or_else(|| self.world.contact(from, dir, reach).map(|c| from + dir * c.0)).unwrap_or(from + dir * reach);
         self.gun.tracers.push((from, end, 0.25));
         hit
     }
@@ -4395,32 +4715,43 @@ impl Sim {
 
     fn pellets(&mut self, from: Vec3, dir: Vec3, acc: f32, pellets: usize, fatal: bool) {
         if WEAPONS[self.weapon].0 == "taser" {
-            match self.bullet_any(from, dir) {
+            match self.bullet_any(from, dir, 60.0) {
                 Some((0, (part, _, _))) => self.zap(part),
                 Some((i, (part, _, _))) if i <= self.bench.len() => self.as_homer(i - 1, |s| s.zap(part)),
                 _ => {}
             }
             return;
         }
-        let (right, up) = dir.any_orthonormal_pair();
+        let range = self.weapons.iter().find(|w| w.name == WEAPONS[self.weapon].1).map_or(35.0, |w| w.range);
+        let reach = if pellets > 1 { PELLET_REACH() * range } else { 60.0 };
+        let side = dir.cross(Vec3::Z).normalize_or(Vec3::X);
+        let (up, half) = (side.cross(dir), reach * acc);
+        let mut r = delirium_data::rng::Rand::new(self.sg_seed);
+        if pellets > 1 {
+            (0..3).for_each(|_| _ = r.next());
+        }
+        self.sg_aim = Some((from, dir, self.sg_seed));
         let (mut hit, mut hurt, mut more) = (None, vec![], vec![]);
-        for _ in 0..pellets {
-            let d = if pellets > 1 {
-                let half = PELLET_SPREAD() * acc;
-                let (a, b) = (self.gun.rnd() * 2.0 - 1.0, self.gun.rnd() * 2.0 - 1.0);
-                (dir + right * a * half + up * b * half).normalize()
+        for k in 0..pellets + (pellets > 1) as usize {
+            let end = if pellets > 1 && k == 0 {
+                from + dir * range
+            } else if pellets > 1 {
+                let x = r.float_in_range(-half, half);
+                let y = r.float_in_range(-half, half);
+                from + dir * reach + side * x + up * y
             } else {
-                dir
+                from + dir * reach
             };
+            let d = (end - from).normalize();
             if self.horse_shot(from, d) {
                 continue;
             }
-            match self.bullet_any(from, d) {
+            match self.bullet_any(from, d, from.distance(end)) {
                 Some((0, h)) => match hit {
                     None => hit = Some((h, d)),
                     Some(_) => {
                         self.mark(0, h.0, h.1, h.2);
-                        more.push(h.0);
+                        more.push((h.0, h.1, d, h.2));
                     }
                 },
                 Some((i, h)) if i <= self.bench.len() => {
@@ -4436,9 +4767,21 @@ impl Sim {
                 None => {}
             }
         }
+        if pellets > 1 {
+            self.sg_seed = r.seed;
+            let parts: Vec<usize> = hit.iter().map(|h: &((usize, Vec3, Vec3), Vec3)| h.0 .0).chain(more.iter().map(|m| m.0)).collect();
+            self.say(format!("ours  {} of the aim + {pellets} pellets on him: parts {parts:?}", parts.len()));
+        }
         match hit {
             Some(((part, at, normal), d)) => self.fire(part, Some((at, d, normal)), fatal, &more),
-            None if hurt.is_empty() => self.near_miss(from, dir),
+            None if hurt.is_empty() => {
+                let off = |a: &Agent| { let c = a.doll.centre(CHEST) - from; (c - dir * c.dot(dir).max(0.0)).length() };
+                let mine = off(&self.agent);
+                match (0..self.bench.len()).map(|i| (i, off(&self.crowd[i].0))).filter(|x| x.1 < mine).min_by(|a, b| a.1.total_cmp(&b.1)) {
+                    Some((i, _)) => self.as_homer(i, |s| s.near_miss(from, dir)),
+                    None => self.near_miss(from, dir),
+                }
+            }
             None => {}
         }
     }
@@ -4679,7 +5022,8 @@ impl Sim {
             self.sounds.push(sfx::Snd::Throw);
             return self.say(format!("room  {}: missed", WEAPONS[self.weapon].0));
         };
-        let (dmg, push) = w.map_or((20.0, hero::MELEE_PUSH), |w| (w.damage, w.force.max(hero::MELEE_PUSH)));
+        let dmg = if WEAPONS[self.weapon].0 == "knife" { KNIFE_DAMAGE } else { BAT_DAMAGE };
+        let push = w.map_or(hero::MELEE_PUSH, |w| w.force.max(hero::MELEE_PUSH));
         let j = if bat(self.weapon) { (dir * 0.7 - dir.cross(Vec3::Z).normalize_or(Vec3::X)).normalize() * push * BAT_PUSH } else { dir * push };
         let what = format!("room  {} lands", WEAPONS[self.weapon].0);
         self.land(hero::Hit::Swing(dmg, at, j), self.gun.at, &what);
@@ -4697,16 +5041,16 @@ impl Sim {
             v.z -= 9.8 * dt;
             *fuse -= dt;
             let (d, len) = (v.normalize_or(Vec3::Z), v.length() * dt);
-            let hit = self.agent.doll.probe(&self.build, *p, *p + d * len).map(|h| (h.1, -d))
-                .or_else(|| self.world.contact(*p, d, len).map(|c| (*p + d * c.0, c.1)));
+            let hit = self.agent.doll.probe(&self.build, *p, *p + d * len).map(|h| (h.1, -d, BODY_BOUNCE))
+                .or_else(|| self.world.contact(*p, d, len).map(|c| (*p + d * c.0, c.1, BOUNCE)));
             match hit {
-                Some((at, _)) if *molotov => {
+                Some((at, ..)) if *molotov => {
                     fire.push(at);
                     return false;
                 }
-                Some((at, n)) => {
+                Some((at, n, k)) => {
                     *p = at + n * 0.03;
-                    *v = (*v - 2.0 * v.dot(n) * n) * BOUNCE;
+                    *v = (*v - 2.0 * v.dot(n) * n) * k;
                 }
                 None => *p += d * len,
             }
@@ -5352,7 +5696,7 @@ impl Sim {
             }
         }
         let edited = if self.param_edits.is_empty() { vec![] } else { params::apply(&self.param_edits, name, &mut ps) };
-        let mut short: String = line.chars().take(110).collect();
+        let mut short: String = if std::env::var_os("ROOM_LOG").is_some() { line.to_string() } else { line.chars().take(110).collect() };
         if !edited.is_empty() {
             short += &format!("  (changed: {})", edited.join(" "));
         }
@@ -5475,7 +5819,21 @@ fn archive_read(game: &str, rpf: &str, paths: &[&str]) -> Vec<Option<Vec<u8>>> {
     let Ok(key) = getup::key(dir) else { return vec![None; paths.len()] };
     if getup::pc() {
         let sub = if rpf == "common.rpf" { "common" } else { "pc" };
-        return paths.iter().map(|p| std::fs::read(dir.join(sub).join(getup::plat(p))).ok()).collect();
+        let packed = std::cell::OnceCell::new();
+        return paths.iter().map(|p| std::fs::read(dir.join(sub).join(getup::plat(p))).ok().or_else(|| {
+            let (toc, d) = packed.get_or_init(|| std::fs::read(dir.join("pc/data/game.rpf")).ok().map(|d| (delirium_data::rpf::read_toc(&d, &key).unwrap_or_default(), d))).as_ref()?;
+            let name = p.rsplit('/').next()?;
+            toc.iter().find(|e| e.path.eq_ignore_ascii_case(p) || e.path.rsplit('/').next().is_some_and(|n| n.eq_ignore_ascii_case(name)))
+                .and_then(|e| delirium_data::rpf::read(d, e).ok())
+                .map(|mut x| {
+                    let n = x.len() / 16 * 16;
+                    key.decrypt(&mut x[..n]);
+                    while x.last() == Some(&0) {
+                        x.pop();
+                    }
+                    x
+                })
+        })).collect();
     }
     let Ok(data) = std::fs::read(dir.join(getup::plat(rpf))) else { return vec![None; paths.len()] };
     let toc = delirium_data::rpf::read_toc(&data, &key).unwrap_or_default();
@@ -5538,7 +5896,14 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
         println!("{} {dir}", if ok { "exported to" } else { "export incomplete:" });
         std::process::exit(if ok { 0 } else { 1 });
     }
-    let body = a.iter().position(|x| x == "--body").and_then(|i| a.get(i + 1)).and_then(|n| BODIES.iter().position(|b| b.0 == n)).unwrap_or(1);
+    if let Some(v) = a.iter().position(|x| x == "--custom").and_then(|i| a.get(i + 1)) {
+        match v.split(',').filter_map(|x| x.parse().ok()).collect::<Vec<f32>>()[..] {
+            [l, r, t, w, kg] => *CUSTOM_SIZE.lock().unwrap() = (l, r, t, w, kg, 1.0),
+            [l, r, t, w, kg, h] => *CUSTOM_SIZE.lock().unwrap() = (l, r, t, w, kg, h),
+            _ => eprintln!("--custom: legs,arms,trunk,width,kg[,head]"),
+        }
+    }
+    let body = a.iter().position(|x| x == "--body").and_then(|i| a.get(i + 1)).and_then(|n| (*BODIES()).iter().position(|b| b.0 == n)).unwrap_or(1);
     let (build, frames, rig_note) = rig_body(a, build, frames);
     if let Some(n) = &rig_note {
         eprintln!("{n}");
@@ -5571,14 +5936,18 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
         .or_else(|| from_game("common.rpf", "data/taskparams.txt").map(|d| String::from_utf8_lossy(&d).into_owned())).map_or_else(TaskParams::default, |t| delirium_data::taskparams::read(&t));
     let (rig_rdr2, rig_dir) = rig_choice(a);
     set_rig(rig_rdr2, &rig_dir);
-    let agent = Agent::new(&build, Ragdoll::new(&build, &frames, Vec3::ZERO), Quat::IDENTITY, 0.3);
+    let mut agent = Agent::new(&build, Ragdoll::new(&build, &frames, Vec3::ZERO), Quat::IDENTITY, 0.3);
+    if script.is_empty() && !args.iter().any(|a| a == "--headless") {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() | 1);
+        agent.set_rng((t, t.rotate_left(16)));
+    }
     let mut sim = Sim { build, frames, world, tp, agent, msgs: msg::State::default(), paused: false, speed: 1.0, acc: 0.0, steps: 0, arrows: false,
-                        shot_task: None, rand: Default::default(),
+                        shot_task: None, rand: Default::default(), sg_seed: 1, sg_aim: None,
                         log: VecDeque::new(), console: String::new(), script, typing: false,
-                        game_shot: String::new(), weapons, weapon: 0, weak: false, sel: 0, over_ui: false, held: true,   show_ui: true, sens: 0.5, rec, health: 200.0, god: false, aim_gun: false, gun: Gun::default(), blast_task: None, burning: 0.0, shock: 0.0, charred: vec![], voxels: vec![], on_fire: None, hero_gun: false, passive: true, homer: None, homer_weapon: None, homer_wait: None, homer_wild: false, gun_ai: false, homer_combat: None, homer_guard: None, homer_rest: 0.0, ammo: 0, reloading: None, taxis: vec![], driving: false, pedals: (0.0, 0.0, false), car_tune: None, lean_stop: None, hurt: [0.0; 4], near_at: -9.0, near_last: -9.0, dived: false, no_dodge: false, dodge_gap: DODGE_GAP, look_stop: None, dodge_at: 0.0, dodging: false, look_after: None, fall: None, hold: None, airborne: false, wet: false, hero_alpha: 0.6, render_scale: 1.0, msaa: 4, msaa_max: 4, shadow_q: 3, frame_ms: 0.0, gpu: String::new(), gpu_now: String::new(), gpus: None, aa: AA_MSAA, smaa_q: 2, dlss_q: 0, fsr_q: 1, fsr_ok: false, xess_q: 1, xess_ok: false, sharpen: 0.0, sharp_by: [0.0; 9], ssao: 0, ao_strength: 1.0, bloom: 0.0, dof: 0.0, contact: 0.0, contact_k: 1.0, vignette: 0.0, lens: 0.0, chroma: 0.0, rt: 0, rt_ok: false, sky: 2, god_rays: false, restir: false, fire: 2, water_q: 1, real_fire: false, voxel_water: false, real_water: false, real_drain: false, pouring: false, real_surface: false, real_ripples: false, water_clear: true, wet_trail: true, water_impact: true, water_faucet: true, real_level: None, flow: vec![], hero_flow: vec![], water_caustics: false, water_spray: false, water_waves: false, water_pixels: false, water_haze: false, water_mirror: false, water_foam: false, water_mist: false, photons: false, water_fine: false, water_depth: true, water_relax: false, water_ghost: false, water_vort: false, water_spray_phys: false, safe: false, fire_light: true, fire_homer: false, shadow_filter: 0, water_wet: false, wet_film: false, wet_drips: false, sky_shade: false, water_traced: false, glass_tint: true, glass_shade: true, water_ripples: true, water_refract: false, flood: None, smoke: true, view_px: UVec2::ONE, defaults: String::new(), upscaler: UP_FSR1, dlss_ok: false, fps_limit: FPS_VSYNC, extra: false, rdr2: false, rdr2_core: false, rig_rdr2: false, rig_dir: String::new(), rig_body: String::new(), nmx_lift: 0.0, rdr2_after: vec![], wall_sent: false, rdr2_fire: false, horse: None, horse_file: String::new(), horse_frag: String::new(), riding: false, rdr2_pick: Default::default(), param_edits: Default::default(), param_search: String::new(), param_changed_only: false, extra_pick: 0xff, fire_react: true, dive: false, hang: None, was_fallen: false, curled: false, super_punch: false, even: false, crush: None, cab_gas: 0.0, cam: None, look_z: 0.8, film: 0.0, photo: false, soft: true, shadows: true, sun_color: [1.0; 3], fill_k: 1.0, gun_reach: 1.0, gun_up: 0.0, gun_off: Vec3::ZERO, gun_aim_off: Vec3::ZERO, crane: None, crane_to: None, shadow: 0.0, strict: false, stairs_rolled: false, cam_head: false, cam_rig: None, spawn_at: None, tear_k: 1.0, sky_k: 1.0, kept_gun: None, cam_floor: f32::MIN, pov: false, film_vel: Vec3::ZERO, photo_pending: false, on_cue: vec![], photo_follow: false, detached: false, cam_at: None, cam2: None, cam2_queue: vec![], cam2_b: None, meat: None, meat_on: true, meat_wipe: false, skate3_bails: false, meat_screen: None, shot_scene: String::new(), photo_note: String::new(), script_walk: Vec3::ZERO, throw_speed: None, homer_shot: 0.0, hero_physics: true, hero_doll: None, tackle: None, cuts: vec![], hat: None, dismember: false, jump: None, steam: (0, vec![]), #[cfg(feature = "portal")] portal: portal::Portals::new(), click_at: None,
+                        game_shot: String::new(), weapons, weapon: 0, weak: false, sel: 0, over_ui: false, held: true,   show_ui: true, sens: 0.5, rec, health: 200.0, god: false, aim_gun: false, gun: Gun::default(), blast_task: None, burning: 0.0, shock: 0.0, charred: vec![], voxels: vec![], on_fire: None, hero_gun: false, passive: true, homer: None, homer_weapon: None, homer_wait: None, homer_wild: false, gun_ai: false, homer_combat: None, homer_guard: None, homer_rest: 0.0, ammo: 0, reloading: None, taxis: vec![], driving: false, pedals: (0.0, 0.0, false), car_tune: None, lean_stop: None, hurt: [0.0; 4], near_at: -9.0, near_last: -9.0, dived: false, no_dodge: false, dodge_gap: DODGE_GAP, look_stop: None, dodge_at: 0.0, dodging: false, look_after: None, fall: None, hold: None, airborne: false, wet: false, hero_alpha: 0.6, render_scale: 1.0, msaa: 4, msaa_max: 4, shadow_q: 3, frame_ms: 0.0, gpu: String::new(), gpu_now: String::new(), gpus: None, aa: AA_MSAA, smaa_q: 2, dlss_q: 0, fsr_q: 1, fsr_ok: false, xess_q: 1, xess_ok: false, sharpen: 0.0, sharp_by: [0.0; 9], ssao: 0, ao_strength: 1.0, bloom: 0.0, dof: 0.0, contact: 0.0, contact_k: 1.0, vignette: 0.0, lens: 0.0, chroma: 0.0, rt: 0, rt_ok: false, sky: 2, god_rays: false, restir: false, fire: 2, water_q: 1, real_fire: false, voxel_water: false, real_water: false, real_drain: false, pouring: false, real_surface: false, real_ripples: false, water_clear: true, wet_trail: true, water_impact: true, water_faucet: true, real_level: None, flow: vec![], hero_flow: vec![], water_caustics: false, water_spray: false, water_waves: false, water_pixels: false, water_haze: false, water_mirror: false, water_foam: false, water_mist: false, photons: false, water_fine: false, water_depth: true, water_relax: false, water_ghost: false, water_vort: false, water_spray_phys: false, safe: false, fire_light: true, fire_homer: false, shadow_filter: 0, water_wet: false, wet_film: false, wet_drips: false, sky_shade: false, water_traced: false, glass_tint: true, glass_shade: true, water_ripples: true, water_refract: false, flood: None, smoke: true, view_px: UVec2::ONE, defaults: String::new(), upscaler: UP_FSR1, dlss_ok: false, fps_limit: FPS_VSYNC, fullscreen: false, extra: false, rdr2: false, rdr2_core: false, rig_rdr2: false, rig_dir: String::new(), rig_body: String::new(), nmx_lift: 0.0, rdr2_after: vec![], wall_sent: false, rdr2_fire: false, horse: None, horse_file: String::new(), horse_frag: String::new(), riding: false, rdr2_pick: Default::default(), param_edits: Default::default(), param_search: String::new(), param_changed_only: false, extra_pick: 0x1ff, fire_react: true, dive: false, hang: None, was_fallen: false, curled: false, super_punch: false, even: false, crush: None, cab_gas: 0.0, cam: None, look_z: 0.8, film: 0.0, photo: false, soft: true, shadows: true, sun_color: [1.0; 3], fill_k: 1.0, gun_reach: 1.0, gun_up: 0.0, gun_off: Vec3::ZERO, gun_aim_off: Vec3::ZERO, crane: None, crane_to: None, shadow: 0.0, strict: false, stairs_rolled: false, cam_head: false, cam_rig: None, spawn_at: None, tear_k: 1.0, sky_k: 1.0, kept_gun: None, cam_floor: f32::MIN, pov: false, film_vel: Vec3::ZERO, photo_pending: false, on_cue: vec![], photo_follow: false, detached: false, cam_at: None, cam2: None, cam2_queue: vec![], cam2_b: None, meat: None, meat_on: true, meat_wipe: false, skate3_bails: false, step_limit: false, meat_screen: None, shot_scene: String::new(), photo_note: String::new(), script_walk: Vec3::ZERO, throw_speed: None, homer_shot: 0.0, hero_physics: true, hero_doll: None, tackle: None, cuts: vec![], hat: None, dismember: false, jump: None, steam: (0, vec![]), #[cfg(feature = "portal")] portal: portal::Portals::new(), click_at: None,
                         getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None,   click_shoots: false,
-                        grab: None, glow: vec![], rings: vec![], ripples: vec![], ripple_wait: vec![], tape: Default::default(), replay: None, throw_at: None, pops: vec![], pop_screen: vec![], show_pops: true, tab: 1, sounds: vec![], sound: true, volume: [1.0, 1.0, 0.35], blood: vec![], pixel_blood: true, gore: false, layers: true, wounds: vec![], show_ripples: false, infinite: false, fx_seed: 1, pointer: None, crowd_hp: vec![], car_hit: vec![], car_reacts: vec![], help: !help_seen(), auto_balance: true, dead: false, hero: None, skate: None, skate_link: skate_files::Link::new(), agility,
-                        scene: None, switch_to: None, poke: POKE, game_dir: game_dir.map(str::to_string), walk: true, relock: false, cam_locked: true, walk_dir: Vec3::ZERO, wander: Default::default(), getup_mode: 0, musc: None, learned: None, walk_learned: None, preview_on: false, preview: None, preview_wait: false, preview_keys: (false, false), script_jog: false, watch: None, bench: vec![], homer_id: 0, spawn_body: body, base, crowd_build, body, skin: saved_look(), ped_color: 0, body_alpha: BODY_ALPHA, eyes: true, brows: true, skel: true, skel_style: 0, clean: false, sun_dir: saved_sun() };
+                        grab: None, ties: vec![], line_k: 1.0, line_leash: false, line_wrap: true, drag_hold: None, drag_len: 0.0, tie_hover: None, glow: vec![], rings: vec![], ripples: vec![], ripple_wait: vec![], tape: Default::default(), replay: None, throw_at: None, pops: vec![], pop_screen: vec![], show_pops: true, tab: 1, sounds: vec![], sound: true, volume: [1.0, 1.0, 0.35], blood: vec![], pixel_blood: true, gore: false, layers: true, wounds: vec![], show_ripples: false, infinite: false, fx_seed: 1, pointer: None, crowd_hp: vec![], car_hit: vec![], car_reacts: vec![], help: !help_seen(), auto_balance: true, dead: false, hero: None, skate: None, skate_link: skate_files::Link::new(), agility,
+                        scene: None, switch_to: None, poke: POKE, game_dir: game_dir.map(str::to_string), walk: true, relock: false, cam_locked: true, walk_dir: Vec3::ZERO, wander: Default::default(), getup_mode: 0, musc: None, learned: None, walk_learned: None, preview_on: false, preview: None, preview_wait: false, preview_keys: (false, false), script_jog: false, watch: None, bench: vec![], homer_id: 0, spawn_body: body, base, crowd_build, body, skin: saved_look(), ped_color: 0, body_alpha: BODY_ALPHA, eyes: true, bone_skin: false, brows: true, skel: true, skel_style: 0, clean: false, sun_dir: saved_sun() };
     sim.auto_balance = sim.script.is_empty();
     sim
 }
@@ -5638,7 +6007,7 @@ fn main() {
     let game_dir = game_dir.filter(|g| {
         !delirium_data::kv::FROM_GAME || numbers(g) || {
             eprintln!("{g}: this copy isn't a version Delirium reads its numbers from (a disc's key is fetched from the internet \
-                the first time). You need your own GTA IV for PC (Steam) or Xbox 360 (not included)");
+                the first time). You need your own Grand Theft Auto IV: The Complete Edition for PC (Steam, version 1.2.0.59) or the original Xbox 360 disc (not included)");
             false
         }
     });
@@ -5711,7 +6080,7 @@ fn main() {
     }
     sim.say(format!("weaponinfo.xml: {} weapons{}", sim.weapons.len(), if sim.weapons.is_empty() { " (--game <dir> reads it; impulses 50 N s)" } else { "" }));
 
-    let systems = (keys, console, viewports, mouse, scripted, step, switch, scene, (apply_look, god_rays, glass_light, fire_view), video, follow_floor, bodies, face_view, props, car_mesh, pusher_mesh, taxi_mesh, gun_view, draw, smooth).chain();
+    let systems = (keys, console, viewports, mouse, scripted, step, switch, scene, (apply_look, god_rays, glass_light, fire_view), video, follow_floor, bodies, face_view, props, car_mesh, pusher_mesh, taxi_mesh, gun_view, (draw, holo), smooth).chain();
     let mut app = App::new();
     let gpu = std::fs::read_to_string(getup::config_dir().join(SETTINGS)).ok()
         .and_then(|t| t.lines().find_map(|l| l.strip_prefix("gpu ").map(|g| g.trim().to_lowercase()))).filter(|g| !g.is_empty());
@@ -5734,6 +6103,7 @@ fn main() {
         }))
         .add_plugins(EguiPlugin::default())
         .add_plugins(bevy::sprite_render::Material2dPlugin::<ScaledMat>::default())
+        .insert_resource(bevy::render::error_handler::RenderErrorHandler(crash::render_error))
         .insert_resource(bevy::winit::WinitSettings { focused_mode: bevy::winit::UpdateMode::Continuous, unfocused_mode: bevy::winit::UpdateMode::Continuous })
         .insert_resource(Time::<Virtual>::from_max_delta(std::time::Duration::from_secs_f32(if std::env::var_os("FRAME_LOG").is_some() { 10.0 } else { 0.25 })))
         .insert_resource(ClearColor(Color::srgb(0.78, 0.79, 0.81)))
@@ -5745,6 +6115,7 @@ fn main() {
         .add_systems(Update, systems)
         .add_systems(Update, horse::view)
         .add_systems(Update, skel_cams.after(smooth))
+        .add_systems(Update, bone_skin)
         .add_systems(Update, started)
         .add_systems(Update, (skate_pad.before(mouse), skate_cam.after(scripted), board_mesh.after(bodies)))
         .add_systems(Update, muscles.after(smooth))
@@ -5781,6 +6152,7 @@ fn main() {
         app.world().resource::<bevy::asset::io::embedded::EmbeddedAssetRegistry>().insert_asset(std::path::PathBuf::new(), std::path::Path::new(path), bytes);
     }
     app.run();
+    let _ = std::fs::remove_file(getup::config_dir().join(STARTING));
 }
 
 const GAME_PATH: &str = "game_path.txt";
@@ -5890,15 +6262,17 @@ fn renderer(app: &mut App, gpu: Option<String>, safe: bool) -> (bevy::app::Plugi
     let dir = getup::config_dir();
     let was = std::fs::read_to_string(dir.join(FALLBACK)).unwrap_or_default();
     let mut step = match was.lines().next().unwrap_or("").trim() { "plain" => 1, "dx12" => 2, _ => 0 };
+    let manual = was.lines().nth(1) == Some("manual");
     let mut crashes = std::fs::read_to_string(dir.join(STARTING)).map_or(0, |s| s.trim().parse::<u32>().unwrap_or(0) + 1);
-    if crashes >= 2 && step < 2 {
+    if crashes >= 1 && step < 2 {
         (step, crashes) = (step + 1, 0);
         let _ = std::fs::write(dir.join(FALLBACK), ["", "plain", "dx12"][step]);
     }
     let step = if cfg!(windows) { step.max(safe as usize) } else { 0 };
+    let _ = RENDERER.set((step, manual && !safe));
     let dx12 = step == 2;
     let why = (step > 0).then(|| format!("renderer: {} ({})", ["", "plain Vulkan", "DirectX 12"][step], if safe && step == 1 { "Safe Mode" } else {
-        "the driver crashed starting twice; full graphics again with another graphics card or driver"
+        if manual { "picked in Video" } else { "the graphics driver crashed starting; full graphics are tried again with another graphics card, driver or room build, or from Video" }
     }));
     let _ = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(STARTING), crashes.to_string()));
     #[cfg(windows)]
@@ -5995,7 +6369,7 @@ fn pick_game(args: &[String]) -> ! {
                         let big = if pick.hover { "Let go to use it" } else { "Drag your game here" };
                         ui.label(egui::RichText::new(big).size(28.0).strong().color(line));
                         if delirium_data::kv::FROM_GAME {
-                            ui.label(egui::RichText::new("You need your own GTA IV for PC (Steam) or Xbox 360 (not included)").strong());
+                            ui.label(egui::RichText::new("You need your own Grand Theft Auto IV: The Complete Edition for PC (Steam, version 1.2.0.59) or the original Xbox 360 disc (not included)").strong());
                             ui.label("Use its disc image (.iso), or the PC game folder (the one with GTAIV.exe in it).");
                             ui.label(egui::RichText::new("The physics numbers are read from it; a disc's key is fetched from the internet the first time. \
                                 The PS3 version isn't supported for now.").small());
@@ -6038,7 +6412,7 @@ fn pick_game(args: &[String]) -> ! {
                 exit.write(AppExit::Success);
             } else {
                 pick.err = if delirium_data::kv::FROM_GAME && ["GTAIV.exe", "default.xex"].iter().any(|f| std::path::Path::new(&g).join(f).is_file()) {
-                    format!("That copy isn't a version Delirium reads its numbers from: {g}\nYou need your own GTA IV for PC (Steam) or Xbox 360 (not included)")
+                    format!("That copy isn't a version Delirium reads its numbers from: {g}\nYou need your own Grand Theft Auto IV: The Complete Edition for PC (Steam, version 1.2.0.59) or the original Xbox 360 disc (not included)")
                 } else {
                     format!("That isn't it: {g}\nDrag your game .iso file (or its game folder).")
                 };
@@ -6048,7 +6422,7 @@ fn pick_game(args: &[String]) -> ! {
         match done {
             Some(Ok(f)) if !is_game(&f) => {
                 pick.copy = None;
-                pick.err = "That disc isn't a version Delirium reads its numbers from (its key is fetched from the internet the first time).\nYou need your own GTA IV for PC (Steam) or Xbox 360 (not included)".into();
+                pick.err = "That disc isn't a version Delirium reads its numbers from (its key is fetched from the internet the first time).\nYou need your own Grand Theft Auto IV: The Complete Edition for PC (Steam, version 1.2.0.59) or the original Xbox 360 disc (not included)".into();
             }
             Some(Ok(f)) => {
                 save_game(&f);
@@ -6132,6 +6506,9 @@ fn face(sim: &Sim, ped: usize, t: f32) -> Option<[Transform; 6]> {
     if !sim.eyes || sim.watch.is_some() {
         return None;
     }
+    if sim.bone_skin || sim.look(ped).is_some_and(|l| l.3 > 0.0) || ped == 0 && sim.meat.as_ref().is_some_and(|m| m.xray > 0.0) {
+        return None;
+    }
     let clip = |r: Option<&getup::Rise>| sim.getup.as_ref().zip(r).and_then(|(c, r)| c.frames(r));
     let (links, caps, frames, doll, dead, rising): (Vec<Transform>, Vec<Transform>, &[Transform], _, _, _) = match ped {
         0 => (sim.shown().map(|f| f.links.clone()).or_else(|| clip(sim.rises[0].as_ref())).unwrap_or_else(|| sim.agent.doll.frames().collect()),
@@ -6189,6 +6566,25 @@ fn face(sim: &Sim, ped: usize, t: f32) -> Option<[Transform; 6]> {
 
 #[derive(Component)]
 struct BoneMesh(usize, usize);
+
+#[derive(Component)]
+struct SkinBone(usize);
+
+fn bone_skin(sim: NonSend<Sim>, mut q: Query<&mut Visibility, With<SkinBone>>, parts: Query<(Entity, &PartMesh, Has<bevy::light::NotShadowCaster>)>,
+             mut commands: Commands) {
+    let want = if sim.bone_skin { Visibility::Inherited } else { Visibility::Hidden };
+    for mut v in &mut q {
+        v.set_if_neq(want);
+    }
+    for (e, p, off) in &parts {
+        let hide = sim.bone_skin && p.homer().is_some();
+        if hide && !off {
+            commands.entity(e).insert(bevy::light::NotShadowCaster);
+        } else if !hide && off {
+            commands.entity(e).remove::<bevy::light::NotShadowCaster>();
+        }
+    }
+}
 
 #[derive(Component)]
 struct BrokeBone(usize);
@@ -6290,6 +6686,7 @@ pub(crate) fn pbr_tex(assets: &AssetServer, name: String, sharp: bool) -> Handle
             true => ImageSamplerDescriptor { mag_filter: bevy::image::ImageFilterMode::Nearest, ..d },
             false => ImageSamplerDescriptor { anisotropy_clamp: 16, ..d },
         });
+        l.asset_usage = RenderAssetUsages::RENDER_WORLD;
     }).load(format!("embedded://pbr/{name}.ktx2"))
 }
 
@@ -6458,6 +6855,7 @@ fn spawn_world(commands: &mut Commands, meshes: &mut Assets<Mesh>, mats: &mut As
     let red = mats.add(StandardMaterial { base_color: Color::srgb(1.0, 0.1, 0.05), emissive: (*MEAT_RED()), unlit: true, depth_bias: BONE_BIAS, ..default() });
     let voxel = StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.7, ..default() };
     let bone_in = mats.add(StandardMaterial { base_color: BONE_COLOR, perceptual_roughness: 0.6, ..default() });
+    let hollow = mats.add(StandardMaterial { base_color: Color::BLACK, unlit: true, ..default() });
     let aura = mats.add(StandardMaterial { base_color: AURA_GLOW, unlit: true, alpha_mode: AlphaMode::Add,
                                            cull_mode: Some(bevy::render::render_resource::Face::Front), ..default() });
     for (game, layer, crowd, watch) in homer {
@@ -6470,14 +6868,18 @@ fn spawn_world(commands: &mut Commands, meshes: &mut Assets<Mesh>, mats: &mut As
                                     Transform::default(), Visibility::Hidden, RenderLayers::layer(layer), PartMesh { k,  crowd, watch })).id();
             if !game && crowd.is_none_or(|c| c + 1 < HOMERS) && watch.is_none() {
                 let ped = crowd.map_or(0, |c| c + 1);
-                let (bones, sockets) = xray_bones(name, p);
+                let (bones, sockets) = if crowd.is_some() { (speck(), xray_bones(name, p).1.map(|_| speck())) } else { xray_bones(name, p) };
                 let bones = meshes.add(bones);
                 commands.entity(e).with_child((Mesh3d(bones.clone()), MeshMaterial3d(bone.clone()), Transform::default(), Visibility::Hidden,
                                                RenderLayers::layer(layer), BoneMesh(ped, k)));
+                commands.entity(e).with_child((Mesh3d(bones.clone()), MeshMaterial3d(bone_in.clone()), Transform::default(), Visibility::Hidden,
+                                               RenderLayers::layer(layer), SkinBone(ped)));
                 let sockets = sockets.map(|m| {
                     let m = meshes.add(m);
                     commands.entity(e).with_child((Mesh3d(m.clone()), MeshMaterial3d(socket.clone()), Transform::default(), Visibility::Hidden,
                                                    RenderLayers::layer(layer), BoneMesh(ped, k)));
+                    commands.entity(e).with_child((Mesh3d(m.clone()), MeshMaterial3d(hollow.clone()), Transform::default(), Visibility::Hidden,
+                                                   RenderLayers::layer(layer), SkinBone(ped)));
                     m
                 });
                 let (flesh, inner, palette) = (meshes.add(speck()), meshes.add(speck()), assets.add(voxel_palette([255; 4])));
@@ -6486,7 +6888,7 @@ fn spawn_world(commands: &mut Commands, meshes: &mut Assets<Mesh>, mats: &mut As
                     .with_child((Mesh3d(flesh), MeshMaterial3d(voxel), Transform::default(), RenderLayers::layer(layer),
                                  bevy::light::NotShadowCaster))
                     .with_child((Mesh3d(inner), MeshMaterial3d(bone_in.clone()), Transform::default(), RenderLayers::layer(layer)));
-                let glow = part_mesh(meshes, p);
+                let glow = if crowd.is_some() { meshes.add(speck()) } else { part_mesh(meshes, p) };
                 commands.entity(e).with_child((Mesh3d(glow.clone()), MeshMaterial3d(aura.clone()), Transform::from_scale(Vec3::splat(1.25)), Visibility::Hidden,
                                                RenderLayers::layer(layer), BoneMesh(ped, k), AuraMesh));
                 let snapped = (ped == 0).then(|| {
@@ -6627,14 +7029,20 @@ fn xray_bones(name: &str, p: &delirium::ragdoll::PartDef) -> (Mesh, Option<Mesh>
     let mut sockets = None;
     let parts = match name {
         "Head" => {
-            let (d, w, t) = (deep * SKULL, lat * SKULL, tall * SKULL);
-            sockets = [ball(fwd * d * 0.82 + up * t * 0.15 + side * w * 0.38, w * 0.26),
-                       ball(fwd * d * 0.82 + up * t * 0.15 - side * w * 0.38, w * 0.26),
-                       ball(fwd * d * 0.92 - up * t * 0.2, w * 0.1)].into_iter().reduce(|mut a, b| {
-                a.merge(&b).unwrap();
-                a
-            });
-            vec![Mesh::from(Capsule3d::new(r, h * 2.0)).transformed_by(Transform::from_scale(Vec3::splat(SKULL)))]
+            let k = lat * SKULL / 0.79;
+            let at = |v: [f32; 3]| side * v[0] + up * v[1] + fwd * v[2];
+            let place = |m: Mesh| {
+                let mut m = m;
+                for a in [Mesh::ATTRIBUTE_POSITION, Mesh::ATTRIBUTE_NORMAL] {
+                    let pos = a == Mesh::ATTRIBUTE_POSITION;
+                    let v: Vec<[f32; 3]> = m.attribute(a).and_then(|a| a.as_float3()).unwrap_or(&[]).iter()
+                        .map(|&v| if pos { (at(v) * k + up * (tall * SKULL - 1.1 * k)).to_array() } else { at(v).to_array() }).collect();
+                    m.insert_attribute(a, v);
+                }
+                m
+            };
+            sockets = Some(place(skull_mesh(true)));
+            vec![place(skull_mesh(false))]
         }
         "Neck" => vec![rod(-up * tall, up * tall, r * 0.25), ball(Vec3::ZERO, r * 0.35)],
         "Spine0" => spine(&[]),
@@ -6706,7 +7114,7 @@ fn part_shape(p: &delirium::ragdoll::PartDef) -> Mesh {
 }
 
 fn speck() -> Mesh {
-    Sphere::new(1e-5).into()
+    Sphere::new(1e-5).mesh().ico(0).unwrap()
 }
 
 struct Voxels {
@@ -6843,6 +7251,23 @@ impl Voxels {
     }
 }
 
+fn skull_mesh(sockets: bool) -> Mesh {
+    let b = include_bytes!("skull.bin");
+    let word = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap()) as usize;
+    let mut at = 0;
+    if sockets {
+        at = 8 + word(0) * 24 + word(4).next_multiple_of(2) * 2;
+    }
+    let (nv, ni) = (word(at), word(at + 4));
+    let f = |o: usize| (0..nv * 3).map(|c| f32::from_le_bytes(b[o + c * 4..][..4].try_into().unwrap())).collect::<Vec<_>>()
+        .chunks(3).map(|c| [c[0], c[1], c[2]]).collect::<Vec<_>>();
+    let idx = (0..ni).map(|c| u16::from_le_bytes(b[at + 8 + nv * 24 + c * 2..][..2].try_into().unwrap())).collect();
+    Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, f(at + 8))
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, f(at + 8 + nv * 12))
+        .with_inserted_indices(bevy::mesh::Indices::U16(idx))
+}
+
 fn voxel_palette(skin: [u8; 4]) -> Image {
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let px = [skin, [153, 18, 23, 255], [115, 10, 15, 255], [184, 56, 56, 255]].concat();
@@ -6884,7 +7309,7 @@ fn switch(mut sim: NonSendMut<Sim>, mut commands: Commands, mut meshes: ResMut<A
         }
     }
     a.retain(|x| x != "--marge");
-    a.extend(["--body".to_string(), BODIES[sim.body].0.to_string()]);
+    a.extend(["--body".to_string(), (*BODIES())[sim.body].0.to_string()]);
     a.extend(["--rig".to_string(), if sim.rig_rdr2 { "rdr2" } else { "gtaiv" }.to_string(), "--rig-dir".to_string(), sim.rig_dir.clone()]);
     a.extend(["--rig-body".to_string(), sim.rig_body.clone()]);
     let (map, ground) = match scene.as_str() {
@@ -6910,7 +7335,8 @@ fn switch(mut sim: NonSendMut<Sim>, mut commands: Commands, mut meshes: ResMut<A
     (new.show_pops, new.help, new.tab, new.skin) = (sim.show_pops, sim.help, sim.tab, sim.skin);
     new.meat_on = sim.meat_on;
     new.skate3_bails = sim.skate3_bails;
-    (new.ped_color, new.body_alpha, new.skel, new.soft, new.eyes, new.film) = (sim.ped_color, sim.body_alpha, sim.skel, sim.soft, sim.eyes, sim.film);
+    new.step_limit = sim.step_limit;
+    (new.ped_color, new.body_alpha, new.skel, new.soft, new.eyes, new.film, new.bone_skin) = (sim.ped_color, sim.body_alpha, sim.skel, sim.soft, sim.eyes, sim.film, sim.bone_skin);
     apply_settings(&mut new, &settings(&sim));
     new.scene = Some(scene.clone());
     new.agent.strength = sim.agent.strength;
@@ -7049,13 +7475,14 @@ fn bodies(sim: NonSend<Sim>, mut q: Query<(&PartMesh, &mut Transform, &mut Visib
             lit
         };
         let col = part_color(sim.ped_color, delirium_data::nm_asset::PARTS.get(p.k).copied().unwrap_or(""), sim.body_alpha);
-        let col = if sim.clean { col.with_alpha(1.0) } else { col };
+        let col = if sim.bone_skin && p.homer().is_some() { col.with_alpha(0.0) } else if sim.clean { col.with_alpha(1.0) } else { col };
         let mut fresh = false;
         let game_half = false;
         let name = delirium_data::nm_asset::PARTS.get(p.k).copied().unwrap_or("");
         if let Some(d) = sim.build_of(ped).parts.get(p.k).filter(|_| p.watch.is_none() && !game_half) {
             let size = [d.radius, d.half, d.boxed.map_or(0.0, |e| e.x), d.boxed.map_or(0.0, |e| e.y), d.boxed.map_or(0.0, |e| e.z)];
-            if sized.insert(e, size).is_some_and(|s| s != size) {
+            let was = if p.crowd.is_none() || look.is_some() { sized.insert(e, size) } else { Some(size) };
+            if was.is_none_or(|s| s != size) && (p.crowd.is_some() || was.is_some()) {
                 if !look.is_some_and(|l| l.0.get(p.k).is_some_and(|v| v.is_some())) && let Some(mut m) = meshes.get_mut(&shape.0) {
                     *m = part_shape(d);
                 }
@@ -7081,12 +7508,7 @@ fn bodies(sim: NonSend<Sim>, mut q: Query<(&PartMesh, &mut Transform, &mut Visib
                         Some(v) => (v.surface(def), v.mesh(), Some(xray_bones(name, def))),
                         None => (part_shape(def), speck(), None),
                     };
-                    let bones = bones.map_or_else(speck, |(mut b, sockets)| {
-                        if let Some(s) = sockets {
-                            let _ = b.merge(&s);
-                        }
-                        b
-                    });
+                    let bones = bones.map_or_else(speck, |(b, _)| b);
                     for (h, mut m) in [(&shape.0, solid), (&vo.0, flesh), (&vo.1, bones)] {
                         if m.count_vertices() == 0 {
                             m = speck();
@@ -7334,14 +7756,17 @@ fn video(mut commands: Commands, mut sim: NonSendMut<Sim>, mut last: Local<Optio
          sun: Query<(Entity, Has<Fill>), With<DirectionalLight>>) {
     if let Some(i) = info.filter(|_| sim.gpu_now.is_empty()) {
         sim.gpu_now = i.name.clone();
+        let build = std::env::current_exe().and_then(|e| e.metadata()?.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
         let (f, id) = (getup::config_dir().join(FALLBACK), format!("{} {} {}", i.name, i.driver, i.driver_info));
+        let for_id = format!("{id} build {build}");
+        crash::note_gpu(format!("{id} ({:?})", i.backend));
         if let Ok(t) = std::fs::read_to_string(&f) {
             match t.lines().nth(1) {
                 None => drop(std::fs::write(&f, format!("{}
-{id}", t.trim()))),
-                Some(was) if was != id => {
+{for_id}", t.trim()))),
+                Some(was) if was != for_id && was != "manual" => {
                     let _ = std::fs::remove_file(&f);
-                    sim.say(format!("room  new graphics card or driver ({id}): full graphics from the next start"));
+                    sim.say(format!("room  new graphics card, driver or room build ({id}): full graphics from the next start"));
                 }
                 _ => {}
             }
@@ -7488,7 +7913,10 @@ const AA_XESS: u8 = 8;
 
 impl Sim {
     fn aa_now(&self) -> u8 {
-        match self.aa {
+        self.aa_with(self.aa)
+    }
+    fn aa_with(&self, aa: u8) -> u8 {
+        match aa {
             AA_DLAA | AA_DLSS if !self.dlss_ok => AA_MSAA,
             AA_FSR3 if !self.fsr_ok => AA_MSAA,
             AA_XESS if !self.xess_ok => AA_MSAA,
@@ -7734,9 +8162,13 @@ fn fps_limit(sim: NonSend<Sim>, mut win: Query<&mut Window, With<bevy::window::P
     use bevy::window::PresentMode;
     let limit = if in_front(&win) || std::env::var_os("FRAME_LOG").is_some() { sim.fps_limit } else { sim.fps_limit.min(FPS_BACKGROUND) };
     let mode = if limit <= FPS_VSYNC { PresentMode::AutoVsync } else { PresentMode::AutoNoVsync };
+    let shown = if sim.fullscreen { bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current) } else { bevy::window::WindowMode::Windowed };
     for mut w in &mut win {
         if w.present_mode != mode {
             w.present_mode = mode;
+        }
+        if w.mode != shown {
+            w.mode = shown;
         }
     }
     if limit <= FPS_VSYNC || limit >= FPS_FREE {
@@ -8534,7 +8966,7 @@ fn gun_view(mut sim: NonSendMut<Sim>, mut commands: Commands, mut meshes: ResMut
             g.circle(iso, most, c);
         }
         if pellets > 1 {
-            g.rect(iso, Vec2::splat(2.0 * PELLET_SPREAD() * acc * reach), Color::srgba(1.0, 0.6, 0.3, 0.4));
+            g.rect(iso, Vec2::splat(2.0 * acc * reach), Color::srgba(1.0, 0.6, 0.3, 0.4));
         }
     }
     for (from, to, left) in &mut sim.gun.tracers {
@@ -8700,12 +9132,12 @@ fn pusher_mesh(sim: NonSend<Sim>, mut commands: Commands, mut meshes: ResMut<Ass
                mut q: Query<(&mut Transform, &mut Visibility), With<PusherMesh>>) {
     let Ok((mut t, mut v)) = q.single_mut() else {
         let mat = mats.add(StandardMaterial { base_color: Color::srgb(0.6, 0.62, 0.66), perceptual_roughness: 0.6, ..default() });
-        commands.spawn((Mesh3d(meshes.add(Cuboid::new(1.4, 0.5, 1.8))), MeshMaterial3d(mat), Transform::default(), Visibility::Hidden, RenderLayers::layer(1), PusherMesh));
+        commands.spawn((Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))), MeshMaterial3d(mat), Transform::default(), Visibility::Hidden, RenderLayers::layer(1), PusherMesh));
         return;
     };
     *v = match sim.shown().map_or(sim.pusher, |f| f.pusher) {
-        Some((c, vel, _)) => {
-            *t = Transform::from_translation(c).with_rotation(Quat::from_rotation_arc(Vec3::Y, vel.normalize()));
+        Some((c, vel, _, half)) => {
+            *t = Transform::from_translation(c).with_rotation(Quat::from_rotation_arc(Vec3::Y, vel.normalize())).with_scale(half * 2.0);
             Visibility::Visible
         }
         None => Visibility::Hidden,
@@ -8763,7 +9195,7 @@ fn keys(mut sim: NonSendMut<Sim>, k: Res<ButtonInput<KeyCode>>, mut contexts: Eg
     }
     if k.just_pressed(KeyCode::KeyN) {
         let b = if k.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
-            format!("spawn {}", BODIES[sim.spawn_body].0)
+            format!("spawn {}", (*BODIES())[sim.spawn_body].0)
         } else if k.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
             "remove homer".into()
         } else {
@@ -8938,7 +9370,12 @@ fn mouse(mut sim: NonSendMut<Sim>, mut contexts: EguiContexts, buttons: Res<Butt
         bevy::input::mouse::MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     }.clamp(-3.0, 3.0);
     let hero_wheel = sim.hero.is_some() && !sim.driving;
-    let wheel = lines * sim.sens * !(filming || hero_wheel) as u8 as f32;
+    let line_keys = (keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]), keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]));
+    let line_wheel = (line_keys.0 || line_keys.1) && sim.hero.is_none() && !filming;
+    if line_wheel && lines != 0.0 && !sim.over_ui {
+        sim.line_wheel(lines, line_keys.1);
+    }
+    let wheel = lines * sim.sens * !(filming || hero_wheel || line_wheel) as u8 as f32;
     if let Some([yaw, pitch, dist]) = sim.cam.take() {
         (o.yaw, o.pitch, o.dist) = (yaw, pitch, dist);
     }
@@ -9273,7 +9710,8 @@ fn mouse(mut sim: NonSendMut<Sim>, mut contexts: EguiContexts, buttons: Res<Butt
     let fatal = shift && buttons.just_pressed(MouseButton::Right);
     if let Some(c) = cur {
         let ray = camera.viewport_to_world(gt, c).ok();
-        if let (Some(g), Some(ray)) = (sim.grab.as_mut(), ray) {
+        if let (Some(g), Some(ray), true) = (sim.grab.as_mut(), ray, buttons.pressed(MouseButton::Left)) {
+            g.plane = (g.target, -*gt.forward());
             let (p, n) = g.plane;
             let along = ray.direction.dot(n);
             if along.abs() > 1e-4 {
@@ -9282,7 +9720,7 @@ fn mouse(mut sim: NonSendMut<Sim>, mut contexts: EguiContexts, buttons: Res<Butt
             g.pulling |= c.distance(g.press.0) > 5.0;
         }
     }
-    if !buttons.pressed(MouseButton::Left) {
+    if buttons.just_released(MouseButton::Left) {
         if let Some(g) = sim.grab.take().filter(|g| !g.pulling) {
             if g.horse {
                 let imp = g.press.1.normalize_or_zero() * sim.poke;
@@ -9293,6 +9731,27 @@ fn mouse(mut sim: NonSendMut<Sim>, mut contexts: EguiContexts, buttons: Res<Butt
                 sim.poke(g.part, g.press.2, g.press.1);
             }
         }
+    }
+    sim.tie_hover = cur.filter(|_| !sim.over_ui).and_then(|c| (0..sim.ties.len()).filter_map(|i| {
+        let (a, b) = sim.tie_ends(i)?;
+        let (a, b) = (camera.world_to_viewport(gt, a).ok()?, camera.world_to_viewport(gt, b).ok()?);
+        let s = ((c - a).dot(b - a) / (b - a).length_squared().max(1e-6)).clamp(0.0, 1.0);
+        Some((i, c.distance(a + (b - a) * s)))
+    }).filter(|x| x.1 < 14.0).min_by(|x, y| x.1.total_cmp(&y.1)).map(|x| x.0));
+    if keys.just_pressed(KeyCode::KeyT) && !editing && sim.hero.is_none() {
+        let pin = cur.and_then(|c| camera.viewport_to_world(gt, c).ok()).and_then(|r| sim.world.contact(r.origin, *r.direction, 200.0).map(|c| r.origin + *r.direction * c.0));
+        sim.tie(pin, shift_held(&keys));
+    }
+    if keys.just_pressed(KeyCode::KeyL) && !editing && !sim.photo && sim.hero.is_none() {
+        sim.line_leash_key();
+    }
+    if keys.just_pressed(KeyCode::F11) {
+        sim.fullscreen = !sim.fullscreen;
+    }
+    if keys.just_pressed(KeyCode::KeyK) && !editing && !sim.photo && sim.hero.is_none() {
+        sim.line_wrap = !sim.line_wrap;
+        let on = if sim.line_wrap { "on" } else { "off" };
+        sim.say(format!("room  lines wrap round the map: {on}"));
     }
     if sim.hero.is_some() && sim.hero_gun && !sim.driving && kind(sim.weapon) > 0 {
         if let Some(n) = sim.hero.as_ref() {
@@ -9410,6 +9869,7 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
                 }
             }
             ("!look", Some(n)) => sim.skin = LOOKS.iter().find(|l| l.0 == n).map_or(sim.skin, |l| l.1),
+            ("!boneskin", Some(n)) => sim.bone_skin = n == "1",
             ("!pedcol", Some(n)) => if let Some(c) = ped_colour(n) { (sim.ped_color, sim.body_alpha) = c },
             ("!eyes", _) => sim.eyes = !sim.eyes,
             ("!skel", _) => sim.skel = !sim.skel,
@@ -9500,6 +9960,24 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
                 let com = sim.agent.doll.com().0;
                 sim.say(format!("ours  grab {part} to {} (com {})", v3(target), v3(com)));
             }
+            ("!tie", a) => {
+                let pin = a.map(|a| a.split(',').filter_map(|x| x.trim().parse().ok()).collect::<Vec<f32>>()).filter(|v| v.len() == 3).map(|v| Vec3::new(v[0], v[1], v[2]));
+                if sim.grab.as_ref().is_some_and(|g| g.pulling) {
+                    sim.tie(pin, false);
+                }
+            }
+            ("!untie", a) => {
+                if sim.grab.as_ref().is_none_or(|g| !g.pulling) {
+                    sim.tie(None, a == Some("all"));
+                }
+            }
+            ("!reel", Some(a)) => if sim.grab.as_ref().is_some_and(|g| g.pulling) {
+                sim.drag_len = a.parse().unwrap_or(0.0f32).clamp(0.0, 10.0);
+            } else if let Some(t) = sim.ties.last_mut() {
+                t.len = a.parse().unwrap_or(t.len).max(0.05);
+            },
+            ("!linek", Some(a)) => sim.line_k = a.parse().unwrap_or(1.0f32).clamp(0.05, 5.0),
+            ("!leash", _) => sim.line_leash_key(),
             ("!release", _) => {
                 sim.grab = None;
                 let com = sim.agent.doll.com().0;
@@ -9512,6 +9990,7 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
                 sim.fire(part, None, w.next() == Some("fatal"), &[]);
             }
             ("!nododge", _) => sim.no_dodge = !sim.no_dodge,
+            ("!steplimit", _) => sim.step_limit = !sim.step_limit,
             ("!superpunch", _) => sim.button("super punch"),
             #[cfg(feature = "portal")]
             ("!portal", Some(a)) => sim.portal_script(a),
@@ -9625,6 +10104,9 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
             ("!infinite", _) => sim.infinite = !sim.infinite,
             ("!hide", _) => sim.show_ui = !sim.show_ui,
             ("!tab", Some(n)) => sim.tab = n.parse().unwrap_or(1),
+            ("!param", Some(a)) => params::load_param(&mut sim.param_edits, a),
+            ("!variance", Some(v)) => VARIANCE.store(v.parse::<f32>().unwrap_or(1.5).to_bits(), std::sync::atomic::Ordering::Relaxed),
+            ("!seed", Some(n)) => { SEED.store(n.parse().unwrap_or(0), std::sync::atomic::Ordering::Relaxed); ROLLED.with_borrow_mut(|r| *r = None); }
             ("!cam2", a) => sim.cam2 = match a.unwrap_or("").split_whitespace().filter_map(|x| x.parse().ok()).collect::<Vec<f32>>()[..] {
                 [x, y, z, a, b, c] => Some((Vec3::new(x, y, z), Vec3::new(a, b, c))),
                 _ => None,
@@ -9685,6 +10167,9 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
                 if let Some(code) = match key { "n" => Some(KeyCode::KeyN), "r" => Some(KeyCode::KeyR), "x" => Some(KeyCode::KeyX), _ => None } {
                     keys.push((code, Key::Character(key.into())));
                 }
+                if key == "f11" {
+                    keys.push((KeyCode::F11, Key::F11));
+                }
                 if state == ButtonState::Released {
                     keys.reverse();
                 }
@@ -9696,6 +10181,8 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
                 let v: Vec<f32> = a.split(',').filter_map(|x| x.parse().ok()).collect();
                 if let [x, y, z] = v[..] {
                     sim.click_at = Some(Vec3::new(x, y, z));
+                } else if a == "chest" {
+                    sim.click_at = Some(sim.ours().p(CHEST));
                 }
             }
             ("!control", Some(n)) => sim.button(&format!("control {n}")),
@@ -9704,11 +10191,21 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
                 let scene = sim.scene.clone().unwrap_or_else(|| "room".into());
                 sim.switch_to = Some((scene, n == "marge"));
             }
-            ("!body", Some(n)) => if let Some(i) = BODIES.iter().position(|b| b.0 == n) {
+            ("!body", Some(n)) => if let Some(i) = (*BODIES()).iter().position(|b| b.0 == n) {
                 sim.body = i;
                 sim.switch_to = Some((sim.scene.clone().unwrap_or_else(|| "room".into()), nm() == delirium::nmrs::MARGE));
             },
             ("!strength", Some(n)) => sim.agent.strength = n.parse().unwrap_or(1.0),
+            ("!custom", Some(n)) => match n.split(',').filter_map(|x| x.parse().ok()).collect::<Vec<f32>>()[..] {
+                [a, b, c, d, e] => *CUSTOM_SIZE.lock().unwrap() = (a, b, c, d, e, 1.0),
+                [a, b, c, d, e, f] => {
+                    *CUSTOM_SIZE.lock().unwrap() = (a, b, c, d, e, f);
+                    *HOLO.lock().unwrap() = Some(std::time::Instant::now());
+                }
+                _ => {}
+            },
+            ("!height", Some(n)) => *CUSTOM_HEIGHT.lock().unwrap() = n.parse().unwrap_or(0.0),
+            ("!neck", Some(n)) => *CUSTOM_NECK.lock().unwrap() = n.parse().unwrap_or(1.0),
             ("!scene", Some(n)) => {
                 if SCENES.contains(&n) || STAGES.iter().chain(&EXTRAS).any(|t| t.0 == n) {
                     sim.switch_to = Some((n.to_string(), nm() == delirium::nmrs::MARGE));
@@ -9744,8 +10241,10 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
                     Some(sim.ours().p(part) + Vec3::new(v.first().copied().unwrap_or(0.0), v.get(1).copied().unwrap_or(0.0), v.get(2).copied().unwrap_or(0.0)))
                 }
             },
+            ("!sgseed", Some(n)) => sim.sg_seed = n.parse().unwrap_or(1),
             ("!weapon", Some(i)) => sim.weapon = i.parse::<usize>().unwrap_or(0).min(WEAPONS.len() - 1),
             ("!aim", Some(m)) => (sim.aim_gun, sim.gun.placed) = (m == "gun", false),
+            ("!clickmode", Some(m)) => sim.click_shoots = m == "shoot",
             ("!gun", Some(d)) => {
                 let v: Vec<f32> = d.split(',').filter_map(|x| x.parse().ok()).collect();
                 let aim = sim.ours().p(CHEST) + Vec3::new(v.first().copied().unwrap_or(0.0), v.get(1).copied().unwrap_or(0.0), v.get(2).copied().unwrap_or(0.0));
@@ -9755,6 +10254,7 @@ fn scripted(mut sim: NonSendMut<Sim>, time: Res<Time>, mut commands: Commands, m
                 sim.gun.dir = (aim - sim.gun.at).normalize();
                 sim.gun_fire(false);
             }
+            ("!crash", _) => panic!("test crash (script !crash)"),
             ("!quit", _) => {
                 exit.write(AppExit::Success);
             }
@@ -9871,7 +10371,7 @@ impl Sim {
     }
 
     fn learned_done(&mut self) {
-        if self.learned.as_ref().is_none_or(|l| l.2 < learn::STEPS) {
+        if self.learned.as_ref().is_none_or(|l| l.2 < learn::STEPS()) {
             return;
         }
         self.learned = None;
@@ -9925,6 +10425,7 @@ impl Sim {
         if was != self.rdr2_core && self.agent.balancing() {
             self.button("balance");
         }
+        delirium::nmdbm::STEP_LIMIT.store(self.step_limit, std::sync::atomic::Ordering::Relaxed);
         self.tunes_in();
         self.extras_frame();
         self.bridge();
@@ -9988,8 +10489,8 @@ impl Sim {
         self.taxi_frame(1.0 / 60.0);
         let car: Vec<_> = self.cars.iter().map(|&(c, v, _)| delirium::ragdoll::Obstacle { at: c, rot: Quat::from_rotation_arc(Vec3::Y, v.normalize()), centre: c,
             half: Vec3::new(0.92, 2.54, 0.6), vel: v, com: c, ..Default::default() })
-            .chain(self.pusher.iter().map(|&(c, v, _)| delirium::ragdoll::Obstacle { at: c, rot: Quat::from_rotation_arc(Vec3::Y, v.normalize()), centre: c,
-                half: Vec3::new(0.7, 0.25, 0.9), vel: v, com: c, ..Default::default() })).chain(self.taxis.iter().enumerate().flat_map(|(k, t)| [t.obstacle(TAXI_ID + k as i32, TAXI_BELT), t.cabin(CABIN_ID + k as i32, TAXI_BELT)]))
+            .chain(self.pusher.iter().map(|&(c, v, _, half)| delirium::ragdoll::Obstacle { id: PUSHER_ID, at: c, rot: Quat::from_rotation_arc(Vec3::Y, v.normalize()), centre: c,
+                half, vel: v, com: c, ..Default::default() })).chain(self.taxis.iter().enumerate().flat_map(|(k, t)| [t.obstacle(TAXI_ID + k as i32, TAXI_BELT), t.cabin(CABIN_ID + k as i32, TAXI_BELT)]))
             .chain(self.room.bridge.iter().flat_map(|b| (0..b.planks.len()).map(|i| b.plank(&self.room.w[0], i)).enumerate().map(|(i, t)| delirium::ragdoll::Obstacle {
                 id: PLANK_ID + i as i32, at: t.translation, rot: t.rotation, centre: t.translation - Vec3::Z * 1000.0, ..Default::default() })))
             .chain(world::plat(&self.room.stage, self.room.shook).zip(world::plat(&self.room.stage, self.room.shook + 1.0 / 60.0)).map(|((at, rot), (next, turn))| {
@@ -9998,6 +10499,7 @@ impl Sim {
                 delirium::ragdoll::Obstacle { id: PLAT_ID, at, rot, centre: at, half: (*world::PLAT_HALF()), vel: (next - at) * 60.0, spin: axis * angle * 60.0, com: at, ..Default::default() }
             })).collect();
         self.pull();
+        self.pull_ties();
         self.soak();
         self.soak_hero(1.0 / 60.0, true);
         self.fire_frame(1.0 / 60.0);
@@ -10089,7 +10591,7 @@ impl Sim {
                 self.explode(at);
             }
         }
-        if let Some((c, v, t)) = self.pusher.as_mut() {
+        if let Some((c, v, t, _)) = self.pusher.as_mut() {
             (*c, *t) = (*c + *v / 60.0, *t - 1.0 / 60.0);
             if *t <= 0.0 {
                 self.pusher = None;
@@ -10113,6 +10615,9 @@ impl Sim {
                                     cars: self.cars.clone(), pusher: self.pusher });
         {
             let (com, v) = self.agent.doll.com();
+            let yaw = |f: Vec3| f.y.atan2(f.x).to_degrees();
+            let game_yaw = String::new();
+            let yaws = format!(" | yaw o{:.1}{game_yaw}", yaw(self.ours().fwd));
             if let Some(r) = self.rec.as_mut() {
                 let d = &self.agent.doll;
                 let mut low: Vec<(usize, Vec3)> = d.frames().map(|f| f.translation).enumerate().collect();
@@ -10123,7 +10628,7 @@ impl Sim {
                             h.iter().map(|x| format!("{:.3},{:.3},{:.3}", x.1.x + 1.5, x.1.y, x.1.z)).collect::<Vec<_>>().join(" "))
                 }).collect();
                 let crowd: String = self.crowd.iter().map(|(a, _)| { let p = a.doll.com().0; format!(" | crowd {:.3} {:.3} {:.3}", p.x, p.y, p.z) }).collect();
-                let _ = writeln!(r, "- - - - - - - | {:.3} {:.3} {:.3} {:.3} {:.3} | {}{crowd}", self.steps as f32 / 60.0, com.x, com.y, com.z, v.length(), feet.join(" | "));
+                let _ = writeln!(r, "- - - - - - - | {:.3} {:.3} {:.3} {:.3} {:.3} | {}{crowd}{yaws}", self.steps as f32 / 60.0, com.x, com.y, com.z, v.length(), feet.join(" | "));
             }
         }
         if self.look_stop.is_some_and(|t| self.steps as f32 / 60.0 >= t) {
@@ -10692,7 +11197,10 @@ fn step(mut sim: NonSendMut<Sim>, time: Res<Time>, mut timing: Local<(f32, f32, 
         *timing = (timing.0 + time.delta_secs() * 1000.0, timing.1 + started.elapsed().as_secs_f32() * 1000.0, timing.2 + 1);
         if timing.0 >= 1000.0 {
             let n = timing.2 as f32;
-            eprintln!("frame {:.1} FPS, {:.1} ms a frame, physics {:.1} ms", n * 1000.0 / timing.0, timing.0 / n, timing.1 / n);
+            let s = sim.ours();
+            let (lean, fwd) = (s.p(HEAD) - s.p(0), s.fwd);
+            eprintln!("frame {:.1} FPS, {:.1} ms a frame, physics {:.1} ms, hips {:.3} m, lean {:.2} {:.2}, facing {:.2} {:.2}", n * 1000.0 / timing.0, timing.0 / n,
+                      timing.1 / n, s.p(0).z, lean.x, lean.y, fwd.x, fwd.y);
             *timing = (0.0, 0.0, 0);
         }
     }
@@ -10700,7 +11208,7 @@ fn step(mut sim: NonSendMut<Sim>, time: Res<Time>, mut timing: Local<(f32, f32, 
     if let Some(w) = sim.watch.as_mut() {
         w.t += dt;
         w.check += time.delta_secs();
-        if w.t > learn::STEPS as f32 / 60.0 + 1.0 {
+        if w.t > learn::STEPS() as f32 / 60.0 + 1.0 {
             w.t = 0.0;
         }
         if w.check > 1.0 {
@@ -10840,6 +11348,46 @@ fn grid_line(g: &mut Gizmos, pool: bool, a: Vec3, b: Vec3, c: Color) {
     }
 }
 
+fn rope_line(ours: &mut Gizmos<OursGizmos>, world: &Collision, a: Vec3, b: Vec3, k: f32, slack: f32, leash: bool, lit: bool) {
+    let t = if leash { 1.0 } else { ((k / 0.05).ln() / 100f32.ln()).clamp(0.0, 1.0) };
+    let loose = (2.0 * slack.max(0.0) / (a.distance(b) + slack.max(0.0)).max(0.01)).min(1.0);
+    let rope = Color::srgb(1.0, 0.95 - 0.8 * t, 0.35 - 0.3 * t).with_alpha(if slack > 0.01 { 0.6 } else { 1.0 });
+    let colour = |s: f32| if leash { let l = loose * (4.0 * s * (1.0 - s)).sqrt(); Color::srgb(1.0 - 0.9 * l, 0.45 - 0.25 * l, 0.75 - 0.15 * l) } else { rope };
+    let sag = (3.0 * a.distance(b) * slack.max(0.0) / 8.0).sqrt();
+    let pts: Vec<Vec3> = (0..=24).map(|i| {
+        let s = i as f32 / 24.0;
+        let (q, drop) = (a.lerp(b, s), 4.0 * sag * s * (1.0 - s));
+        q - Vec3::Z * world.cast(q, -Vec3::Z, drop + 0.01).map_or(drop, |(t, _)| (t - 0.01).clamp(0.0, drop))
+    }).collect();
+    let gap = 0.04 * (1.0 - t / 0.8).max(0.0);
+    let (u, v) = (b - a).normalize_or(Vec3::Z).any_orthonormal_pair();
+    let strands = 1 + (t * 8.0).round() as usize + 2 * lit as usize;
+    for i in 0..strands {
+        let off = if i == 0 { Vec3::ZERO } else { let r = i as f32 / (strands - 1) as f32 * std::f32::consts::TAU; (u * r.cos() + v * r.sin()) * 0.008 };
+        let (mut on, mut left) = (true, 0.04f32);
+        for (j, w) in pts.windows(2).enumerate() {
+            let c = colour((j as f32 + 0.5) / 24.0);
+            let (mut p, q) = (w[0] + off, w[1] + off);
+            let mut seg = p.distance(q);
+            while seg > 1e-5 {
+                let step = if gap > 0.0 { left.min(seg) } else { seg };
+                let n = p + (q - p).normalize_or_zero() * step;
+                if on {
+                    ours.line(p, n, c);
+                }
+                (p, seg) = (n, seg - step);
+                if gap > 0.0 {
+                    left -= step;
+                    if left <= 1e-6 {
+                        on = !on;
+                        left = if on { 0.04 } else { gap };
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn draw(sim: NonSend<Sim>, mut g: Gizmos, mut ours: Gizmos<OursGizmos>, ) {
     let dark = sim.skin.sky.iter().sum::<f32>() < 1.0;
     for (j, o) in sim.room.objs.iter().enumerate() {
@@ -10911,8 +11459,24 @@ fn draw(sim: NonSend<Sim>, mut g: Gizmos, mut ours: Gizmos<OursGizmos>, ) {
     }
     if let Some((g, f)) = sim.grab.as_ref().filter(|g| g.pulling).and_then(|g| Some((g, if g.horse { horse_fr.get(g.part)? } else { fr.get(g.part)? }))) {
         let at = f.translation + f.rotation * g.local;
-        ours.line(at, g.target, Color::srgb(0.3, 0.9, 1.0));
+        rope_line(&mut ours, &sim.world, at, g.target, sim.line_k, sim.drag_len - at.distance(g.target), sim.line_leash, false);
         ours.sphere(Isometry3d::from_translation(g.target), 0.03, Color::srgb(0.3, 0.9, 1.0));
+    }
+    for (i, t) in sim.ties.iter().enumerate() {
+        let f = if t.homer == sim.homer_id { fr.get(t.part).copied() } else {
+            sim.bench.iter().position(|b| b.homer_id == t.homer).and_then(|i| sim.crowd.get(i)?.0.doll.frames().nth(t.part))
+        };
+        let Some(f) = f else { continue };
+        let at = f.translation + f.rotation * t.local;
+        let lit = sim.tie_hover == Some(i);
+        let (pivot, used) = t.pivot();
+        let mut p = t.anchor;
+        for &b in &t.bends {
+            rope_line(&mut ours, &sim.world, p, b, t.k, 0.0, t.leash, lit);
+            p = b;
+        }
+        rope_line(&mut ours, &sim.world, at, pivot, t.k, t.len - used - at.distance(pivot), t.leash, lit);
+        ours.sphere(Isometry3d::from_translation(t.anchor), if lit { 0.07 } else { 0.04 }, Color::srgb(0.85, 0.85, 0.9));
     }
     if sim.arrows && !sim.clean {
         for (k, f) in fr.iter().enumerate() {
@@ -10984,7 +11548,7 @@ fn skeleton<T: GizmoConfigGroup>(g: &mut Gizmos<T>, build: &Build, tint: Option<
 }
 
 const RESET_TIP: &str = "Stand Homer back up (R)";
-const TIPS: [(&str, &str); 50] = [
+const TIPS: [(&str, &str); 51] = [
     ("skate", "Skate 3 mode (J): Homer on a skateboard, run by the Skate 3 Rust engine on your own Skate 3 (link it in Settings, Skate 3 · bonus). W push, S brake, A/D steer, Space ollie, Q kickflip, E heelflip, hold the wheel button and move the mouse for the right stick's flick tricks, Shift/Ctrl crouch and grab, F (X), Z/X bumpers, land on a rail or ledge to grind. R off the board: WASD walk, Shift run, Space jump, F throw the board, Ctrl drop it, either again calls it back, R back on. Bails are Skate 3's own or Homer's ragdoll (Settings, Skate 3 · bonus); after a ragdoll he gets up and walks on as in Skate 3. J leaves Skate 3 mode. A gamepad works as in Skate 3."),
     ("throw ball", "Throws a ball at Homer. Hold Ctrl and point first: it goes there instead."), ("throw box", "Throws a box at Homer. Hold Ctrl and point first: it goes there instead."),
     ("drop crate", "Drops a heavy crate on Homer."), ("crowd", "Four more peds beside Homer, balancing. Again: take them away."), ("grid", "24 more peds in a grid round Homer. Again: take them away."),
@@ -11001,7 +11565,7 @@ const TIPS: [(&str, &str); 50] = [
     ("#eyes", "Homer's eyes: they look where he's reacting to, blink, squint when he's hurt and shut when he's out."),
     ("#brows", "Homer's eyebrows: they show when he's scared, hurt or stumbling."),
     ("explosion pile", "Barrels and crates in front of Homer that blow up 2 s later."), ("wrecking ball", "A 250 kg ball on a rope swings through Homer."),
-    ("push front", "A slab slides into Homer from the front; he braces against it."), ("push back", "A slab shoves Homer from behind; his balance catches it."), ("taxi", "4 parked taxis to drive (with Hero: F gets in and out, W / S drive, A / D steer)."),
+    ("push front", "A slab slides into Homer from the front; he braces against it."), ("push back", "A slab shoves Homer from behind; his balance catches it."), ("push fast", "A floating box flies at Homer's chest from the front, 3x as fast as Push from front; he braces."), ("taxi", "4 parked taxis to drive (with Hero: F gets in and out, W / S drive, A / D steer)."),
     ("clear taxis", "Takes the parked taxis away."),
     ("fall", "Lifts Homer 3 m and lets him fall."), ("high fall", "Lifts Homer 12 m and lets him fall."), ("clear", "Takes away thrown balls, boxes and crates."), ("ice", "Makes the floor ice. Again: back to concrete."),
     ("replay", "Plays the last 10 s again (the speed buttons slow it down). Press again to stop."),
@@ -11086,6 +11650,21 @@ fn ui(mut contexts: EguiContexts, mut sim: NonSendMut<Sim>, mut log_open: Local<
         ctx.set_fonts(f);
         return Ok(());
     }
+    let last = crash::pending().clone();
+    if let Some(text) = last {
+        egui::Window::new("The room crashed last time").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            ui.label("It saved a report (crash.txt, in the room's folder). Sending it helps fix it: a GitHub page opens filled in with it, and you press Submit.");
+            ui.horizontal(|ui| {
+                if ui.button("Report crash").clicked() {
+                    crash::report(&text);
+                    *crash::pending() = None;
+                }
+                if ui.button("Not now").clicked() {
+                    *crash::pending() = None;
+                }
+            });
+        });
+    }
     ctx.global_style_mut(|s| {
         s.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
         s.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(15.0));
@@ -11158,6 +11737,25 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
     }
     let mono = |s: String| egui::RichText::new(s).monospace();
     let mut pressed: Option<String> = None;
+    let dragging = sim.grab.as_ref().is_some_and(|g| g.pulling);
+    if (dragging || !sim.ties.is_empty()) && sim.hero.is_none() {
+        let picked = sim.picked_tie().filter(|_| !dragging);
+        let (k, leash) = match picked.map(|i| &sim.ties[i]) { Some(t) => (t.k, t.leash), None => (sim.line_k, sim.line_leash) };
+        let kind = if leash { "L  leash (locked) / rope".into() } else { format!("L  leash / rope      Ctrl + Scroll Wheel  tight / stretchy ({} {k:.2}x)", if k < 0.3 { "stretchy" } else if k < 2.0 { "medium" } else { "tight" }) };
+        let t = match picked {
+            None => format!("T  tie it here      {kind}      Alt + Scroll Wheel  length ({:.2} m)", sim.drag_len),
+            Some(i) => {
+                let which = if sim.ties.len() > 1 { format!("Line {} of {} (point at a line to pick it)      ", i + 1, sim.ties.len()) } else { String::new() };
+                let wrap = if sim.line_wrap { "on" } else { "off" };
+                format!("{which}{kind}      Alt + Scroll Wheel  length ({:.2} m)      K  wrap round walls ({wrap})      T  cut it      Shift+T  cut all", sim.ties[i].len)
+            }
+        };
+        egui::Area::new("line keys".into()).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(view.center_bottom() - egui::vec2(0.0, 14.0)).interactable(false).show(ctx, |ui| {
+            egui::Frame::new().fill(egui::Color32::from_black_alpha(150)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(10, 5)).show(ui, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(t).small().color(egui::Color32::from_gray(235))).extend());
+            });
+        });
+    }
 
     sim.tab = active_tab(sim.tab);
     let mut root = egui::Ui::new(ctx.clone(), "root".into(), egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.content_rect()));
@@ -11179,8 +11777,8 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
             if ui.button("Reset pose").on_hover_text(RESET_TIP).clicked() { pressed = Some("RESET pose".into()); }
             if ui.button("Reset here").on_hover_text("Stand Homer back up where he is, facing his way (Shift+R)").clicked() { pressed = Some("RESET here".into()); }
             ui.separator();
-            egui::ComboBox::from_id_salt("bar body").width(64.0).selected_text(BODIES[sim.spawn_body].1).show_ui(ui, |ui| {
-                for (i, (_, n, h, m, _)) in BODIES.iter().enumerate() {
+            egui::ComboBox::from_id_salt("bar body").width(64.0).selected_text((*BODIES())[sim.spawn_body].1).show_ui(ui, |ui| {
+                for (i, (_, n, h, m, _)) in (*BODIES()).iter().enumerate() {
                     ui.selectable_value(&mut sim.spawn_body, i, *n).on_hover_text(format!("{h:.2} m, {m:.0} kg"));
                 }
             }).response.on_hover_text("The body the next spawned Homer has");
@@ -11195,9 +11793,12 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                     VARIANCE.store(v.to_bits(), std::sync::atomic::Ordering::Relaxed);
                 }
             }
+            if sim.spawn_body == CUSTOM {
+                ui.menu_button("Sizes", custom_ui).response.on_hover_text("The custom body's legs, arms, trunk, width and weight");
+            }
             if ui.add_enabled(sim.bench.len() + 1 < HOMERS, egui::Button::new("Spawn Homer"))
                 .on_hover_text(format!("Another Homer of this body, 2 m in front of the one you control (Shift+N); up to {HOMERS}")).clicked() {
-                pressed = Some(format!("spawn {}", BODIES[sim.spawn_body].0));
+                pressed = Some(format!("spawn {}", (*BODIES())[sim.spawn_body].0));
             }
             if ui.add_enabled(sim.can_remove(), egui::Button::new("Remove")).on_hover_text("Remove the Homer you control, a spawned one; control passes to the next (Ctrl+N)").clicked() {
                 pressed = Some("remove homer".into());
@@ -11361,7 +11962,8 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
             let start = stripe.left() + stripe.width() * i as f32 / 5.0;
             ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(start, stripe.top()), egui::vec2(stripe.width() / 5.0, 4.0)), 0.0, color);
         }
-        ui.label(section_title(if nm() == delirium::nmrs::MARGE { "Marge" } else { "Homer" }));
+        let who = if nm() == delirium::nmrs::MARGE { "Marge" } else { "Homer" };
+        ui.label(section_title(&if sim.body == 1 { who.to_string() } else { format!("{who} · {}", (*BODIES())[sim.body].1) }));
         ui.label(egui::RichText::new(if state.is_empty() { "Ready" } else { &state }).color(DIM));
         let hp = if sim.god { 1.0 } else { (sim.health / 200.0).clamp(0.0, 1.0) };
         ui.add(egui::ProgressBar::new(hp).desired_height(8.0).fill(egui::Color32::from_rgb(93, 194, 159)));
@@ -11390,20 +11992,17 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
         ui.separator();
         ui.add_space(4.0);
         egui::ScrollArea::vertical().id_salt(("section", sim.tab)).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).auto_shrink([false, false]).show(ui, |ui| {
+        ui.set_max_width(ui.available_width() - ui.spacing().scroll.allocated_width());
         if sim.tab & (1 << 0) != 0 {
             ui.add_space(6.0);
             ui.label(section_title("Reactions"));
+            ui.checkbox(&mut sim.step_limit, "Step limit")
+                .on_hover_text("As in the game: a stumbling Homer falls after so many steps. Off: he keeps stepping until he finds his balance.");
             info(ui, "Start a reaction, then poke, shoot or pull Homer to see how he responds.");
             let per = per_row(ui, 108.0);
             egui::Grid::new("beh").spacing([10.0, 8.0]).show(ui, |ui| {
                 for (i, b) in BEHAVIOURS.iter().filter(|b| !b.starts_with("STOP")).enumerate() {
-                    let label = match *b {
-                        "balance" => "Balance", "drunk" => "Drunk", "windmill" => "Windmill arms", "pedal" => "Pedal legs",
-                        "writhe" => "Writhe", "rollup" => "Roll up", "catchfall" => "Catch a fall", "highfall" => "High fall",
-                        "stairs" => "Tumble on stairs", "shot" => "Shot reaction", "flinch" => "Flinch", "brace" => "Brace for impact",
-                        "look" => "Look around", "point" => "Point", "lean" => "Lean", "relax" => "Relax",
-                        "stayup" => "Stay upright", "foetal" => "Foetal curl", "grab" => "Grab", "overwall" => "Climb over wall", _ => b,
-                    };
+                    let label = reaction_label(b);
                     if ui.add_sized([108.0, 44.0], egui::Button::new(label).wrap()).on_hover_text(TIPS.iter().find(|t| t.0 == *b).map_or(*b, |t| t.1)).clicked() {
                         pressed = Some(b.to_string());
                     }
@@ -11523,7 +12122,7 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
 
         if sim.tab & (1 << 9) != 0 {
             let s = &mut *sim;
-            params::tab(ui, &mut s.param_edits, &mut s.param_search, &mut s.param_changed_only, &mut s.rdr2_pick, s.rdr2);
+            params::tab(ui, &mut s.param_edits, &mut s.param_search, &mut s.param_changed_only, &mut pressed, &mut s.rdr2_pick, s.rdr2);
         }
         if sim.tab & (1 << 1) != 0 {
             ui.add_space(6.0);
@@ -11551,6 +12150,17 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
             if !shoots {
                 slide(ui, "Poke strength", &mut sim.poke, 1.0, 100.0, " N·s")
                     .on_hover_text("How hard a left click (poke) pushes the body part (N s).");
+                sub(ui, "Drag line");
+                slide(ui, "Line stretch → tight", &mut sim.line_k, 0.05, 5.0, "x")
+                    .on_hover_text("Ctrl + Scroll Wheel: up tighter, down stretchier (the drag's line; with lines tied and no drag, the one you point at, else the newest tied one).");
+                ui.checkbox(&mut sim.line_wrap, "Lines wrap round the map (K)").on_hover_text("Tied lines, rope or leash, catch on walls and corners and hold him from there. Off: straight through.");
+                ui.checkbox(&mut sim.line_leash, "Leash (L): the line locks at its length").on_hover_text("No stretch at all: he can swing on it but never go further. L switches the drag's line, or with no drag the newest tied one (locked where it is now).");
+                info(ui, "L: leash or stretchy rope. Ctrl + Scroll Wheel: up tight, down stretchy. Alt + Scroll Wheel: longer or shorter. The line shows it: thin, dashed and yellow is a bungee; thick, solid and red a tight rope; a leash pink when taut, dark blue when slack.");
+                info(ui, "A tied line is as long as when you tied it: slack (hanging) when he's nearer, holding past that. Point at a line to pick it: L, the scroll wheels and T act on that one, else the newest.");
+                info(ui, "While dragging, T ties the line to the map where the pointer is (or right there in the air). Drag him again as much as you like. T cuts the newest line, Shift+T all.");
+                if !sim.ties.is_empty() && ui.button(format!("Cut all lines ({})", sim.ties.len())).clicked() {
+                    sim.tie(None, true);
+                }
             }
             info(ui, if sim.aim_gun { "Floating: the weapon floats by the pointer; click to fire or swing." } else { "Camera: you shoot from the camera at what you click." });
             ui.add_space(4.0);
@@ -11599,7 +12209,7 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
             slide(ui, "Object weight", &mut sim.room.weight, 0.25, 4.0, "×");
             });
             ui.collapsing("Impact tests", |ui| {
-            pressed = pressed.take().or(tiles(ui, "impact tests", &[("push front", false, "Push from front".into()), ("push back", false, "Push from behind".into()),
+            pressed = pressed.take().or(tiles(ui, "impact tests", &[("push front", false, "Push from front".into()), ("push back", false, "Push from behind".into()), ("push fast", false, "Box from front (fast)".into()),
                 ("car", false, "Car impact".into()), ("fall", false, "Drop Homer".into()), ("high fall", false, "High drop".into()),
                 ("explosion pile", false, "Explosion pile".into()), ("wrecking ball", false, "Wrecking ball".into())]));
             });
@@ -11652,22 +12262,22 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
             info(ui, "Control Homer, change his reactions, or play as the Hero.");
             ui.horizontal_wrapped(|ui| {
                 ui.label("Body");
-                for (i, (_, n, h, m, _)) in BODIES.iter().enumerate() {
+                for (i, (_, n, h, m, _)) in (*BODIES()).iter().enumerate() {
                     let tip = if sim.bench.is_empty() { format!("{h:.2} m, {m:.0} kg (restarts the scene)") } else { format!("{h:.2} m, {m:.0} kg: the Homer you control, where he stands") };
                     if ui.selectable_label(sim.body == i, *n).on_hover_text(tip).clicked() && sim.body != i {
                         if sim.bench.is_empty() {
                             sim.body = i;
                             sim.switch_to = Some((sim.scene.clone().unwrap_or_else(|| "room".into()), nm() == delirium::nmrs::MARGE));
                         } else {
-                            pressed = Some(format!("body {}", BODIES[i].0));
+                            pressed = Some(format!("body {}", (*BODIES())[i].0));
                         }
                     }
                 }
             });
             sub(ui, "Homers");
             ui.horizontal_wrapped(|ui| {
-                egui::ComboBox::from_id_salt("spawn body").selected_text(BODIES[sim.spawn_body].1).show_ui(ui, |ui| {
-                    for (i, (_, n, h, m, _)) in BODIES.iter().enumerate() {
+                egui::ComboBox::from_id_salt("spawn body").selected_text((*BODIES())[sim.spawn_body].1).show_ui(ui, |ui| {
+                    for (i, (_, n, h, m, _)) in (*BODIES()).iter().enumerate() {
                         ui.selectable_value(&mut sim.spawn_body, i, *n).on_hover_text(format!("{h:.2} m, {m:.0} kg"));
                     }
                 });
@@ -11682,8 +12292,11 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                         VARIANCE.store(v.to_bits(), std::sync::atomic::Ordering::Relaxed);
                     }
                 }
+                if sim.spawn_body == CUSTOM {
+                    ui.vertical(custom_ui);
+                }
                 if ui.add_enabled(sim.bench.len() + 1 < HOMERS, egui::Button::new("Spawn Homer")).on_hover_text("Another Homer of this body, 2 m in front of the one you control, balancing (Shift+N)").clicked() {
-                    pressed = Some(format!("spawn {}", BODIES[sim.spawn_body].0));
+                    pressed = Some(format!("spawn {}", (*BODIES())[sim.spawn_body].0));
                 }
             });
             if !sim.bench.is_empty() {
@@ -11691,7 +12304,7 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                 all.sort();
                 for (id, body, on) in all {
                     ui.horizontal(|ui| {
-                        ui.label(format!("Homer {} · {}", id + 1, BODIES[body].1));
+                        ui.label(format!("Homer {} · {}", id + 1, (*BODIES())[body].1));
                         if on {
                             ui.label(egui::RichText::new("controlled").color(HI));
                         } else {
@@ -11735,6 +12348,7 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                     }
                 }
             });
+            ui.checkbox(&mut sim.bone_skin, "Skeleton").on_hover_text("Play as the skeleton: the Homers drawn as their bones.");
             let mut see = 1.0 - sim.body_alpha;
             if ui.add_enabled(!sim.clean, egui::Slider::new(&mut see, 0.0..=0.9).text("See-through").custom_formatter(|x, _| if x <= 0.0 { "solid".into() } else { format!("{:.0}%", x * 100.0) }))
                 .on_hover_text("How much you see through the bodies. Solid hides the skeleton inside; Clean view makes them solid too.").changed() {
@@ -11863,7 +12477,7 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                 }
                 ui.add_enabled(sim.rt_now() == 1, egui::Checkbox::new(&mut sim.restir, gpu("ReSTIR", 2)))
                     .on_hover_text("Ray-traced lighting reuses light paths between pixels and frames: finer shadows and steadier light, for a good chunk of speed.")
-                    .on_disabled_hover_text("With ray-traced lighting (Renderer: ray traced).");
+                    .on_disabled_hover_text("Ray traced only: path tracing traces every light path itself and has no use for it.");
             });
             ui.add_space(6.0);
             egui::CollapsingHeader::new(egui::RichText::new("Room appearance").strong().size(15.0)).default_open(true).show_unindented(ui, |ui| {
@@ -11928,7 +12542,7 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
                 }
                 ui.add_enabled(sim.ssao > 0, egui::Slider::new(&mut sim.ao_strength, 0.0..=2.0).text("Ambient occlusion strength").custom_formatter(|x, _| format!("{:.0}%", x * 100.0)))
                     .on_hover_text("How dark ambient occlusion makes the creases. It darkens all the light there, the sun's too, as most games do.");
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let mut q = sim.fire as f32;
                     if ui.add(egui::Slider::new(&mut q, 0.0..=FIRE_HIGH as f32).step_by(1.0).text(gpu("Fire", 1))
                         .custom_formatter(|x, _| ["wireframe", "flames", "flames + light", "flames + light on Homer"][x as usize].into()))
@@ -12078,6 +12692,24 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
             });
             let wants = !sim.gpu.is_empty() && !sim.gpu_now.to_lowercase().contains(&sim.gpu.to_lowercase());
             info(ui, &format!("In use: {}.{}", sim.gpu_now, if wants { " Restart the room to switch." } else { "" }));
+            if cfg!(windows) {
+                let (now, manual) = RENDERER.get().copied().unwrap_or((0, false));
+                let next = match std::fs::read_to_string(getup::config_dir().join(FALLBACK)).unwrap_or_default().lines().next().unwrap_or("").trim() { "plain" => 1, "dx12" => 2, _ => 0 };
+                sub(ui, "Graphics mode");
+                ui.horizontal_wrapped(|ui| {
+                    for (k, (label, tip)) in [("Full (Vulkan)", "Every feature: DLSS, FSR 3, XeSS, ray tracing."), ("Plain Vulkan", "No upscalers' hooks: for a driver that crashes starting full."),
+                        ("DirectX 12", "For a card whose Vulkan driver crashes either way. No FSR 3, XeSS or DLSS.")].into_iter().enumerate() {
+                        if ui.selectable_label(next == k, label).on_hover_text(tip).clicked() && next != k {
+                            pick_renderer(k);
+                        }
+                    }
+                });
+                if now > 0 && !manual && next == now && ui.button("Try full graphics again").on_hover_text("The room fell back to a safer renderer after the graphics driver crashed starting it. This tries every feature again from the next start (if it crashes again, it falls back by itself).").clicked() {
+                    pick_renderer(0);
+                }
+                let why = if now == 0 { String::new() } else if manual { " (your pick)".into() } else { " (a safer one, after the graphics driver crashed starting the room)".into() };
+                info(ui, &format!("In use: {}{why}.{}", ["Full (Vulkan)", "Plain Vulkan", "DirectX 12"][now], if next != now { " Restart the room to switch." } else { "" }));
+            }
             sub(ui, "Display");
             let up = sim.fixed_size();
             ui.add_enabled(!up, egui::Slider::new(&mut sim.render_scale, RENDER_SCALE_MIN..=RENDER_SCALE_MAX).text(gpu("Resolution", 3)).custom_formatter(|x, _| format!("{:.0}%", x * 100.0)))
@@ -12099,11 +12731,13 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
             let s = if (sim.render_scale - 1.0).abs() > 0.001 && !up { sim.render_scale } else { 1.0 };
             let (drawn, shown) = ((v / r).round(), (v / s).round());
             info(ui, &format!("Drawn at {}×{} pixels, shown at {}×{}.", drawn.x, drawn.y, shown.x, shown.y));
+            ui.checkbox(&mut sim.fullscreen, "Fullscreen (F11)").on_hover_text("The whole screen, no window border, on the monitor the window is on. F11 switches it any time.");
             ui.add(egui::Slider::new(&mut sim.fps_limit, FPS_VSYNC..=FPS_FREE).step_by(1.0).text("Frame rate limit")
                 .custom_formatter(|x, _| if x <= FPS_VSYNC as f64 { "monitor (V-Sync)".into() } else if x >= FPS_FREE as f64 { "unlimited".into() } else { format!("{x:.0} FPS") }))
                 .on_hover_text("The most frames a second it draws. Monitor matches your screen and never tears; a number caps it there (lower keeps the graphics card cooler and quieter); unlimited is as fast as it can go. With the window in the background it never goes over 60.");
             sub(ui, "Anti-aliasing & upscaling");
             let methods: Vec<u8> = (0..=AA_TAA).chain(sim.fsr_ok.then_some(AA_FSR3)).chain(sim.xess_ok.then_some(AA_XESS)).chain(if sim.dlss_ok { vec![AA_DLAA, AA_DLSS] } else { vec![] }).collect();
+            let methods: Vec<u8> = methods.into_iter().filter(|&k| sim.aa_with(k) == k).collect();
             let mut aa = sim.aa_now();
             egui::ComboBox::from_label(gpu("Anti-aliasing", 0)).selected_text(AA_NAMES[aa as usize]).show_ui(ui, |ui| {
                 for &k in &methods {
@@ -12112,6 +12746,11 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
             }).response.on_hover_text("Smooths jagged edges; one method at a time. FXAA: cheapest, a little blurry. SMAA: sharper, still cheap. MSAA: clean edges, costs more on a slow graphics card. TAA: smoothest, can smear when things move fast. FSR 3: AMD's, on any graphics card; draws the room smaller and rebuilds it sharp, much faster. XeSS: Intel's, like FSR 3, best on Intel Arc cards. DLAA: NVIDIA's, the best looking. DLSS: NVIDIA's, like FSR 3, sharper.");
             if aa != sim.aa_now() {
                 sim.aa = aa;
+            }
+            if sim.rt_now() > 0 {
+                info(ui, if sim.rt_now() == 2 { "Path tracing picks its own: DLAA (its Ray Reconstruction), else none. Ray tracing off for the rest." }
+                    else if sim.dlss_ok { "Ray tracing needs DLAA or DLSS (their Ray Reconstruction cleans up its noise). Ray tracing off for the rest." }
+                    else { "Ray tracing needs TAA or better (it's noisy). Ray tracing off for the rest." });
             }
             if !sim.fsr_ok {
                 info(ui, if cfg!(windows) { "FSR 3 needs amd_fidelityfx_vk.dll beside the room." } else { "FSR 3 is Windows only for now." });
@@ -12188,7 +12827,8 @@ WASD/QE move (Shift fast)  right-drag turn  wheel zoom  Space play/freeze  K kee
             }
             sub(ui, "Mouse & keyboard");
             egui::Grid::new("keys").max_col_width(170.0).spacing([12.0, 8.0]).striped(true).show(ui, |ui| {
-                for (k, what) in [("click", if sim.aim_gun { "fire or swing the floating weapon" } else if sim.click_shoots { "shoot a body part" } else { "poke a body part" }), ("drag", "pull a body part (camera aim)"), ("Shift + click", "shoot a body part (camera aim)"), ("Shift + right click", "fatal shot"),
+                for (k, what) in [("click", if sim.aim_gun { "fire or swing the floating weapon" } else if sim.click_shoots { "shoot a body part" } else { "poke a body part" }), ("drag", "pull a body part (camera aim)"), ("T (dragging)", "tie the line to the map there; T cuts the newest, Shift+T all"),
+                                  ("F11", "fullscreen on / off"), ("L", "the line: leash (locked length) or stretchy rope"), ("K", "tied lines wrap round walls and corners on / off"), ("Ctrl + Scroll Wheel", "the line: up tight, down stretchy"), ("Alt + Scroll Wheel", "the newest tied line longer / shorter"), ("Shift + click", "shoot a body part (camera aim)"), ("Shift + right click", "fatal shot"),
                                   ("right drag", "orbit the camera"), ("wheel", "zoom"), ("WASD", "walk Homer when Walk Homer is on; otherwise move only in free camera"), ("middle drag", "pan (enters the detached camera)"), ("C  or  Tab", "follow Homer / detached camera: hold right mouse to look and fly (WASD, Q/E, Shift boost) while the Hero stays put"),
                                   ("Space", "pause"), (".", "one step"), ("[  ]", "slower / faster (1/16 to 4x)"), ("1  2  3", "throw a ball / a box / drop a crate at the pointer"), ("R", "reset pose"), ("X", "stop all"),
                                   ("Ctrl + point", "aim throws there (and the floating gun)"), ("F", "get in / out of a taxi"), ("Enter", "type a command"), ("H", "hide panels"),

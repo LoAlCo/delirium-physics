@@ -39,6 +39,168 @@
   onset and the injured leg and arm. Where RDR2's value is on its own scale (forces, torques, "amount"
   multipliers) the default stays Delirium's, and the docs say which.
 
+## 0.7.0
+
+### Added
+- **Fullscreen**: F11, or "Fullscreen" in Audio / Video (kept with your settings): the whole screen, no border,
+  on the monitor the window is on.
+- **Ropes and leashes** in the Playroom, on the mouse's drag line:
+  - **Tie it off**: while dragging a part, **T** ties the line to the map under the pointer (or right there in the
+    air). You can grab and drag him again while he's tied, and tie as many lines as you like. **T** cuts a line,
+    **Shift + T** all of them.
+  - **Rope or leash** (**L**): a rope stretches, a leash doesn't. Made a leash, a tied line locks at the length it is
+    right then, so nothing jumps; he swings and falls freely inside it and is only stopped from going further.
+  - **Stretch** (**Ctrl + Scroll Wheel**): up tight, down stretchy. A rope shows it: thin, dashed and yellow is a
+    bungee, thick, solid and red a tight rope.
+  - **Length** (**Alt + Scroll Wheel**): a tied line longer or shorter. While dragging, it lets the drag line out
+    or reels it in, so he hangs off the pointer.
+  - **Leash colour**: pink where it's taut, dark blue where it's slack, along the line itself.
+  - **Real slack and corners**: a slack line hangs in a sag and lies on the floor. Lines wrap round walls and
+    corners and hold him from the corner with what's left (**K**, or "Lines wrap round the map" in Interact, turns
+    it off).
+  - **Several lines**: point at a tied line to pick it (it thickens); L, the scroll wheels and T act on that one,
+    else the newest.
+  - A small bar at the bottom of the view shows the keys and the line's setting while you drag or have lines tied.
+  - Scripts: `!tie [x,y,z]`, `!untie [all]`, `!linek k`, `!reel m`, `!leash`.
+  - **In your own game**: the leash is in the SDK (`nm_agent_leash`, `nm_agent_unleash`) and every plugin: Unity and
+    BepInEx `Leash` / `LeashLength` / `LeashAnchor` / `Unleash`, Godot `leash` / `leash_length` / `leash_anchor` /
+    `unleash`, Unreal the same as Unity's (in cm), C++ `leash` / `unleash`, Python. Made shorter, it reels him in
+    at 2 m/s instead of snapping.
+- **Every Playroom tool in the SDK and every plugin** (Unity, BepInEx, Godot, Unreal), so a mod can do what the
+  Playroom does:
+  - **Weapons table**: pistol, SMG, rifle and shotgun by default, or your own (`name=set:push:damage[:pellets:...]`)
+    or GTA IV's own `weaponinfo.xml`. `ShootWeapon` shoots one and returns the health left. `Shotgun` fans its
+    pellets the way GTA IV does and hits with all of them as one shot.
+  - **Reactions**: the Playroom's extra reactions (windmill, dodge, look at the hit and the rest) as one switch
+    set, near misses, a dive when shot at again soon after one, and ducking or catching something thrown at him.
+  - **Moves**: jump and dive, GTA IV's balance, stop, sit, hold a pose from the animation, roll up then go limp,
+    and script control (only your messages move him).
+  - **Getting up**: on his own muscles with the get-up animation as targets, or as the learned network does
+    (`getup.net`). **Learned walk** (`walk.net`) under a stick, the Playroom's drunk control.
+  - **Fights**: who he's up against (he looks at them) and, if they're armed, when they're ready to fire.
+  - **Reading**: any behaviour parameter as it runs, raycasts against the body, a setup check, and the full list
+    of messages and parameters with defaults and descriptions (for pickers in your tools).
+  - **Full state**: settled, awake, jumping, task running, learned get-up, resting, where the balancer stands and
+    which parts touch something.
+  - **Switches**: step limit (GTA IV's balance runs out of steps) and fire reaction.
+- **Strength per character** in every plugin (`strength`, `SetStrength`), for a heavy or oddly shaped body that
+  can't take a hit. **Bone Map** in Godot and Unreal (Unity had it) for bones the name guess misses.
+- **Tuning a custom body**, a new section in [Modding](docs/modding.md): what to try, in order, when a body won't
+  stand.
+- **Physics materials reach the ragdoll** in every plugin: a collider's friction and bounce (ice slides). Turning
+  movers (a wrecking ball, a turntable) carry what they touch round with them.
+- **Engine physics** in Unity, Godot and Unreal (`EnginePhysics`): Delirium's own physics moves him, his parts
+  push your objects and loose objects hit him. Every body stands this way, Brute, Brawler and Bruiser included.
+- **Cars and movers in the plugins**: `RegisterCar` (anything can be a car) with car hits as GTA IV's, a
+  `CarHit` event, bracing for a car coming (`ArmsOutEarly` throws the arms out sooner), dragged from a car door,
+  and `RegisterMover` for trains and objects (what kind, brace, knock down).
+- **More reactions in the plugins**: catch fall, fall down, grab, jump roll, flinch, tackle, water, the taser, and
+  `React(line)` for any reaction as a Playroom console line.
+- **Follow** in every plugin: the animation keeps running under the ragdoll and the ragdoll aims at it. **Hold**
+  and **Recentre joints** settings.
+- **State and events** in every plugin: what a ragdoll is doing (`State` / `GetState` / `get_state`), `Fell` once
+  per fall and `Feedback` for the behaviours' own messages.
+- **SDK**: crowds stepped over every core (`nm_world_step_agents`) in linear time, the same result on any number
+  of threads; `nm_crash_report` (a panic writes a crash note to a folder you pick); `nm_msg_send_text`;
+  `nm_agent_follow`, `nm_agent_hold` and `nm_agent_recentre_joint` (from 0.5.0's bug reports);
+  `nm_agent_get_zero_pose` and `nm_agent_get_part_body` for building the body in your own physics engine; and
+  `nm_world_set_box_kinds` / `nm_world_set_box_spins` for movers. The C++ header wraps every call.
+- **Bruiser** body: Brawler-like with a bigger head, an even trunk, small shoulders and short legs set wide.
+- **Skeleton skin** with hollow black eye sockets, and a new cartoon skull model.
+- **Arms out early when bracing**, a new extra reaction toggle.
+- The shotgun's pellets fan out and each push him as GTA IV's do.
+- Thrown and melee weapons work in camera aim, with GTA IV's melee damage.
+- `--custom` start flag: Custom sizes from the first frame, for recordings.
+- After a graphics error or a system crash the room leaves `crash.txt` too; crash reports carry the live settings
+  and the last 10 changes.
+
+### Changed
+- Ragdolls touching the ground follow GTA IV more closely (contact points on the ground's surface margin): a
+  lying body used to drift up to 11 cm from where GTA IV puts it.
+- Heavy bodies' muscles grow with their weight, so they stand still instead of swaying and stepping.
+- The Brute weighs 140 kg (was 160): at 160 he went down to three pokes in a row three times in four.
+- Short legs thin the belly with them on Custom and Random bodies (no gut over the crotch); Random keeps its drawn
+  leg length.
+- Body profiles' feet go by their hips' spread, and widened bodies move each limb out whole.
+- The room uses less memory: about 230 MB less RAM and 320 MB less video memory when idle. Pool ripples and foam
+  cost 0.8 ms a frame (was 2.3).
+- The Parameters tab starts each behaviour from its row.
+- Push tests throw both arms out straight; Push from front braces on the slab itself.
+
+### Docs
+- The README and the room say exactly what game you need: Grand Theft Auto IV: The Complete Edition for PC (Steam,
+  version 1.2.0.59) or the original Xbox 360 disc, from your own copy.
+
+### Fixed
+- **Stuck on safer graphics**: the room counted any crash in its first second (a room bug, or quitting right away)
+  as the graphics driver failing, and after two it stayed on plain Vulkan for good (no DLSS, FSR 3 or XeSS). Now only
+  a real driver crash while starting counts, and every new room build tries full graphics again. One such crash is
+  enough: the launcher starts the room again at once on the safer graphics, so a player whose card needs it never has
+  to relaunch by hand. **Video → Graphics mode** (Windows) picks Full (Vulkan), Plain Vulkan or DirectX 12 for the next
+  start, and after a fallback a **Try full graphics again** button turns everything back on.
+- The room crashing when two cars (or other moving obstacles sharing an id) touched the same body part at once (#43):
+  each now keeps its own contact points.
+- Dragging him while turning the camera: the pointer now moves him across the camera's new view, not the view at the
+  press.
+- Script grabs (`!grab`) pull until `!release` (they were dropped the next frame).
+- Ray tracing off, retired ray-tracing meshes are freed (the water's, rebuilt every frame, used to pile up)
+  (by [LoAlCo](https://github.com/LoAlCo), from PR #41).
+- Every shot spun him left: the random numbers now run on across resets.
+- Sized bodies' balance probes the ground as far as their legs reach.
+- Ball joints' limits are applied in the right order.
+- Plugins: ragdolls share a world only within one engine world (a dead ragdoll from another world tripped the
+  next one). Unreal frees ragdolls when their actor is destroyed. Godot movers are boxed by every shape, turned.
+- Unity engine physics stands (inertia set before torque) and tears down destroyed characters safely.
+- A destroyed SDK agent leaves its world at once.
+- Shots, pushes and the balancer's impulses reach a host's own physics bodies in FOLLOW mode (they were lost), and
+  cutting a limb works there.
+- The Unreal plugin builds on UE 5.8.
+- The renderer no longer crashes on a view without the deferred pass. The anti-aliasing menu lists only what ray
+  tracing keeps, and the ReSTIR option says why path tracing doesn't use it.
+- Wrapped rows in the room's panels stay clear of the scroll bar.
+
+## 0.6.0
+
+### Added
+- **Custom bodies**: Character tab, body Custom. Sliders for legs, arms, trunk, width, head, neck and weight, and
+  an optional height. A see-through preview shows the next spawn while you move them. Short legs, long legs, wide
+  and heavy bodies all stand, walk and take every reaction. Script: `!custom legs,arms,trunk,width,kg[,head]`,
+  `!neck n`.
+- **Neck slider** (Custom only, 0.5 to 6 times): a longer neck sits the head higher and is thinner. It is one
+  stiff bone, hinged at both ends, so a long neck swings but doesn't bend in the middle. Homer (Average) always
+  keeps the game's own neck.
+- **Brawler** body: short thick legs, short arms, a wide trunk and a big head.
+- **Random** body is repeatable: `!seed n` and `!variance v` in scripts.
+- **Parameters tab** (by [LoAlCo](https://github.com/LoAlCo), from PR #42): every behaviour's parameters with their defaults and what they do. A changed value goes
+  with that behaviour every time it's sent, from buttons, hits, shots or the console.
+- Up to 50 Homers.
+- **SDK, the same bodies as the Playroom**: `nm_build_sized` (Custom), `nm_build_named` (Small, Average, Large,
+  Lanky, Fat, Stocky, Waddler, Guard, Brute, Brawler), `nm_build_random` (seed, variance, symmetric),
+  `nm_build_fit_neck` (fit a skeleton with a long neck) and `nm_build_set_head` (raise and grow the head for a tall
+  skull). `nm_agent_set_override` / `nm_agent_clear_overrides` are the Parameters tab for one character,
+  including the messages the built-in tasks send. See [Modding](docs/modding.md).
+- **Unity, Godot, Unreal and BepInEx plugins**: a `Body` setting (Fitted, any of the Playroom's bodies, Random or
+  Custom) and `Overrides` (the Parameters tab), per character from code too: `SetBody`, `SetOverride`,
+  `ClearOverrides` (Godot `body`, `set_override`).
+- After a crash the room writes `crash.txt` (system, graphics card, settings) beside it, and the next start offers
+  Report crash with a GitHub issue filled in.
+
+### Fixed
+- **PC (Steam) export**: `delirium-room --export` now writes a working `taskparams.txt` (it is packed and
+  encrypted in `pc/data/game.rpf`), and the PC character file is read in its own byte order everywhere, so the SDK
+  no longer gets NaN bodies from it.
+- Fitted bodies' joints pivot where the fit puts them (they pivoted at the game man's places).
+- The Waddler holds his own weight (his pelvis hung past his short legs and he sat on it).
+- Random bodies no longer fly around (default spread 1.5 times, was 3) or stack their spine into blobs, and Reset
+  pose stands them as built.
+- The mouse pull grows with a heavy body's weight.
+- The Unity package compiles on Unity 6.6 (it used `GetInstanceID`, an error there).
+- SDK: Custom, Random and named bodies made from a fitted character keep its size scale.
+
+### Docs
+- SDK: `nm_agent_create` puts the body's lowest point on the position you give; pass `nm_agent_step` a fixed
+  1/60 s, not the frame's wall-clock time.
+
 ## 0.5.2
 
 ### Fixed

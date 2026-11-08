@@ -250,7 +250,9 @@ Console.WriteLine($"pelvis {p[0]:F2} {p[1]:F2} {p[2]:F2}");
 **The easy way:** the package's `DeliriumRagdolls` component, the same
 ragdolls as the BepInEx mod for your own game: add it to one object, set the
 player's game exe, and call `Ragdoll`, `ShootAlong`, `MeleeHit`, `Explode`,
-`OnFire`, `Sever`, `Kill`, `GetUp` with the character's root. Any humanoid
+`OnFire`, `Sever`, `Leash`, `Kill`, `GetUp` with the character's root, and the Playroom's
+other tools (weapons and shotguns, extra reactions, jump, sit, pose, muscle and
+learned get-ups, learned walk, the drunk stick, state reads, the message list). Any humanoid
 skeleton, no snaps in or out, nearby ragdolls share a world. Set up and
 examples: `crates/delirium-sdk/bindings/unity/README.md`.
 
@@ -311,19 +313,58 @@ Putting it into another game comes down to three things, and the SDK does each:
 For Mono Unity games there's a ready-made BepInEx plugin doing all of this
 (aim, press F9): `crates/delirium-sdk/bindings/bepinex/` and its README.
 
+### Tuning a custom body
+
+A body that won't stand, or falls to hits a person takes, is tuned in this
+order. Every step works the same in the SDK and every plugin.
+
+1. **Check the fit.** Leave Body on `Fitted` and run `CheckSetup` (the
+   plugins) or `nm_rig_check` (the SDK): it lists missing parts, bones under
+   the wrong part, left and right swapped, and a bent rest pose. Add bones it
+   didn't find to `Bone Map`.
+2. **Adaptive on** (the default): each kind of character gets its weight from
+   its mesh and a balance search of its own (step height, leg and body
+   stiffness, damping, when it gives up), once, in the background
+   (`nm_build_tune` in the SDK).
+3. **Strength.** A heavy or oddly shaped body can still be weak against its
+   own weight. Set that character's Strength to 1.3-2 (Godot's `strength`,
+   Unity's `SetStrength(owner, k)`, Unreal's `Strength` / `SetStrength`, the
+   SDK's `nm_agent_set_strength`), or the Strength setting for everyone. Under
+   1 makes a weak one.
+4. **Overrides, for what's left.** Try values live in the Playroom's
+   Parameters tab on the same body, then put them in `Overrides`
+   (`configureBalance.legStiffness=12, bodyBalance.bodyStiffness=11`) or
+   `SetOverride` for one character:
+
+| What it does | Try |
+|---|---|
+| Sways, or steps and steps without settling | `bodyBalance.bodyStiffness` up (to 14), `configureBalance.legStiffness` up (to 16) |
+| Falls to a push it should step out of | `configureBalance.balanceAbortThreshold` up (to 1.5), `configureBalance.stepClampScale` up |
+| Trips over its own feet, scuffs | `configureBalance.stepHeight` up (0.1-0.3) |
+| Stiff and jerky | `bodyBalance.damping` up (to 2) |
+| Arms stay out too long after a push | `bodyBalance.armsOutOnPushTimeout` down |
+
+5. **Very tall or short:** the balance is made for about 1.8 m (see the
+   Tips below); `Size` (`Auto`) or `nm_size_scale` runs those scaled.
+
 ### Godot 4
 
 `crates/delirium-sdk/bindings/godot/`: a GDExtension (Godot 4.5+, GDScript or
 C#). Add a `DeliriumRagdoll` node under the character's `Skeleton3D`, point
 the `[delirium]` project settings at the player's own files, and call
-`shoot_along`, `push`, `melee_hit`, `explode`, `on_fire`, `sever`, `kill`,
-`get_up`. No snaps in or out; it reads the level's box and mesh colliders.
+`shoot_along`, `push`, `melee_hit`, `explode`, `on_fire`, `sever`, `leash`, `kill`,
+`get_up`, and the Playroom's other tools (weapons and shotguns, extra
+reactions, jump, sit, pose, muscle and learned get-ups, learned walk, the drunk
+stick, state reads, the message list). No snaps in or out; it reads the level's
+box and mesh colliders and their physics materials.
 Set up and examples: its `README.md`.
 
 ### Unreal Engine 5
 
 A ready plugin: `bindings/unreal/DeliriumRagdoll` (its README has the steps). Add the **Delirium Ragdoll** component
-to a character, then call `Shoot`, `Push`, `Explode`, `MeleeHit`, `Sever`, `Kill` and `GetUp` from Blueprint or C++.
+to a character, then call `Shoot`, `Push`, `Explode`, `MeleeHit`, `Sever`, `Leash`, `Kill` and `GetUp` from Blueprint or C++,
+and the Playroom's other tools (`ShootWeapon`, `Shotgun`, `SetReactions`, `Jump`, `Sit`, `TakePose`, `MuscleRise`,
+`LearnedGetUp`, `LearnedWalk`, `SetStick`, `SetAttacker`, `GetState`, `Messages`).
 Tested on UE 5.8 with the Third Person template's mannequin.
 
 ### Any engine, step by step (Unreal, Source, your own)
@@ -369,6 +410,24 @@ build.
    heavier or lighter by its thickness; `nm_build_weigh_skin(b, joints,
    verts, parts, n)` sets it from the skin (bind pose, the same space as the
    joints): a fat belly makes a heavy body.
+   *Long necks and tall skulls (optional):* the fit cuts a neck longer than a
+   person's (0.12 of a leg) so a long neck bone doesn't grow a giant head.
+   Long on purpose? `nm_build_fit_neck(base, joints, n)` lets it be up to `n`
+   times that (the Playroom's Neck slider, 0.5-6), the head kept its normal
+   size on the neck's end. The neck stays one stiff bone hinged at both ends,
+   with no extra joints: it swings the head further, it doesn't bend in the
+   middle. Homer (the game's own body) never has any of this: it's only for
+   fitted bodies. If your skull is taller than Homer's (the face pokes out of
+   the head capsule, sinking into the floor when lying face down),
+   `nm_build_set_head(b, raise, grow)` moves the head capsule `raise` further
+   up the neck and makes it `grow` times as thick (0.05, 1.08 suit a tall one).
+   *The Playroom's bodies:* `nm_build_sized(base, legs, arms, trunk, width,
+   head, neck, kg, height)` is its Custom body (the Brawler: 0.45, 0.7, 1, 1.4,
+   1.5, 1, 80, 0) and `nm_build_random(base, seed, variance, symmetric)` its
+   Random one, the same seed the same body. `nm_build_named(base, "Lanky")`
+   gives its presets: Small, Average, Large, Lanky, Fat, Stocky, Waddler,
+   Guard, Brute, Brawler. All are made from the game man, not your skeleton:
+   for NPC variety on a rig that maps to his.
 4. *Its world.* `nm_world_create`, then `nm_world_set_scale(w,
    nm_build_get_scale(b))` before anything else, `nm_world_add_floor` under its
    feet, and the level around it
@@ -412,6 +471,7 @@ hips bone's world place.
 | Falls over (no hit) | `nm_agent_task_fall_down(a, w, heading)` |
 | Tackled | from the tackler: `nm_agent_task_tackle(tackler, w, target, low, keep)` (within 4 m; both must be in the same world) |
 | Limb cut off | `nm_agent_sever(a, w, part, at, impulse)`: the piece flies off on its own and its parts read as before; a leg gone, it stays down |
+| Tied up / on a leash | `nm_agent_leash(a, part, at, anchor, length)`: slack inside the length, he hangs and swings past it (no stretch); again with null `at`/`anchor` for a new length (shorter reels him in at 2 m/s); `nm_agent_unleash(a, part)` lets go. For a stretchy rope, `nm_agent_apply_impulse` each step |
 | Killed by your own damage | `nm_agent_set_dead(a, 1)` and `nm_agent_task_relax(a, -1, -1)` |
 
 Shots, explosions and fire run on their own each step until they end
@@ -454,6 +514,12 @@ the rig, agent, build and world.
 Switch with `nm_agent_set_mode(agent, NM_MODE_FOLLOW)` before the first step.
 Do not add gravity compensation: gravity is not included in the drive.
 
+The plugins' engine physics settings don't use FOLLOW: the engines' joints lack the game's joint armature, and short or
+heavy bodies (Brute, Brawler, Bruiser) couldn't stand on them. NM's own physics moves the body there; its parts are
+kinematic engine bodies at `nm_agent_get_part_transform`'s places (they push the engine's objects), and loose engine
+objects near it go to NM as movers (`nm_world_set_boxes`, `nm_world_set_box_kinds`). Do the same in your own engine
+unless you need the engine to move the parts.
+
 ### Reading and hitting a character (any language)
 
 | Need | Calls |
@@ -469,7 +535,11 @@ Do not add gravity compensation: gravity is not included in the drive.
 | Health and get-up | `nm_agent_aim_hit`, `nm_agent_is_dead`, `set_dead`, `nm_set_headshot_kills`, `nm_agent_get_lying`, `should_get_up` |
 | Animation pose | `nm_agent_set_incoming_transforms(a, transforms, parts)` (7 floats per part; `parts = 0` clears), used by `activePose` and `incomingTransforms` |
 | Events | `nm_agent_feedback_count`, `nm_agent_feedback_get` |
-| World | `nm_world_add_floor`, `nm_world_add_mesh`, `nm_world_set_boxes`, `nm_world_raycast`, `nm_set_surface(material, friction, elasticity)` |
+| World | `nm_world_add_floor`, `nm_world_add_mesh`, `nm_world_set_boxes`, `nm_world_set_box_spins`, `nm_world_raycast`, `nm_set_surface(material, friction, elasticity)` |
+| Playroom tools | `nm_agent_set_reactions` (NM_XR_*), `near_miss`, `set_dive`, `thrown_at`, `jump`, `task_sit`, `task_pose`, `task_roll_up_relax`, `task_script`, `task_stop`, `task_running`, `muscle_rise`, `learned_getup`, `learned_walk`, `set_stick`, `set_attacker`, `gun_ready` |
+| Weapons | `nm_weapons_parse`, `nm_weapons_load_info` (weaponinfo.xml), `nm_weapon_count`, `find`, `get`, `nm_agent_shoot_weapon`, `nm_shotgun_fan` + `nm_agent_task_shotgun` |
+| Parameters | `nm_agent_get_param`, `get_param_string`, `nm_message_count`, `nm_message_name`, `nm_message_param_*` (name, kind, default, doc, used) |
+| Switches | `nm_set_step_limit`, `nm_set_fire_reaction`, `nm_crash_report(dir)` (a panic in the SDK writes a crash note there) |
 
 `nm_world_set_boxes` takes 13 floats per box (centre, quaternion, half extents,
 velocity) for cars and platforms; set them again before every step. The
@@ -720,6 +790,11 @@ edited. The tab also holds the RDR2 reaction picker (spin, knees and reach chanc
 are saved in settings.txt (`param`, `rdr2_pick`); with nothing changed every message goes out exactly as before.
 Scripted and headless runs don't read settings.txt, so they never use changed values unless a script loads it
 (`!settings`).
+
+The Playroom's Parameters tab is `nm_agent_set_override(agent, "shot",
+"bodyStiffness", 7)`: every message of that behaviour the agent gets from then
+on, yours and the ones the `nm_agent_task_*` tasks send, goes with that value
+instead of its own. `nm_agent_clear_overrides(agent)` puts them back.
 
 ## Playroom scripting
 

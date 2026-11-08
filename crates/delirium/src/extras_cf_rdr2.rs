@@ -298,21 +298,11 @@ impl OnFireRdr2 {
         }
     }
 
-    /// The attitude class of his COM frame turned on by his spin predictTime ahead (ours, as highFall's: RDR2's
-    /// prediction 0x2a35fb8 wasn't re-read): rows a side, b up, c back.
+    /// The attitude class (0x2a33350) of his COM frame turned on predictTime ahead by 0x2a35fb8's spin
+    /// (`Ctx::turn_rate`): rows a side, b up, c back.
     fn classify(&self, c: &Ctx) -> u8 {
-        let q = Quat::from_scaled_axis(c.angvel * self.p.predict_time);
-        let up = c.up;
-        let (beta, alpha, gamma) = ((q * c.m.b).dot(up), -(q * c.m.a).dot(up), -(q * c.m.c).dot(up));
-        let mut class = if gamma >= 0.25 { 3 } else { 2 };
-        if alpha.abs() - gamma.abs() > 0.15 {
-            class = if alpha < 0.0 { 4 } else { 5 };
-        }
-        let (b, a, g) = (beta.abs(), alpha.abs(), gamma.abs());
-        if b > 0.8 || (b > g && b > a && g < 0.75 && a < 0.75 && b > 0.75) {
-            class = if beta > 0.0 { 0 } else { 1 };
-        }
-        class
+        let q = Quat::from_scaled_axis(c.turn_rate() * self.p.predict_time);
+        crate::extras_fall::attitude([q * c.m.a, q * c.m.b, q * c.m.c], c.up)
     }
 
     /// The standing lean (§4.1), while bodyBalance runs: the hip pitch (owner 5) wanders toward random targets in

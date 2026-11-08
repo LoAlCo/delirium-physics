@@ -2558,11 +2558,19 @@ pub(crate) fn unit(v: Vec3) -> Vec3 {
     if l > 1e-6 { v / l } else { Vec3::ZERO }
 }
 
-/// The landing attitude: 0 feet down, 1 front down, 2 side or head down, 3 back down (ours [G]: RDR2's classifier
-/// isn't read; its states use 1 and 2 as the falls catchFall takes).
+/// The attitude class 0x2a33350 of the COM frame (rows a side, b up, c back) against `n`: by b, 0 upright or 1 upside
+/// down when b is the nearest row to n (over 0.8, or the only one past 0.75); else 4 or 5 on a side when a leans to n by
+/// 0.15 more than c, the sign of -a; else 2 face down, 3 face up (-c at least 0.25).
 pub(crate) fn attitude(a: [Vec3; 3], n: Vec3) -> u8 {
-    let (b, c) = (a[1], a[2]);
-    if b.dot(n) > 0.5 { 0 } else if c.dot(n) > 0.5 { 1 } else if c.dot(n) < -0.5 { 3 } else { 2 }
+    let (f3, f4, f2) = (a[1].dot(n), -a[0].dot(n), -a[2].dot(n));
+    let mut class = 2 + (f2 >= 0.25) as u8;
+    if f4.abs() - f2.abs() > 0.15 {
+        class = 4 + (f4 >= 0.0) as u8;
+    }
+    if f3.abs() > 0.8 || (f2.abs() < f3.abs() && f4.abs() < f3.abs() && f2.abs() < 0.75 && f4.abs() < 0.75 && f3.abs() > 0.75) {
+        class = (f3 <= 0.0) as u8;
+    }
+    class
 }
 
 const SF_NAMES: [&str; 9] = ["airborne", "tumbling", "crash", "brace", "unrecoverable", "forward roll", "hard landing", "land on feet", "settle"];
@@ -2627,7 +2635,8 @@ impl SfRdr2 {
         }
         let (vz, g) = (-c.vel.dot(up).abs(), crate::ragdoll::GRAVITY().abs().max(1.0));
         self.tti = ((2.0 * g * d + vz * vz).sqrt() + vz) / g;
-        let q = bevy_math::Quat::from_scaled_axis(c.angvel * self.tti.min(1.0));
+        // 0x2a35fb8's spin: the COM inertia's inverse times the angular momentum
+        let q = bevy_math::Quat::from_scaled_axis(c.turn_rate() * self.tti.min(1.0));
         self.class = attitude([q * c.m.a, q * c.m.b, q * c.m.c], n);
     }
 
@@ -2659,7 +2668,7 @@ impl SfRdr2 {
         let share = down / (down.abs() + h.length()).max(1e-6);
         let fwdish = unit(v).dot(-c.m.c) > -0.2;
         self.class_now = attitude([c.m.a, c.m.b, c.m.c], self.ground);
-        let qm = bevy_math::Quat::from_scaled_axis(c.angvel * (0.5 * self.tti).min(1.0));
+        let qm = bevy_math::Quat::from_scaled_axis(c.turn_rate() * (0.5 * self.tti).min(1.0));
         self.class_mid = attitude([qm * c.m.a, qm * c.m.b, qm * c.m.c], self.ground);
         if v.length() > self.peak.length() {
             self.peak = v;
@@ -2703,8 +2712,11 @@ impl SfRdr2 {
         self.recoverable &= (1.0 - slope) * v.dot(up) > -p.max_recoverable;
         let high = !impact && self.tti > 0.4 && !contact && self.height > 1.5;
         let vertical = share > 0.3;
-        // (ctx+0x1030: no health message reaches this port, so it stays 1 and this doesn't fire)
+        // ctx+0x1030, from setCharacterHealth (1 until one comes)
         let dead = c.ch.core.cfg.health <= 0.0 && !p.ignore_death;
+        if c.ch.core.cfg.health <= 0.0 && p.ignore_death {
+            crate::extras_core_rdr2::trace_first("smartFall: ignoredeath, no health isn't dead");
+        }
         c.ch.core.cfg.fall.force_head = p.force_head;
         self.orientate(c, dt);
         self.t += dt;

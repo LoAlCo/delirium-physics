@@ -610,16 +610,18 @@ impl Horse {
         }
     }
 
-    /// Angular velocity of the whole body, about its centre: angular momentum over inertia (0x2a35fb8's own terms).
+    /// Angular velocity of the whole body, about its centre: angular momentum over inertia (0x2a35fb8's own terms). The
+    /// momentum is ctx+0xf80 as the COM pass 0x2a21dd0 sums it: the parts' moving masses about the centre, no part's own
+    /// spin (no I w there); the inertia ctx+0x910 has each part's own.
     fn spin_of(&self, com: Vec3) -> Vec3 {
         let (mut l, mut i) = (Vec3::ZERO, Mat3::ZERO);
         let (_, vc) = self.doll.com();
         for (k, f) in self.doll.frames().enumerate() {
             let m = self.doll.part_mass(k);
-            let (v, w) = self.doll.vel(k);
+            let (v, _) = self.doll.vel(k);
             let r = f.translation - com;
             let t = self.doll.tensor(k).as_mat3();
-            l += m * r.cross(v - vc) + t * w;
+            l += m * r.cross(v - vc);
             let s = Mat3::from_diagonal(Vec3::splat(r.length_squared())) - Mat3::from_cols(r * r.x, r * r.y, r * r.z);
             i += t + s * m;
         }

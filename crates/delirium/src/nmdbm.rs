@@ -94,6 +94,14 @@ pub fn logged_links() -> Option<&'static [Quat]> {
     (!t.is_empty()).then_some(t.as_slice())
 }
 
+pub static STEP_LIMIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn steps(n: i32, size: f32) -> i32 {
+    if !STEP_LIMIT.load(std::sync::atomic::Ordering::Relaxed) {
+        i32::MAX
+    } else if size < 1.0 { (n as f32 / size).round() as i32 } else { n }
+}
+
 fn step_clamp(b: &Body, c: Config) -> f32 {
     if b.ch.mode == 2 { c.step_clamp * delirium_data::kv!(74) } else { c.step_clamp }
 }
@@ -122,6 +130,7 @@ pub struct Snap {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Params {
+    pub size: f32,
     pub up: Vec3,
     pub gup: Vec3,
     pub target: [Vec3; 2],
@@ -201,10 +210,6 @@ pub struct Pelvis {
 }
 
 /// The lower foot's height along up.
-fn up_low(up: Vec3, l: Vec3, r: Vec3) -> f32 {
-    up.vd(l).min(up.vd(r))
-}
-
 fn horizontal(v: Vec3, up: Vec3) -> Vec3 {
     v - up * up.vd(v)
 }
@@ -468,7 +473,7 @@ fn decide(s: &Snap, f: &mut Feet, r: Option<&crate::nmdbm_rdr2::Rdr2>) {
     if f.stepping != 0 {
         return;
     }
-    let (lc, rc) = (s.flags & delirium_data::kv!(251 int) != 0, s.flags & delirium_data::kv!(7 int) != 0);
+    let (lc, rc) = (s.flags & delirium_data::kv!(257 int) != 0, s.flags & delirium_data::kv!(7 int) != 0);
     let mut left = if rc { a || !lc } else { !lc && b };
     let mut right = if lc { b || !rc } else { !rc && a };
     if r.is_some_and(|r| r.p.always_step_with_farthest) {
@@ -508,7 +513,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     f.height = [sdot(p.target[0], up, b"zyx"), sdot(p.target[1], up, b"zyx")];
     f.pos[0] = sat(s.legs[0].foot.m.d, up, f.height[0], b"zyx");
     f.pos[1] = sat(s.legs[1].foot.m.d, up, f.height[1], b"zyx");
-    if s.flags & delirium_data::kv!(251 int) == 0 || s.flags & delirium_data::kv!(7 int) == 0 {
+    if s.flags & delirium_data::kv!(257 int) == 0 || s.flags & delirium_data::kv!(7 int) == 0 {
         let [l, r] = &mut f.pos;
         separate(l, r, p.rdr2.map_or(p.foot_width, |r| p.foot_width + r.p.extra_feet_apart));
     } else if let Some(r) = p.rdr2 {
@@ -528,7 +533,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     };
     let inside = match p.rdr2 {
         Some(r) => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172 - r.p.step_decision_threshold,
-        None => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up) > p.p172,
+        None => support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68) * p.size, delirium_data::kv!(9) * p.size, up) > p.p172,
     };
     if std::env::var_os("NMX_SUP").is_some() { eprintln!("SUP pc {pc:?} val {} up {up:?} L a {:?} c {:?} d {:?} R a {:?} c {:?} d {:?} k {} {}", support(pc, &s.legs[0].foot, &s.legs[1].foot, delirium_data::kv!(68), delirium_data::kv!(9), up), s.legs[0].foot.m.a, s.legs[0].foot.m.c, s.legs[0].foot.m.d, s.legs[1].foot.m.a, s.legs[1].foot.m.c, s.legs[1].foot.m.d, delirium_data::kv!(68) as f32, delirium_data::kv!(9) as f32); }
     f.flags = (f.flags & !delirium_data::kv!(1 int)) | (inside as u8) << 2;
@@ -541,7 +546,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
                 f.flags &= !delirium_data::kv!(1 int);
             }
         }
-        None => if f.flags & delirium_data::kv!(1 int) != 0 && slen(shz(rpos - lpos, up, b"yzx"), b"zyx") > p.foot_width + delirium_data::kv!(60) {
+        None => if f.flags & delirium_data::kv!(1 int) != 0 && slen(shz(rpos - lpos, up, b"yzx"), b"zyx") > p.foot_width + delirium_data::kv!(60) * p.size {
             f.flags &= !delirium_data::kv!(1 int);
         },
     }
@@ -581,14 +586,14 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
         decide(s, f, p.rdr2.as_ref());
     }
     if f.stepping == 0 {
-        f.flags = (f.flags & delirium_data::kv!(252 int)) | (s.flags & delirium_data::kv!(251 int)) | (s.flags & delirium_data::kv!(7 int)) << 1;
+        f.flags = (f.flags & delirium_data::kv!(258 int)) | (s.flags & delirium_data::kv!(257 int)) | (s.flags & delirium_data::kv!(7 int)) << 1;
         return;
     }
     let two = f.stepping == 2;
     let (i, side, mut t, contact) = if two {
         (1, -1.0, target_b, s.flags & delirium_data::kv!(7 int) != 0)
     } else {
-        (0, 1.0, target_a, s.flags & delirium_data::kv!(251 int) != 0)
+        (0, 1.0, target_a, s.flags & delirium_data::kv!(257 int) != 0)
     };
     let leg = &s.legs[i];
     let stance = f.pos[1 - i];
@@ -620,8 +625,8 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     let (r88, r92) = hip_leans(&leg.hip, f.start, leg.hip.mid_lean1, leg.hip.mid_lean2, side);
     // RDR2 (0x2ab127c): the foot's own speed counts 0.03 s, not 0.1 s, and with the stance foot off the ground the
     // target hardly moves from the ground (0.01), unless running or staggering
-    let closed = closing.min(0.0).fma(p.rdr2.map_or(delirium_data::kv!(78), |_| 0.03), ahead);
-    let stance_down = if f.flags & delirium_data::kv!(251 int) != 0 { s.flags & delirium_data::kv!(251 int) != 0 } else { s.flags & delirium_data::kv!(7 int) != 0 };
+    let closed = closing.min(0.0).fma(p.rdr2.map_or(delirium_data::kv!(78) * p.size, |_| 0.03), ahead);
+    let stance_down = if f.flags & delirium_data::kv!(257 int) != 0 { s.flags & delirium_data::kv!(257 int) != 0 } else { s.flags & delirium_data::kv!(7 int) != 0 };
     let share = match p.rdr2 {
         Some(r) if !stance_down && !r.running && !r.stagger => 0.01,
         _ => 0.5,
@@ -635,12 +640,12 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     let mut h = match p.rdr2 {
         // RDR2: the foot's pitch only while the foot is still short of the target, and no limit from the hip's room
         Some(_) => if closed > 0.04 { toe.abs().min(1.0).fma(delirium_data::kv!(78), lift) } else { lift },
-        None => toe.abs().min(1.0).fma(delirium_data::kv!(78), lift).min(room),
+        None => toe.abs().min(1.0).fma(delirium_data::kv!(78) * p.size, lift).min(room),
     };
     let mut g = p.target[i];
     // RDR2 clears the step's lift while the COM is over his feet, except on a turn step
     if f.flags & delirium_data::kv!(54 int) == 0 && p.rdr2.is_none_or(|r| r.turning || !inside) {
-        h += p.rdr2.map_or(delirium_data::kv!(112), |r| if r.turning { r.turn_lift } else { r.lift });
+        h += p.rdr2.map_or(delirium_data::kv!(112) * p.size, |r| if r.turning { r.turn_lift } else { r.lift });
         g = p.gup.mul_add(Vec3::splat(sdot(p.gup, f.start - g, b"zyx").max(0.0)), g);
     }
     let h = g.x.fma(up.x, g.z.fma(up.z, tilt.fma(h, g.y * up.y)));
@@ -653,8 +658,8 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     f.pos[i] = t3;
     let mid = (t3 + stance) * 0.5;
     f.centre = up.mul_add(Vec3::splat(sdot(mid, up, b"yzx") - sdot(f.centre, up, b"yzx")), f.centre);
-    f.flags = (f.flags & delirium_data::kv!(252 int)) | if two { delirium_data::kv!(251 int) } else { delirium_data::kv!(253 int) };
-    let other = if two { s.flags & delirium_data::kv!(251 int) != 0 } else { s.flags & delirium_data::kv!(7 int) != 0 };
+    f.flags = (f.flags & delirium_data::kv!(258 int)) | if two { delirium_data::kv!(257 int) } else { delirium_data::kv!(188 int) };
+    let other = if two { s.flags & delirium_data::kv!(257 int) != 0 } else { s.flags & delirium_data::kv!(7 int) != 0 };
     let landed = contact && speed < 0.0 && (left_frac < 0.5 || (f.flags & delirium_data::kv!(23 int) != 0 && f.flags & delirium_data::kv!(54 int) != 0));
     // RDR2: the other foot off the ground this tick and the last, and not while running
     let lone = match p.rdr2 {
@@ -666,7 +671,7 @@ pub fn foot_placement(p: &Params, s: &Snap, f: &mut Feet) {
     };
     if std::env::var_os("NMX_DBG").is_some() { eprintln!("PLACE dist {:?} vel {:?} com {:?} Lf {:?} Rf {:?} lead {} stepping {} flags {:b} contact {} other {} speed {:.3} left {:.3} toe {:.3} passed {} landed {} lone {} running {:?}", f.dist, s.hvel, s.com, s.legs[0].foot.m.d, s.legs[1].foot.m.d, p.lead, f.stepping, s.flags, contact, other, speed, left_frac, toe, passed, landed, lone, p.rdr2.map(|r| r.running)); }
     if !waiting(f) && (landed || lone) {
-        f.flags |= if two { delirium_data::kv!(253 int) } else { delirium_data::kv!(251 int) };
+        f.flags |= if two { delirium_data::kv!(188 int) } else { delirium_data::kv!(257 int) };
         f.stepping = 0;
         decide(s, f, p.rdr2.as_ref());
     }
@@ -705,10 +710,10 @@ fn yaw(k: f32, pelvis: &M34, w: Vec3, toward: bool, predict: bool, angvel: Vec3)
         if a < -std::f32::consts::PI {
             a += std::f32::consts::TAU;
         }
-        if !(-delirium_data::kv!(254)..=delirium_data::kv!(254)).contains(&a) { 0.0 } else { a }
+        if !(-delirium_data::kv!(259)..=delirium_data::kv!(259)).contains(&a) { 0.0 } else { a }
     };
     if predict {
-        a = slen(w, b"yxz").min(1.0) * a * delirium_data::kv!(255);
+        a = slen(w, b"yxz").min(1.0) * a * delirium_data::kv!(260);
     }
     a
 }
@@ -736,7 +741,7 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
     // RDR2, running (staggering too): the twist goes by the feet's contact, not the planted flags. One foot down follows as
     // walking; both down relax; neither follows at half rate, each leg to minus its own heading error
     let running = p.rdr2.is_some_and(|r| r.running);
-    let (pl, pr) = if running { (s.flags & delirium_data::kv!(251 int) != 0, s.flags & delirium_data::kv!(7 int) != 0) } else { (pl, pr) };
+    let (pl, pr) = if running { (s.flags & delirium_data::kv!(257 int) != 0, s.flags & delirium_data::kv!(7 int) != 0) } else { (pl, pr) };
     if running && !pl && !pr {
         let limit = delirium_data::kv!(119);
         let k = (slen(w, b"yxz") * 2.0).min(1.0);
@@ -767,20 +772,20 @@ pub fn pelvis_control(p: &Params, s: &Snap, pv: &mut Pelvis) {
     let hz = shz(s.m.c, up, b"zyx");
     let hx = shz(-s.m.a, up, b"xyz");
     let d = s.com - pv.centre;
-    let a = (-sdot(d, hz, b"yxz")).clamp(-delirium_data::kv!(226), delirium_data::kv!(9));
+    let a = (-sdot(d, hz, b"yxz")).clamp(-delirium_data::kv!(232), delirium_data::kv!(9));
     let b = -sdot(d, hx, b"zyx");
     let c = -sdot(s.hvel, hz, b"zyx");
     let e = -sdot(s.hvel, hx, b"yzx");
-    let f4 = p.lead * delirium_data::kv!(256);
+    let f4 = p.lead * delirium_data::kv!(261);
     if both {
         pv.p52 = p.dt.fma(a, pv.p52).clamp(p.lean_bias - delirium_data::kv!(78), p.lean_bias + delirium_data::kv!(78));
         pv.p56 = p.dt.fma(b, pv.p56).clamp(-delirium_data::kv!(78), delirium_data::kv!(78));
     }
     // RDR2's ankle balance takes the roll integrator out
     let roll_i = if p.rdr2.is_some_and(|r| r.p.ankle_balance) { 0.0 } else { pv.p56 };
-    pv.out[0] = b.fma(delirium_data::kv!(257), (f4 * 0.5).fma(e, roll_i * delirium_data::kv!(258))) * delirium_data::kv!(259);
+    pv.out[0] = b.fma(delirium_data::kv!(262), (f4 * 0.5).fma(e, roll_i * delirium_data::kv!(263))) * delirium_data::kv!(264);
     if both {
-        pv.out[1] = a.fma(delirium_data::kv!(256), c.fma(f4, pv.p52 * delirium_data::kv!(260))) * -delirium_data::kv!(261);
+        pv.out[1] = a.fma(delirium_data::kv!(261), c.fma(f4, pv.p52 * delirium_data::kv!(265))) * -delirium_data::kv!(266);
         // RDR2: on both feet, once he has stepped, moving backward lowers the pitch target too
         if let Some(r) = p.rdr2.filter(|r| r.steps > 0) {
             pv.acc -= if r.p.ankle_balance { (-0.4 * c).clamp(-0.03, 0.2) + 0.03 } else { (-0.7 * c).clamp(0.0, 0.5) };
@@ -928,7 +933,7 @@ fn leg_ik(c: &mut LegIk, limb: &M34, knee: &mut Eff1, hip: &mut Eff3, foot: &Par
         let f0 = (1.0 - delirium_data::kv!(78) / m).max(0.0);
         let f12 = if c.lift > f0 { (c.lift + f0) * 0.5 } else { c.lift };
         x = (vnorm(d) * m).mul_add(Vec3::splat(1.0 - f12), foot.m.d);
-        f25 = 1.0 / (delirium_data::kv!(262) - f12);
+        f25 = 1.0 / (delirium_data::kv!(267) - f12);
         c.lead *= 1.0 - f12;
     }
     if c.max_reach > 0.0 {
@@ -988,12 +993,12 @@ pub(crate) fn predict_knee(hip: &Eff3, knee: &Eff1, side: f32) -> Vec3 {
 
 pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
     let up = p.up;
-    let (lp, rp) = (f.flags & delirium_data::kv!(251 int) != 0, f.flags & delirium_data::kv!(253 int) != 0);
+    let (lp, rp) = (f.flags & delirium_data::kv!(257 int) != 0, f.flags & delirium_data::kv!(188 int) != 0);
     // RDR2 (0x2aaeed8): running, or with airborneStep off, a planted foot off the ground on the side he moves to swings
     let lost = match p.rdr2 {
         Some(rd) if rd.running || !rd.p.airborne_step => {
             let along = s.vel.dot(s.legs[1].foot.m.d - s.legs[0].foot.m.d);
-            [lp && s.flags & delirium_data::kv!(251 int) == 0 && along < 0.0, rp && s.flags & delirium_data::kv!(7 int) == 0 && along > 0.0]
+            [lp && s.flags & delirium_data::kv!(257 int) == 0 && along < 0.0, rp && s.flags & delirium_data::kv!(7 int) == 0 && along > 0.0]
         }
         _ => [false; 2],
     };
@@ -1127,7 +1132,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
             // RDR2 (rdr2_balancer2.md §7.2) lifts each swing foot by its own velocity; GTA IV reads the left foot's for both
             let (fv, gv) = if p.rdr2.is_some() { (leg.foot.v, p.gvel[i]) } else { (lfoot_v, p.gvel[0]) };
             let ahead = target[i] - (fv - gv).mul_add(Vec3::splat(delirium_data::kv!(68)), leg.foot.m.d);
-            (c.lead, c.reach, c.lift) = (p.p168, p.rdr2.map_or(delirium_data::kv!(64), |r| r.p.max_foot_speed), sdot(up, ahead, b"yxz").fma(delirium_data::kv!(84), delirium_data::kv!(78)).clamp(delirium_data::kv!(9), delirium_data::kv!(119)));
+            (c.lead, c.reach, c.lift) = (p.p168, p.rdr2.map_or(delirium_data::kv!(64), |r| r.p.max_foot_speed), sdot(up, ahead, b"yxz").fma(delirium_data::kv!(84) / p.size, delirium_data::kv!(78)).clamp(delirium_data::kv!(9), delirium_data::kv!(119)));
         }
         let limb = leg.limb;
         leg_ik(&mut c, &limb, &mut leg.knee, &mut leg.hip, &leg.foot, &pelvis, vel);
@@ -1150,7 +1155,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
         Some(_) => (s.vel.vd(horizontal(s.m.c, up)) < 0.0, aim.is_some() && s.vel.length() < 1.0),
         None => (false, false),
     };
-    let contact = [s.flags & delirium_data::kv!(251 int) != 0, s.flags & delirium_data::kv!(7 int) != 0];
+    let contact = [s.flags & delirium_data::kv!(257 int) != 0, s.flags & delirium_data::kv!(7 int) != 0];
     let last = [s.flags & LEFT_LAST() != 0, s.flags & RIGHT_LAST() != 0];
     for (i, planted) in [lp, rp].into_iter().enumerate() {
         let side = if i == 0 { 1.0 } else { -1.0 };
@@ -1189,7 +1194,7 @@ pub fn balance_solve(p: &Params, f: &Feet, pv: &Pelvis, s: &mut Snap) {
                     if sdot(leg.foot.v, s.m.c, b"yzx") < 0.0 {
                         a -= delirium_data::kv!(60);
                     }
-                    a + acos(p.leg_length.clamp(delirium_data::kv!(72), delirium_data::kv!(263)))
+                    a + acos(p.leg_length.clamp(delirium_data::kv!(72), delirium_data::kv!(268)))
                 }
             }
         } else {
@@ -1354,15 +1359,20 @@ pub struct Body<'a> {
 }
 
 impl Body<'_> {
-    fn rigid(&self, j: usize) -> Option<(&crate::rigid::JointConst, &crate::rigid::Link, &crate::rigid::Link, Vec3)> {
+    fn rigid(&self, j: usize) -> Option<(crate::rigid::JointConst, &crate::rigid::Link, &crate::rigid::Link, Vec3)> {
         let (jd, (l, place, _)) = (&self.ch.joints[j], self.doll.rigid.as_ref()?);
-        Some((jd.rigid.as_ref()?, l.get(jd.parent)?, l.get(jd.child)?, *place))
+        let mut c = jd.rigid?;
+        let (ps, cs) = (self.build.parts[jd.parent].size, self.build.parts[jd.child].size);
+        if ps != 1.0 || cs != 1.0 {
+            (c.pa, c.ca) = (c.pa * ps, c.ca * cs);
+        }
+        Some((c, l.get(jd.parent)?, l.get(jd.child)?, *place))
     }
 
     pub fn read(&self, j: usize) -> [f32; 3] {
         let jd = &self.ch.joints[j];
         let tw = self.doll.prep_twist.get(jd.child).copied().flatten();
-        let Some((c, p, l, _)) = self.rigid(j) else { return self.ch.angle_at(j, self.frames, tw) };
+        let Some((ref c, p, l, _)) = self.rigid(j) else { return self.ch.angle_at(j, self.frames, tw) };
         if !jd.three {
             return [crate::rigid::hinge(c, p, l), 0.0, 0.0];
         }
@@ -1376,7 +1386,7 @@ impl Body<'_> {
     }
 
     pub fn joint_pos(&self, j: usize) -> Vec3 {
-        if let Some((c, _, l, place)) = self.rigid(j) {
+        if let Some((ref c, _, l, place)) = self.rigid(j) {
             return crate::rigid::pos(c, l, place);
         }
         let c = self.ch.joints[j].child;
@@ -1409,7 +1419,7 @@ impl Body<'_> {
         let half = |k: usize| (jd.limits[k].1 - jd.limits[k].0) * 0.5;
         let flip = |k: usize, x: f32| if jd.flip[k] { -x } else { x };
         let pos = self.joint_pos(j);
-        let m = self.rigid(j).map_or_else(|| m34(self.frames[jd.parent].rotation * jd.rage_parent, pos), |(c, p, l, place)| crate::rigid::frames(c, p, l, place).0);
+        let m = self.rigid(j).map_or_else(|| m34(self.frames[jd.parent].rotation * jd.rage_parent, pos), |(c, p, l, place)| crate::rigid::frames(&c, p, l, place).0);
         Eff3 { m, pos, damping: e.damping, strength: e.strength, half_twist: half(2), half_lean1: half(0),
                half_lean2: half(1), mid_lean1: flip(0, mid(0)), mid_lean2: flip(1, mid(1)), mid_twist: flip(2, mid(2)),
                desired: e.desired, actual: self.ch.actual(j, self.frames) }
@@ -1419,7 +1429,7 @@ impl Body<'_> {
         let (jd, e) = (&self.ch.joints[j], &self.ch.eff[j]);
         let pos = self.joint_pos(j);
         let (m, child) = self.rigid(j).map_or_else(|| (m34(self.frames[jd.parent].rotation * jd.in_parent, pos), m34(self.frames[jd.child].rotation * jd.in_child, pos)),
-                                                  |(c, p, l, place)| crate::rigid::frames(c, p, l, place));
+                                                  |(c, p, l, place)| crate::rigid::frames(&c, p, l, place));
         Eff1 { m, child, pos, damping: e.damping, strength: e.strength, half: (jd.limits[0].1 - jd.limits[0].0) * 0.5,
                mid: (jd.limits[0].0 + jd.limits[0].1) * 0.5, desired: e.desired[0], actual: self.ch.actual(j, self.frames)[0] }
     }
@@ -1430,7 +1440,7 @@ impl Body<'_> {
             return m;
         }
         if let (Some(k), Some((c, p, l, place))) = (self.rigid(knee), self.rigid(hip)) {
-            let (k, h) = (crate::rigid::frames(k.0, k.1, k.2, k.3).0, crate::rigid::frames(c, p, l, place).1);
+            let (k, h) = (crate::rigid::frames(&k.0, k.1, k.2, k.3).0, crate::rigid::frames(&c, p, l, place).1);
             let t = |v: Vec3| Vec3::new(v.vd(h.a), v.vd(h.b), v.vd(h.c));
             return M34 { a: t(k.a), b: t(k.b), c: t(k.c), d: t(k.d - h.d) };
         }
@@ -1531,6 +1541,7 @@ pub struct Config {
     pub lean_bias: f32,
     pub hip_yaw: (f32, f32),
     pub legs: (f32, f32),
+    pub size: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1546,6 +1557,8 @@ pub struct Dbm {
     pub lean: Lean,
     lean_vec: Vec3,
     as_force: bool,
+    /// RDR2: the COM lean channel's output (+0x760) while the lean slot holds a force lean (bodyBalance posts both)
+    pub com_lean: Vec3,
     pub push: Vec3,
     ratio: f32,
     pub event: Option<f32>,
@@ -1585,16 +1598,16 @@ impl Lean {
 
 #[allow(non_snake_case)]
 #[inline]
-pub fn CHAR_LEGS() -> (f32, f32) { (delirium_data::kv!(264), delirium_data::kv!(265)) }
+pub fn CHAR_LEGS() -> (f32, f32) { (delirium_data::kv!(269), delirium_data::kv!(270)) }
 #[allow(non_snake_case)]
 #[inline]
-pub fn CHAR_YAW() -> (f32, f32) { (delirium_data::kv!(266), delirium_data::kv!(267)) }
+pub fn CHAR_YAW() -> (f32, f32) { (delirium_data::kv!(271), delirium_data::kv!(272)) }
 #[allow(non_snake_case)]
 #[inline]
-pub fn MARGE_LEGS() -> (f32, f32) { (delirium_data::kv!(268), delirium_data::kv!(269)) }
+pub fn MARGE_LEGS() -> (f32, f32) { (delirium_data::kv!(273), delirium_data::kv!(274)) }
 #[allow(non_snake_case)]
 #[inline]
-pub fn MARGE_YAW() -> (f32, f32) { (-delirium_data::kv!(270), -delirium_data::kv!(271)) }
+pub fn MARGE_YAW() -> (f32, f32) { (-delirium_data::kv!(275), -delirium_data::kv!(276)) }
 /// RDR2's own stance numbers for its male ped (its NM context's ctx+0x34d0..+0x34e0: leg straightness and minimum
 /// foot separation, the legs' splay and turn, the head's turn), as the game set them from the townsman's standing pose
 /// in the reference recordings (other peds on the same body: 0.982-0.987, 0.286-0.293, 0.178). Not computed from the
@@ -1602,10 +1615,10 @@ pub fn MARGE_YAW() -> (f32, f32) { (-delirium_data::kv!(270), -delirium_data::kv
 pub const RDR2_MALE_STANCE: ((f32, f32), (f32, f32), f32) = ((0.9849, 0.2868), (0.1779, -0.0154), 0.0904);
 #[allow(non_snake_case)]
 #[inline]
-pub fn CHAR_HEAD() -> f32 { delirium_data::kv!(272) }
+pub fn CHAR_HEAD() -> f32 { delirium_data::kv!(277) }
 #[allow(non_snake_case)]
 #[inline]
-pub fn MARGE_HEAD() -> f32 { delirium_data::kv!(273) }
+pub fn MARGE_HEAD() -> f32 { delirium_data::kv!(278) }
 
 pub(crate) fn stance(up: Vec3, pelvis: &M34, l: &M34, r: &M34, head: &M34, zero: [Vec3; 3]) -> ((f32, f32), (f32, f32), f32) {
     let d = r.d - l.d;
@@ -1632,6 +1645,18 @@ pub(crate) fn zero_stance_rows(ch: &Character, build: &Build, row: &dyn Fn(usize
     Some(stance(ch.up, &row(pelvis), &row(l), &row(r), &row(delirium_data::kv!(55 int)), [zero(pelvis)?, zero(l)?, zero(r)?]))
 }
 
+fn foot_width(c: Config, hip_dist: f32) -> (f32, f32) {
+    if c.size == 1.0 {
+        return (c.legs.1, c.legs.1);
+    }
+    let step = c.legs.1 * hip_dist / (HIP_DIST() * c.size) / c.size.min(1.0);
+    (step * c.size.min(1.0).sqrt(), step)
+}
+
+#[allow(non_snake_case)]
+#[inline]
+fn HIP_DIST() -> f32 { delirium_data::kv!(279) }
+
 impl Dbm {
     pub fn new(b: &Body, c: Config) -> Dbm {
         let up = Vec3::Z;
@@ -1639,19 +1664,21 @@ impl Dbm {
         let pelvis = b.at(b.ch.joints[(*HIP())[0]].parent);
         let (zero, foot) = (|k: usize| b.zero_place(k), (*ANKLE()).map(|j| b.ch.joints[j].child));
         let cu = b.ch.up;
+        let hip_dist = slen((b.eff3((*HIP())[0]).m.d - pelvis).vx(cu), b"zyx");
+        let (width, step) = foot_width(c, hip_dist);
         let p = Params {
             up, gup: up, dt: 1.0 / delirium_data::kv!(103),
             pelvis_height: match zero(0).zip(zero(foot[0])).zip(zero(foot[1])) {
                 Some(((p, l), r)) => sdot(up, p - (l + r) * 0.5, b"zyx"),
                 None => up.vd(pelvis - (l + r) * 0.5),
             },
-            hip_dist: slen((b.eff3((*HIP())[0]).m.d - pelvis).vx(cu), b"zyx"),
-            leg_length: c.legs.0, foot_width: c.legs.1, p148: c.hip_yaw.0, p152: c.hip_yaw.1,
-            step_offset: c.legs.1.fma(delirium_data::kv!(24), delirium_data::kv!(130)), abort: c.abort, lead: delirium_data::kv!(60), p168: 1.0, p172: 0.0, lean_bias: c.lean_bias,
-            step_height: c.step_height, leg_stiffness: c.leg_stiffness, step_clamp: step_clamp(b, c), taper: c.taper,
-            low_abort: c.taper, ..default()
+            hip_dist,
+            leg_length: c.legs.0, foot_width: width, p148: c.hip_yaw.0, p152: c.hip_yaw.1,
+            step_offset: step.fma(delirium_data::kv!(24), delirium_data::kv!(130) * c.size), abort: c.abort, lead: delirium_data::kv!(60) * c.size, p168: 1.0, p172: 0.0, lean_bias: c.lean_bias,
+            step_height: c.step_height * c.size, leg_stiffness: c.leg_stiffness, step_clamp: step_clamp(b, c), taper: c.taper,
+            low_abort: c.taper, size: c.size, ..default()
         };
-        let f = Feet { pos: [l, r], centre: (l + r) * 0.5, height: [up.vd(l), up.vd(r)], countdown: c.max_steps, flags: delirium_data::kv!(2 int), ..default() };
+        let f = Feet { pos: [l, r], centre: (l + r) * 0.5, height: [up.vd(l), up.vd(r)], countdown: steps(c.max_steps, c.size), flags: delirium_data::kv!(2 int), ..default() };
         let (fl, fr) = (b.pmat(b.ch.joints[(*ANKLE())[0]].child).m, b.pmat(b.ch.joints[(*ANKLE())[1]].child).m);
         let pm = b.pmat(b.ch.joints[(*HIP())[0]].parent).m;
         let splay = asin(sdot(cu, fr.c.vx(fl.c), b"zyx")) * delirium_data::kv!(17);
@@ -1661,7 +1688,7 @@ impl Dbm {
             eprintln!("YAWINIT splay {splay:.4} turn {turn:.4}");
         }
         let pv = Pelvis { centre: f.centre, p52: p.lean_bias, p68: delirium_data::kv!(26), yaw: [turn - splay, -turn - splay], ..default() };
-        let mut d = Dbm { p, f, pv, acc: 0.0, leg_offset: 0.0, knee_scale: 1.0, leg_each: None, lean: Lean::default(), lean_vec: Vec3::ZERO, as_force: false, push: Vec3::ZERO, ratio: 0.0, event: None, success: false, held: false, last: (Vec3::Z, Vec3::ZERO), hip_lean: Vec3::ZERO,
+        let mut d = Dbm { p, f, pv, acc: 0.0, leg_offset: 0.0, knee_scale: 1.0, leg_each: None, lean: Lean::default(), lean_vec: Vec3::ZERO, as_force: false, com_lean: Vec3::ZERO, push: Vec3::ZERO, ratio: 0.0, event: None, success: false, held: false, last: (Vec3::Z, Vec3::ZERO), hip_lean: Vec3::ZERO,
             down: (0..2).any(|i| b.doll.touch[b.ch.joints[(*ANKLE())[i]].child] & delirium_data::kv!(7 int) != 0) };
         d.held = d.holding(&b.snap(up), l, r, None);
         d
@@ -1689,6 +1716,10 @@ impl Dbm {
         let u = vnorm(z + shz(self.lean_vec, z, b"yzx"));
         if !self.as_force {
             self.p.up = u;
+        } else if self.p.rdr2.is_some() && self.com_lean != Vec3::ZERO {
+            // RDR2 (0x2ab4ba8): the COM channel tilts up beside the force channel's push
+            let l = self.com_lean;
+            self.p.up = vnorm(z + l - z * l.dot(z));
         }
     }
 
@@ -1725,11 +1756,14 @@ impl Dbm {
         let h = up.vd(s.com) - up.vd(l).min(up.vd(r));
         let off = horizontal(s.com - l, up).length().min(horizontal(s.com - r, up).length())
             .min(horizontal(s.com - (l + r) * 0.5, up).length());
-        (self.event, self.success) = (None, false);
+        // RDR2 core clears these each test; GTA IV (0.7.0) leaves them
+        if self.p.rdr2.is_some() {
+            (self.event, self.success) = (None, false);
+        }
         if let Some(r) = self.p.rdr2.as_mut() {
             r.fail_ratio.0 = off / h.max(0.001);
         }
-        if off > self.p.rdr2.and_then(|r| r.abort).unwrap_or(self.p.abort) * h || (h < 0.5 && self.p.low_abort) || self.f.countdown == -1 {
+        if off > self.p.rdr2.and_then(|r| r.abort).unwrap_or(self.p.abort) * h || (h < 0.5 * self.p.size && self.p.low_abort) || self.f.countdown == -1 {
             if let Some(r) = self.p.rdr2 {
                 crate::extras_core_rdr2::trace(|| format!("balancer: fail test: {off:.2} off over {h:.2} high at {:.2} s", r.time));
             }
@@ -1761,7 +1795,7 @@ impl Dbm {
             && !self.p.rdr2.is_some_and(|r| r.kneeling);
         let x = off / (h * delirium_data::kv!(142));
         self.ratio = if x > self.ratio { x } else { (x - self.ratio) * delirium_data::kv!(17) + self.ratio };
-        if self.ratio < 1.0 && h > delirium_data::kv!(74) && self.f.countdown > 2 {
+        if self.ratio < 1.0 && h > delirium_data::kv!(74) * self.p.size && self.f.countdown > 2 {
             self.event = Some(self.ratio);
         }
         true
@@ -1772,11 +1806,11 @@ impl Dbm {
         for i in 0..2 {
             let start = sat(self.f.pos[i], up, sdot(up, b.joint_pos((*KNEE())[i]), b"zyx"), b"zyx");
             let old = self.p.target[i];
-            let hit = world.segment(start, start - up);
+            let hit = world.segment(start, start - up * self.p.size.max(1.0));
             self.p.contact[i] = hit.is_some();
             (self.p.target[i], self.p.normal[i]) = match hit {
                 // RDR2: the contact half the ankle's height above the hit
-                Some((at, n)) => (at + up * if self.p.rdr2.is_some() { 0.5 * crate::nmdbm_rdr2::FOOT_HEIGHT } else { delirium_data::kv!(131) }, n),
+                Some((at, n)) => (at + up * if self.p.rdr2.is_some() { 0.5 * crate::nmdbm_rdr2::FOOT_HEIGHT } else { delirium_data::kv!(131) * self.p.size }, n),
                 None => (start - up * (self.p.leg_length * self.p.leg_scale()), up),
             };
             let y = crate::estimate::vrefp(self.p.dt);
@@ -1788,7 +1822,7 @@ impl Dbm {
         self.p.dt = dt;
         self.p.step_clamp = step_clamp(b, c);
         self.p.abort = c.abort;
-        self.p.step_height = c.step_height;
+        self.p.step_height = c.step_height * c.size;
         self.tilt(b);
         let mut s = b.snap(self.p.up);
         self.last = (s.m.b, s.angvel);
@@ -1825,7 +1859,7 @@ impl Dbm {
             }
         }
         self.pv.centre = self.f.centre;
-        self.pv.planted = [self.f.flags & delirium_data::kv!(251 int) != 0, self.f.flags & delirium_data::kv!(253 int) != 0];
+        self.pv.planted = [self.f.flags & delirium_data::kv!(257 int) != 0, self.f.flags & delirium_data::kv!(188 int) != 0];
         self.p.leg_stiffness = c.leg_stiffness;
         self.p.leg_length = match self.p.rdr2 {
             // RDR2: the crouch request's knee bend instead of the extras' offset; standUp straightens him while moving
@@ -1857,10 +1891,11 @@ impl Dbm {
         let leg_scale = self.p.leg_scale();
         if let Some(r) = self.p.rdr2.as_mut() {
             r.straight = (c.legs.0, leg_scale);
-            let low = up_low(self.p.up, b.foot(0), b.foot(1));
+            // 0x2ab617c: the pelvis's world height over the lower foot's
+            let h = (0..2).map(|i| s.pelvis.m.d.z - s.legs[i].foot.m.d.z).fold(f32::MIN, f32::max);
             let hip = (s.legs[0].hip.actual[0] + s.legs[1].hip.actual[0]) * 0.5;
             let (gup, legs) = (self.p.gup, &s.legs);
-            r.crouch_start(self.p.up.vd(s.com) - low, leg_scale, c.legs.0, hip, || {
+            r.crouch_start(h, leg_scale, c.legs.0, hip, || {
                 use crate::nmdbm_rdr2::Rdr2;
                 (Rdr2::legs_lying(gup, [0, 1].map(|i| (legs[i].knee.m.d, legs[i].ankle.m.d))),
                  Rdr2::turn_out(s.pelvis.m.a, s.pelvis.m.b, [0, 1].map(|i| (legs[i].thigh.m.b, legs[i].thigh.m.c))))
@@ -1965,7 +2000,7 @@ impl Dbm {
 
     pub(crate) fn phase3(&mut self, s: &mut Snap) {
         self.pv.p68 = s.height;
-        let c = if self.p.rdr2.is_some() { crate::nmdbm_rdr2::Rdr2::swing_ankle_clamp() } else { delirium_data::kv!(274) };
+        let c = if self.p.rdr2.is_some() { crate::nmdbm_rdr2::Rdr2::swing_ankle_clamp() } else { delirium_data::kv!(280) };
         for leg in &mut s.legs {
             let x = leg.ankle.desired[0];
             leg.ankle.desired[0] = if x >= -c { x.min(c) } else { -c };
@@ -1995,14 +2030,15 @@ impl Dbm {
 
     pub fn apply(&self, s: &Snap, ch: &mut Character) {
         // RDR2 (the tail of 0x2aba1cc): the ankles' limit half-ranges this tick. On a slope, moving back or slow, lean1 at least
-        // 1; starting a crouch 1.4 [P: without the depth test]
+        // 1; crouching with a depth over 0, 1.4
         if let Some(r) = self.p.rdr2.as_ref() {
             let up = self.p.up;
             let (hv, hc) = (s.vel - up * up.vd(s.vel), s.m.c - up * up.vd(s.m.c));
             let raise = if r.on_slope && (hv.vd(hc) > 0.0 || s.vel.length() < r.p.legs_apart_restep.max(0.7)) { 1.0 } else { 0.0 };
-            // 0x2ab617c: the crouch's depth, from the pelvis over the feet
-            let height = (0..2).map(|i| up.vd(s.pelvis.m.d - s.legs[i].foot.m.d)).fold(f32::MIN, f32::max);
-            let raise = if r.crouching.is_some() && crate::nmdbm_rdr2::Rdr2::crouch_depth(height, self.p.leg_scale(), self.p.leg_length) > 0.0 { 1.4f32.max(raise) } else { raise };
+            // 0x2ab617c: the crouch's depth, from the pelvis's world height over the lower foot's and the standing straightness
+            // ctx+0x34d0 (not the leg length the crouch request bends)
+            let height = (0..2).map(|i| s.pelvis.m.d.z - s.legs[i].foot.m.d.z).fold(f32::MIN, f32::max);
+            let raise = if r.crouching.is_some() && crate::nmdbm_rdr2::Rdr2::crouch_depth(height, self.p.leg_scale(), r.straight.0) > 0.0 { 1.4f32.max(raise) } else { raise };
             if raise > 0.0 {
                 for i in 0..2 {
                     ch.lim_raise((*ANKLE())[i], [raise, 0.0, 0.0]);
@@ -2053,13 +2089,13 @@ impl Dbm {
             ch.eff[(*SPINE())[0]].oppose_gravity = r.p.oppose_gravity_legs;
         }
         for i in 0..2 {
-            let touching = s.flags & [delirium_data::kv!(251 int), delirium_data::kv!(7 int)][i] != 0;
+            let touching = s.flags & [delirium_data::kv!(257 int), delirium_data::kv!(7 int)][i] != 0;
             ch.eff[(*ANKLE())[i]].muscle_stiffness = if touching { delirium_data::kv!(31) } else { soft };
-            let planted = self.f.flags & [delirium_data::kv!(251 int), delirium_data::kv!(253 int)][i] != 0;
+            let planted = self.f.flags & [delirium_data::kv!(257 int), delirium_data::kv!(188 int)][i] != 0;
             let k = if self.leg_each.is_some() && self.p.rdr2.is_some() { each[i] * self.knee_scale } else { k };
             let knee = &mut ch.eff[(*KNEE())[i]];
             if planted {
-                let f = if self.p.taper { (-(-s.legs[i].knee.actual - delirium_data::kv!(12))).fma(delirium_data::kv!(275), 1.0).clamp(delirium_data::kv!(60), 1.0) } else { 1.0 };
+                let f = if self.p.taper { (-(-s.legs[i].knee.actual - delirium_data::kv!(12))).fma(delirium_data::kv!(281), 1.0).clamp(delirium_data::kv!(60), 1.0) } else { 1.0 };
                 (knee.strength, knee.muscle_stiffness) = ((f * k).powi(2), delirium_data::kv!(12));
             } else {
                 (knee.strength, knee.muscle_stiffness) = (k * k, 2.0);
@@ -2088,9 +2124,9 @@ impl Dbm {
             // RDR2 (0x2abc4ec): running with the planted foot off the ground this tick and the last, the stepping leg's hip and
             // knee relax (the foot's per-part value ctx+0x35cc has no reader found: not here)
             if self.p.rdr2.is_some_and(|r| r.running) && self.f.stepping == i as u32 + 1 {
-                let bits: u8 = if self.f.flags & delirium_data::kv!(251 int) != 0 {
-                    s.flags & (delirium_data::kv!(251 int) | LEFT_LAST())
-                } else if self.f.flags & delirium_data::kv!(253 int) != 0 {
+                let bits: u8 = if self.f.flags & delirium_data::kv!(257 int) != 0 {
+                    s.flags & (delirium_data::kv!(257 int) | LEFT_LAST())
+                } else if self.f.flags & delirium_data::kv!(188 int) != 0 {
                     s.flags & (delirium_data::kv!(7 int) | RIGHT_LAST())
                 } else {
                     1
@@ -2159,8 +2195,8 @@ pub fn oppose_gravity(b: &Body, attached: Option<(usize, Vec3, f32)>, out: &mut 
     if ch.rdr2 && ch.core.zmp && down.is_empty() {
         return;
     }
-    let lo = down.iter().map(|f| f - delirium_data::kv!(0 int)).min().unwrap_or(delirium_data::kv!(276 int)).min(delirium_data::kv!(276 int)) as i32;
-    let hi = down.iter().map(|f| f - 1).max().map_or(-delirium_data::kv!(276 int), |h| h as i32).max(-delirium_data::kv!(276 int));
+    let lo = down.iter().map(|f| f - delirium_data::kv!(0 int)).min().unwrap_or(delirium_data::kv!(282 int)).min(delirium_data::kv!(282 int)) as i32;
+    let hi = down.iter().map(|f| f - 1).max().map_or(-delirium_data::kv!(282 int), |h| h as i32).max(-delirium_data::kv!(282 int));
     let chain = |i: usize| (lo..=hi).contains(&(i as i32));
     let pair = hi > lo + delirium_data::kv!(0 int);
     // RDR2 core: a connected hand locks its arm's joints, and either hand the spine's; every connected limb's chain
@@ -2206,7 +2242,7 @@ pub fn oppose_gravity(b: &Body, attached: Option<(usize, Vec3, f32)>, out: &mut 
     }
     let ahead = |s: &(f32, Vec3, Vec3)| s.2.mul_add(Vec3::splat(AHEAD()), s.1) * crate::gjk::recip(s.0);
     let at = |i: usize, k: usize| {
-        let p = b.rigid(i).map_or_else(|| b.joint_pos(i), |(c, _, l, _)| crate::rigid::pos(c, l, Vec3::ZERO));
+        let p = b.rigid(i).map_or_else(|| b.joint_pos(i), |(c, _, l, _)| crate::rigid::pos(&c, l, Vec3::ZERO));
         let (v, w) = vw(k);
         let r = rel(k);
         let vo = b.doll.rage_vo.as_ref().and_then(|o| o.get(k).copied())
@@ -2262,7 +2298,7 @@ pub fn oppose_gravity(b: &Body, attached: Option<(usize, Vec3, f32)>, out: &mut 
             }
             t
         } else {
-            let axis = b.rigid(i).map_or_else(|| b.frames[j.parent].rotation * j.in_parent * Vec3::Z, |(c, _, l, _)| crate::rigid::hinge_axis(c, l));
+            let axis = b.rigid(i).map_or_else(|| b.frames[j.parent].rotation * j.in_parent * Vec3::Z, |(c, _, l, _)| crate::rigid::hinge_axis(&c, l));
             let h = sdot(axis, t, b"zyx").clamp(-max, max);
             // RDR2 core: its hinge applier drops a torque over 5000
             if ch.rdr2 && h.abs() > 5000.0 {
@@ -2343,7 +2379,7 @@ pub fn stabilise(b: &Body, k: f32, dt: f32) -> Vec<Vec3> {
     let c = c * c;
     let s = c * c * k;
     let s = s * s;
-    let f = (vel.mul_add(Vec3::splat(delirium_data::kv!(78)), com) - mid).mul_add(Vec3::splat(s), (vel - fv) * (s * delirium_data::kv!(277 f32)));
+    let f = (vel.mul_add(Vec3::splat(delirium_data::kv!(78)), com) - mid).mul_add(Vec3::splat(s), (vel - fv) * (s * delirium_data::kv!(283 f32)));
     let f = (f - up * sdot(f, up, b"zyx")) * (dt * delirium_data::kv!(103));
     out[feet[0]] += f * 0.5;
     out[feet[1]] += f * 0.5;
