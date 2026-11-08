@@ -1552,6 +1552,8 @@ pub struct Dbm {
     pub lean: Lean,
     lean_vec: Vec3,
     as_force: bool,
+    /// RDR2: the COM lean channel's output (+0x760) while the lean slot holds a force lean (bodyBalance posts both)
+    pub com_lean: Vec3,
     pub push: Vec3,
     ratio: f32,
     pub event: Option<f32>,
@@ -1681,7 +1683,7 @@ impl Dbm {
             eprintln!("YAWINIT splay {splay:.4} turn {turn:.4}");
         }
         let pv = Pelvis { centre: f.centre, p52: p.lean_bias, p68: delirium_data::kv!(26), yaw: [turn - splay, -turn - splay], ..default() };
-        let mut d = Dbm { p, f, pv, acc: 0.0, leg_offset: 0.0, knee_scale: 1.0, leg_each: None, lean: Lean::default(), lean_vec: Vec3::ZERO, as_force: false, push: Vec3::ZERO, ratio: 0.0, event: None, success: false, held: false, last: (Vec3::Z, Vec3::ZERO), hip_lean: Vec3::ZERO,
+        let mut d = Dbm { p, f, pv, acc: 0.0, leg_offset: 0.0, knee_scale: 1.0, leg_each: None, lean: Lean::default(), lean_vec: Vec3::ZERO, as_force: false, com_lean: Vec3::ZERO, push: Vec3::ZERO, ratio: 0.0, event: None, success: false, held: false, last: (Vec3::Z, Vec3::ZERO), hip_lean: Vec3::ZERO,
             down: (0..2).any(|i| b.doll.touch[b.ch.joints[(*ANKLE())[i]].child] & delirium_data::kv!(7 int) != 0) };
         d.held = d.holding(&b.snap(up), l, r, None);
         d
@@ -1709,6 +1711,10 @@ impl Dbm {
         let u = vnorm(z + shz(self.lean_vec, z, b"yzx"));
         if !self.as_force {
             self.p.up = u;
+        } else if self.p.rdr2.is_some() && self.com_lean != Vec3::ZERO {
+            // RDR2 (0x2ab4ba8): the COM channel tilts up beside the force channel's push
+            let l = self.com_lean;
+            self.p.up = vnorm(z + l - z * l.dot(z));
         }
     }
 

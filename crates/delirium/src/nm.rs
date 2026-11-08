@@ -351,6 +351,8 @@ pub struct Agent {
     /// RDR2 core's limb requests this frame (limbreq.rs), while it's on
     limb_reqs: Option<crate::limbreq::Requests>,
     pub(crate) lean: Option<(crate::nmdbm::LeanMode, f32, f32, bool)>,
+    /// RDR2 core: bodyBalance's COM lean, posted each tick it leans away (0 when it doesn't)
+    lean_com: Vec3,
     pub task_look: Option<bool>,
     shot: Option<(Shot, f32)>,
     nm_shot: Option<crate::nmshot::Shot>,
@@ -489,7 +491,7 @@ impl Agent {
         let roles = Roles::new(build);
         let pelvis_up = facing.inverse() * frames[roles.pelvis].rotation;
         let mut a = Agent { core_cb: vec![], core_base: None, locomotion_drive: None, locomotion_tracking: false, locomotion_terms: None, doll, msgs: Default::default(), push: vec![], contact_wake: false, rdr2_core: None, limb_reqs: None, roles, zero, pelvis_up, facing, random: Random::new((seed * delirium_data::kv!(82)) as u32 + 1), time: 0.0,
-                stiffness: (delirium_data::kv!(31), 1.0), relax: None, config: ConfigureBalance::default(), feedback: vec![], balance: None, lean: None,
+                stiffness: (delirium_data::kv!(31), 1.0), relax: None, config: ConfigureBalance::default(), feedback: vec![], balance: None, lean: None, lean_com: Vec3::ZERO,
                 shot: None, nm_shot: None, nm_hit: None, nm_hit_next: vec![], nm_hit_hold: false, nm_relax: None, nm_relax_lower: None, bb_brace: Default::default(), nm_head: Default::default(), nm_cf: None, nm_cf_msg: None, nm_twist: Default::default(), nm_fl: Default::default(), nm_fl_msg: None, nm_bw: None, nm_bw_msg: None, extras: Default::default(), overrides: vec![], nm_aw: Default::default(), nm_aw_msg: None, nm_pd: Default::default(), nm_pd_msg: None, nm_bf: Default::default(), nm_bf_msg: None, incoming: vec![], incoming_prev: vec![], incoming_state: 0, incoming_v_ref: Vec3::ZERO, nm_ru: Default::default(), nm_ru_msg: None, nm_rds: Default::default(), nm_rds_msg: None, rds_on: false, cf_arms_only: false, bb_on: false, nm_pa: Default::default(), nm_pa_msg: None, nm_gr: Default::default(), obstacles: vec![], nm_gr_msg: None, nm_br: Default::default(), nm_br_msg: None, nm_br_started: None, nm_hf: Default::default(), nm_hf_msg: None, hf_rdr2: None, fow_rdr2: None, nm_fow: Default::default(), nm_fow_msg: None, catch_fall: None, flinch: None, writhe: None, windmill: None, pedal: None, roll_up: None,
                 brace: None, head_look: vec![], shot_look: false, eff_override: vec![], hold: vec![], follow: vec![], nm_dt: None, held: None, held_eff: vec![], nm_shot_started: None, fallen: false, task_look: None, lean_bias: -delirium_data::kv!(206), hip_yaw: crate::nmdbm::CHAR_YAW(), legs: (crate::nmdbm::CHAR_LEGS().0, crate::nmdbm::CHAR_LEGS().1 * build.parts[0].grown), strength: 1.0, short, short_body: short, apart, most: build.parts.first().filter(|p| p.heft != 1.0 || p.grown != 1.0).map_or(1.0, |p| p.heft * p.size.powi(3) * p.grown),
                 ch: crate::nmrs::ASSET[build.nm].get().and_then(|a| crate::nmrs::joints(build, a)).map(|j| {
@@ -1854,6 +1856,7 @@ impl Agent {
                     Some((mode, amount, _, as_force)) => crate::nmdbm::Lean { mode, amount, as_force },
                     None => Default::default(),
                 };
+                dbm.com_lean = self.lean_com;
                 let was = dbm.f.stepping;
                 let body = crate::nmdbm::Body { ch, build, doll: &self.doll, frames: &frames };
                 let tick = dbm.tick(&body, world, c, dt);
@@ -1930,6 +1933,7 @@ impl Agent {
                     if let Some((mode, amount, as_force)) = out.lean {
                         self.lean = Some((mode, amount, 0.1, as_force));
                     }
+                    self.lean_com = out.lean_com;
                     catch = out.catch_fall;
                     bb_out = Some(out);
                 }

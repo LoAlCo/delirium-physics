@@ -131,6 +131,8 @@ pub struct Out {
     pub turn: Option<Vec3>,
     /// RDR2: a lean asked of the balancer (leaning away from a target moving past)
     pub lean: Option<(crate::nmdbm::LeanMode, f32, bool)>,
+    /// RDR2: bodyBalance's COM lean (owner 2, +0x760), posted beside its force lean on the balancer's COM channel
+    pub lean_com: Vec3,
     /// RDR2: this tick's turn is a real turn step (+0x139, the bump turn)
     pub turn_step: bool,
     /// RDR2: the arms' brace this tick: target, its velocity, distance, back time
@@ -725,7 +727,7 @@ impl BodyBalance {
         } else {
             self.rd.back_steps = 4;
         }
-        // lean away from a target moving past (the force lean only: our balancer has one lean channel)
+        // lean away from a target moving past: the force lean (+0x860) and the COM lean (+0x760), both owner 2
         let vt = self.rd.target_vel;
         let d = flat((snap.com - target) - vt * 0.05);
         if vt.length() > 0.2 && !r.move_when_bracing && d.length() < r.move_radius {
@@ -736,9 +738,9 @@ impl BodyBalance {
             // RDR2 also asks something of the balancer here (+0x44c, unknown) before the still amount
             let amount = if snap.vel.length() < 1.0 { r.move_amount_still } else { r.move_amount };
             out.lean = Some((crate::nmdbm::LeanMode::Dir(side.normalize_or_zero()), amount, true));
-            // the COM lean's channel (+0x760, 0.05, or leanamountstill still) has no second slot here: as far as the step, a hip lean
             let com = if snap.vel.length() < 1.0 { r.lean_still } else { 0.05 };
-            crate::extras_core_rdr2::trace_once("bodyBalance: lean away", || format!("force {amount}, COM {com} (COM's channel not applied)"));
+            out.lean_com = side.normalize_or_zero() * com;
+            crate::extras_core_rdr2::trace_once("bodyBalance: lean away", || format!("force {amount}, COM {com}"));
         }
         // spine and neck
         for i in (*NECK()) {
