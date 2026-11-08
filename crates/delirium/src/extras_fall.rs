@@ -2627,7 +2627,8 @@ impl SfRdr2 {
         }
         let (vz, g) = (-c.vel.dot(up).abs(), crate::ragdoll::GRAVITY().abs().max(1.0));
         self.tti = ((2.0 * g * d + vz * vz).sqrt() + vz) / g;
-        let q = bevy_math::Quat::from_scaled_axis(c.angvel * self.tti.min(1.0));
+        // 0x2a35fb8's spin: the COM inertia's inverse times the angular momentum
+        let q = bevy_math::Quat::from_scaled_axis(c.turn_rate() * self.tti.min(1.0));
         self.class = attitude([q * c.m.a, q * c.m.b, q * c.m.c], n);
     }
 
@@ -2659,7 +2660,7 @@ impl SfRdr2 {
         let share = down / (down.abs() + h.length()).max(1e-6);
         let fwdish = unit(v).dot(-c.m.c) > -0.2;
         self.class_now = attitude([c.m.a, c.m.b, c.m.c], self.ground);
-        let qm = bevy_math::Quat::from_scaled_axis(c.angvel * (0.5 * self.tti).min(1.0));
+        let qm = bevy_math::Quat::from_scaled_axis(c.turn_rate() * (0.5 * self.tti).min(1.0));
         self.class_mid = attitude([qm * c.m.a, qm * c.m.b, qm * c.m.c], self.ground);
         if v.length() > self.peak.length() {
             self.peak = v;

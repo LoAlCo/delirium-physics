@@ -485,6 +485,36 @@ impl<'a, 'b> Ctx<'a, 'b> {
               dbm: None, shot_on: false, fall_on: false, rfw: None, bb_on: false, sit_state: None, extras_on: vec![], incoming: &[], incoming_prev: &[], dt: 1.0 / 60.0, shot_scale: 1.0 }
     }
 
+    /// 0x2a35fb8: the spin the body's attitude is carried on by, the COM inertia (ctx+0x910) inverted times the angular
+    /// momentum ctx+0xf80, both from the COM pass 0x2a21dd0. The inertia is each part's own, turned to the world, plus
+    /// its mass at its place, less the whole mass at the COM's; the momentum is the parts' moving masses about the COM,
+    /// without their own spins (the pass adds no `I w`). Not the mean of the parts' spins, ctx+0xf70, `angvel`. An
+    /// attached object enters the mass and the COM as in `block`, not the sums of motion [P: which sums it enters].
+    pub(crate) fn turn_rate(&self) -> Vec3 {
+        let d = self.b.doll;
+        let n = self.b.frames.len();
+        let (mut m, mut mp, mut mv, mut pmv, mut i) = (0.0f32, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Mat3::ZERO);
+        for k in 0..n {
+            let (p, mk, (v, _)) = (d.link_d(k).0, d.part_mass(k), d.motion(k));
+            m += mk;
+            mp += p * mk;
+            mv += v * mk;
+            pmv += p.cross(v * mk);
+            i += d.tensor(k).as_mat3() + (Mat3::from_diagonal(Vec3::splat(p.length_squared())) - Mat3::from_cols(p * p.x, p * p.y, p * p.z)) * mk;
+        }
+        if let Some((_, at, am)) = self.ch.attached {
+            m += am;
+            mp += (at - d.link_d(0).1) * am;
+        }
+        if m <= 0.0 {
+            return self.angvel;
+        }
+        let c = mp / m;
+        i -= (Mat3::from_diagonal(Vec3::splat(c.length_squared())) - Mat3::from_cols(c * c.x, c * c.y, c * c.z)) * m;
+        let l = pmv - c.cross(mv);
+        if i.determinant().abs() < 1e-9 { self.angvel } else { i.inverse() * l }
+    }
+
     /// With the RDR2 core's limb requests: what the shot just wrote is this module's request.
     /// Its reaching for the wound is RDR2's separate reachForWound behaviour, so ranks as that.
     fn module(&mut self, tag: u32) {

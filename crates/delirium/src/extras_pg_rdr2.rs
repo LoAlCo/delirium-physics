@@ -1209,7 +1209,7 @@ impl PointGun {
         let falling = Self::falling(c) && !sat;
         // the attitude 0.2 s on (RDR2's 0x2a35fb8, 0x2a33350; Delirium's classes as highFall's)
         let class = || {
-            let q = Quat::from_scaled_axis(c.angvel * 0.2);
+            let q = Quat::from_scaled_axis(c.turn_rate() * 0.2);
             crate::extras_fall::attitude([q * c.m.a, q * c.m.b, q * c.m.c], c.up)
         };
         let mut seen = None;

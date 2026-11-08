@@ -689,8 +689,8 @@ impl HighFall {
             }
             None => (self.impact, self.ground) = (self.t + 30.0, up),
         }
-        // (ours: the body turned on at its spin, at most a second ahead)
-        let q = Quat::from_scaled_axis(c.angvel * (self.impact - self.t).clamp(0.0, 1.0));
+        // the body turned on by 0x2a35fb8's spin (the COM inertia's inverse times the angular momentum), at most a second ahead
+        let q = Quat::from_scaled_axis(c.turn_rate() * (self.impact - self.t).clamp(0.0, 1.0));
         self.class = attitude([q * c.m.a, q * c.m.b, q * c.m.c], self.ground);
         self.good = self.class == 0;
     }
@@ -830,7 +830,7 @@ impl HighFall {
                 match self.class {
                     1 => Some(6),
                     2 => {
-                        let q = Quat::from_scaled_axis(c.angvel * (0.5 * (self.impact - self.t)).clamp(0.0, 1.0));
+                        let q = Quat::from_scaled_axis(c.turn_rate() * (0.5 * (self.impact - self.t)).clamp(0.0, 1.0));
                         self.class_mid = attitude([q * c.m.a, q * c.m.b, q * c.m.c], self.ground);
                         Some(if self.class_mid == 2 && self.class_now == 2 { 6 } else { 1 })
                     }
