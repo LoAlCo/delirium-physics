@@ -694,6 +694,7 @@ impl Agent {
         // RDR2 core: its bodyBalance starts beside the balancer the shot started, and keeps that one (rdr2_bodybalance.md 3.1)
         if core && self.balance.as_ref().is_some_and(|b| b.bb.is_none() && b.dbm.as_ref().is_some_and(|d| d.p.rdr2.is_some())) {
             if let Some(ch) = self.ch.as_mut() {
+                ch.rdr2 = true;
                 let frames: Vec<Transform> = self.doll.frames().collect();
                 let p = full.unwrap_or_default();
                 let snap = ch.clone();
@@ -714,6 +715,9 @@ impl Agent {
         }
         let frames: Vec<Transform> = self.doll.frames().collect();
         if let Some(ch) = self.ch.as_mut() {
+            // the activation is the core's when the balancer is (`ch.rdr2` is otherwise set at the next tick's head: a
+            // bodyBalance started with the core in the same frame took GTA IV's activation and RDR2's tick)
+            ch.rdr2 = core;
             let mut p = full.unwrap_or_default();
             if full.is_none() {
                 params.onto(&mut p);
