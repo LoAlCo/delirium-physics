@@ -210,10 +210,6 @@ pub struct Pelvis {
 }
 
 /// The lower foot's height along up.
-fn up_low(up: Vec3, l: Vec3, r: Vec3) -> f32 {
-    up.vd(l).min(up.vd(r))
-}
-
 fn horizontal(v: Vec3, up: Vec3) -> Vec3 {
     v - up * up.vd(v)
 }
@@ -1884,10 +1880,11 @@ impl Dbm {
         let leg_scale = self.p.leg_scale();
         if let Some(r) = self.p.rdr2.as_mut() {
             r.straight = (c.legs.0, leg_scale);
-            let low = up_low(self.p.up, b.foot(0), b.foot(1));
+            // 0x2ab617c: the pelvis's world height over the lower foot's
+            let h = (0..2).map(|i| s.pelvis.m.d.z - s.legs[i].foot.m.d.z).fold(f32::MIN, f32::max);
             let hip = (s.legs[0].hip.actual[0] + s.legs[1].hip.actual[0]) * 0.5;
             let (gup, legs) = (self.p.gup, &s.legs);
-            r.crouch_start(self.p.up.vd(s.com) - low, leg_scale, c.legs.0, hip, || {
+            r.crouch_start(h, leg_scale, c.legs.0, hip, || {
                 use crate::nmdbm_rdr2::Rdr2;
                 (Rdr2::legs_lying(gup, [0, 1].map(|i| (legs[i].knee.m.d, legs[i].ankle.m.d))),
                  Rdr2::turn_out(s.pelvis.m.a, s.pelvis.m.b, [0, 1].map(|i| (legs[i].thigh.m.b, legs[i].thigh.m.c))))
@@ -2022,14 +2019,15 @@ impl Dbm {
 
     pub fn apply(&self, s: &Snap, ch: &mut Character) {
         // RDR2 (the tail of 0x2aba1cc): the ankles' limit half-ranges this tick. On a slope, moving back or slow, lean1 at least
-        // 1; starting a crouch 1.4 [P: without the depth test]
+        // 1; crouching with a depth over 0, 1.4
         if let Some(r) = self.p.rdr2.as_ref() {
             let up = self.p.up;
             let (hv, hc) = (s.vel - up * up.vd(s.vel), s.m.c - up * up.vd(s.m.c));
             let raise = if r.on_slope && (hv.vd(hc) > 0.0 || s.vel.length() < r.p.legs_apart_restep.max(0.7)) { 1.0 } else { 0.0 };
-            // 0x2ab617c: the crouch's depth, from the pelvis over the feet
-            let height = (0..2).map(|i| up.vd(s.pelvis.m.d - s.legs[i].foot.m.d)).fold(f32::MIN, f32::max);
-            let raise = if r.crouching.is_some() && crate::nmdbm_rdr2::Rdr2::crouch_depth(height, self.p.leg_scale(), self.p.leg_length) > 0.0 { 1.4f32.max(raise) } else { raise };
+            // 0x2ab617c: the crouch's depth, from the pelvis's world height over the lower foot's and the standing straightness
+            // ctx+0x34d0 (not the leg length the crouch request bends)
+            let height = (0..2).map(|i| s.pelvis.m.d.z - s.legs[i].foot.m.d.z).fold(f32::MIN, f32::max);
+            let raise = if r.crouching.is_some() && crate::nmdbm_rdr2::Rdr2::crouch_depth(height, self.p.leg_scale(), r.straight.0) > 0.0 { 1.4f32.max(raise) } else { raise };
             if raise > 0.0 {
                 for i in 0..2 {
                     ch.lim_raise((*ANKLE())[i], [raise, 0.0, 0.0]);
