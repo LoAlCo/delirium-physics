@@ -2702,16 +2702,7 @@ fn floor_window(r: RfwRdr2) -> f32 {
 /// first, 2 or 3 by its third.
 fn rfw_lie_class(c: &Ctx, t: f32) -> u8 {
     let q = bevy_math::Quat::from_scaled_axis(c.turn_rate() * t);
-    let (a, b, cc) = (q * c.m.a, q * c.m.b, q * c.m.c);
-    let (f3, f4, f2) = (b.dot(c.up), -a.dot(c.up), -cc.dot(c.up));
-    let mut class = 2 + (f2 >= 0.25) as u8;
-    if f4.abs() - f2.abs() > 0.15 {
-        class = 4 + (f4 >= 0.0) as u8;
-    }
-    if f3.abs() > 0.8 || (f2.abs() < f3.abs() && f4.abs() < f3.abs() && f2.abs() < 0.75 && f4.abs() < 0.75 && f3.abs() > 0.75) {
-        class = (f3 <= 0.0) as u8;
-    }
-    class
+    crate::extras_fall::attitude([q * c.m.a, q * c.m.b, q * c.m.c], c.up)
 }
 
 /// RDR2's pull: strength 8 at the start of a reach falling to 4 over 0.3 s; the recoil (the hand first pushed away
