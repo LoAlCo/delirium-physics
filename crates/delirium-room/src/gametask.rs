@@ -252,6 +252,8 @@ pub struct Tunables {
     pub nums: std::collections::HashMap<String, f32>,
     pub vecs: std::collections::HashMap<String, [f32; 3]>,
     pub texts: std::collections::HashMap<String, String>,
+    /// members that are blocks of plain values (CTaskNMMelee's finisher blocks and their like), by member, then by name
+    pub blocks: std::collections::HashMap<String, std::collections::HashMap<String, f32>>,
 }
 
 impl Tunables {
@@ -276,6 +278,13 @@ pub fn tunables(file: &str, tunables: &str) -> Option<Tunables> {
             }
         } else if k.kids.is_empty() && !k.text.is_empty() {
             out.texts.insert(k.tag.clone(), k.text.clone());
+        } else if !k.kids.is_empty() && k.kids.iter().all(|c| c.value().is_some()) {
+            let vals = k.kids.iter().filter_map(|c| {
+                let v = c.value()?;
+                let x = match v { "true" => Some(1.0), "false" => Some(0.0), v => v.parse().ok() }?;
+                Some((c.tag.clone(), x))
+            });
+            out.blocks.insert(k.tag.clone(), vals.collect());
         }
     }
     Some(out)

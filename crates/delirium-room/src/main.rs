@@ -1342,6 +1342,8 @@ struct Sim {
     rdr2_hf: Option<Rdr2HighFall>,
     /// RDR2 core: the game's CTaskNMBalance after a bump (`rdr2_push_frame`)
     rdr2_push: Option<Rdr2Push>,
+    /// RDR2 core: the game's CTaskNMMelee after a blow (`rdr2_melee_frame`)
+    rdr2_melee: Option<Rdr2Melee>,
     click_shoots: bool,
     grab: Option<Grab>,
     ties: Vec<Tie>,
@@ -2765,6 +2767,156 @@ impl Sim {
         }
     }
 
+    /// A line's parameters replaced or added (`name=value`, no spaces in a value).
+    fn edit_line(line: &str, set: &[(&str, String)]) -> String {
+        let mut toks: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+        toks.retain(|t| !set.iter().any(|(n, _)| t.split('=').next() == Some(*n)));
+        toks.extend(set.iter().map(|(n, v)| format!("{n}={v}")));
+        toks.join(" ")
+    }
+
+    /// RDR2's CTaskNMMelee on a blow (study/rdr2_push_melee_tasks.md §2.3, 0x1c8977c [C]), the Hero the attacker:
+    /// * the sets Start, FatallyInjured when his health is out, and the attacker's action's ActionSets entry (kick_standing for
+    ///   the Hero's kick [P: the room's moves aren't RDR2's], none else);
+    /// * the counter impulse when he's moving into the blow: C = c |v_r| m (c the blow's share along his ground velocity v_r,
+    ///   m the hit part's mass) against his motion at the pelvis, and the blow's impulse less min(C, I0 x
+    ///   fImpulseReductionScaleMax) [the attacker's own term left out: P];
+    /// * the merged list edited: applyBulletImpulse's impulse triple scales I x the blow's direction (a, then b [G: c for the
+    ///   parts outside group 0x22d49b65; the files' sets have b = c]) at the hit part and point; meleeReact a new hit there,
+    ///   hitMag 1; shotNewBullet always, its normal against the blow;
+    /// * the kick's finisher block 0A5FDA7F armed (§2.5).
+    /// I0 is the room's swing impulse [P: the game's weapon impulse with its distance falloff, 0x78a298, not read].
+    fn rdr2_melee_start(&mut self, at: Vec3, j: Vec3) -> bool {
+        let Some(file) = Self::task_file_text() else { return false };
+        let Ok(sets) = Self::task_file() else { return false };
+        let tun = gametask::tunables(&file, "CTaskNMMelee__Tunables").unwrap_or_default();
+        let kick = self.hero.as_ref().is_some_and(|h| h.keys & 0x80 != 0);
+        let mut want = vec!["CTaskNMMelee/Start"];
+        if self.health <= 0.0 {
+            want.push("CTaskNMMelee/FatallyInjured");
+        }
+        if kick {
+            want.push("CTaskNMMelee/kick_standing");
+        }
+        let named: Vec<&gametask::Set> = want.iter().filter_map(|w| sets.iter().find(|s| gametask::selects(w, &s.path))).collect();
+        if named.is_empty() {
+            return false;
+        }
+        let merged = gametask::merge(named.iter().copied());
+        let k = self.agent.doll.nearest(&self.build, at);
+        let fr = self.agent.doll.frames().nth(k).unwrap_or_default();
+        let local = fr.rotation.inverse() * (at - fr.translation);
+        let d = j.normalize_or_zero();
+        let mut i = j.length();
+        // the counter impulse (0x1c67a38)
+        let (_, v) = self.agent.doll.com();
+        let vr = v.with_z(0.0);
+        if vr.length() >= 1.0 {
+            let c = d.dot(vr.normalize());
+            if c > 0.0 {
+                let cm = c * vr.length() * self.agent.doll.part_mass(k) * tun.f("fCounterImpulseScale", 1.0);
+                let r = cm.min(i * tun.f("fImpulseReductionScaleMax", 1.0));
+                i -= r;
+                let p0 = self.agent.doll.centre(0);
+                self.agent.doll.impulse(0, p0, -vr.normalize() * cm);
+            }
+        }
+        let names: Vec<&str> = want.iter().map(|w| w.rsplit('/').next().unwrap_or(w)).collect();
+        let (lines, _) = self.task_lines(&format!("rdr2 task CTaskNMMelee {}", names.join("+")), &merged);
+        let mut scaled = d * i;
+        for l in lines {
+            let out = if l.starts_with("applyBulletImpulse") {
+                // the set's impulse is three scales: overall, then the hit part's group's
+                let s: Vec<f32> = l.split_whitespace().find_map(|t| t.strip_prefix("impulse=")).map(|x| x.trim_matches(|c| c == '(' || c == ')')
+                    .split(',').filter_map(|y| y.parse().ok()).collect()).unwrap_or_default();
+                if s.len() == 3 {
+                    scaled = d * i * s[0] * s[1];
+                }
+                Self::edit_line(&l, &[("partIndex", k.to_string()), ("impulse", v3(scaled)), ("localHitPointInfo", "true".into()), ("hitPoint", v3(local))])
+            } else if l.starts_with("meleeReact") {
+                Self::edit_line(&l, &[("hitNew", "true".into()), ("hitPart", k.to_string()), ("hitLocal", "true".into()), ("hitPoint", v3(local)),
+                                      ("hitMag", "1".into()), ("hitNormal", v3(-d))])
+            } else {
+                l
+            };
+            self.send(&out);
+        }
+        self.send(&format!("shotNewBullet bodyPart={k} localHitPointInfo=true hitPoint={} normal={}", v3(local), v3(-d)));
+        // the kick's finisher (0x1c72a8c): F = Strength x the blow's direction (flattened), spread over Period
+        let finisher = kick.then(|| tun.blocks.get("UNK_MEMBER_0x0A5FDA7F").cloned()).flatten().filter(|b| b.get("Enabled").copied().unwrap_or(0.0) != 0.0);
+        let fin = finisher.and_then(|b| {
+            let g = |n: &str| b.get(&format!("UNK_MEMBER_0x{n}")).copied().unwrap_or(0.0);
+            let strength = g("F0E491B0");
+            let dir = if g("8A4EAF7D") != 0.0 { d.with_z(0.0).normalize_or_zero() } else { d };
+            (strength > 0.0).then(|| MeleeFinisher { f: dir * strength, t: 0.0, period: g("27B9CF25").max(1e-4), lift: g("1957F018") * strength,
+                                                    lift_each: g("ACEE1020") != 0.0,
+                                                    shares: [g("7A106F09"), g("43A01A2D"), g("71753340"), g("97B4B4F5"), g("1B036301"), g("AA6E68CE"), g("E8FF7405")] })
+        });
+        if let Some(f) = fin.as_ref().filter(|f| !f.lift_each && f.lift.abs() > 1e-6) {
+            if let Some(s4) = self.part_by_tag("SPINE4").or_else(|| self.part_by_tag("SPINE3")) {
+                let p = self.agent.doll.centre(s4);
+                self.agent.doll.impulse(s4, p, Vec3::Z * f.lift);
+            }
+        }
+        let update = sets.iter().any(|s| gametask::selects("CTaskNMMelee/Update", &s.path) && !s.messages.is_empty());
+        self.rdr2_melee = Some(Rdr2Melee { t: 0.0, failed: false, fin, update });
+        self.say(format!("ours  melee: RDR2's CTaskNMMelee ({}), impulse {:.1} N s on part {k}", names.join("+"), scaled.length()));
+        true
+    }
+
+    /// Each step while RDR2's CTaskNMMelee runs (§2.4 0x1c559a4, §2.5 0x1c40914, §2.6 0x1c43e04 [C]): Update (when the file's
+    /// has messages); upperBodyFlinch's pos and bodyBalance's headLookPos on the attacker (the Hero's chest [G: his bone 8]);
+    /// the finisher's impulses, share x w x F at the pelvis, spine0, 1, 2, the top spine, each clavicle and each thigh, w the
+    /// step's part of Period; OnBalanceFailed once when the balancer gives up.
+    fn rdr2_melee_frame(&mut self) {
+        const DT: f32 = 1.0 / 60.0;
+        let Some(mut m) = self.rdr2_melee.take() else { return };
+        if self.agent.rdr2_core.is_none() || self.dead {
+            return;
+        }
+        if m.update {
+            self.fire_task("CTaskNMMelee/Update");
+        }
+        if let Some(h) = self.hero.as_ref() {
+            let at = h.feet + Vec3::Z * 1.3;
+            self.send(&format!("upperBodyFlinch pos={}", v3(at)));
+            self.send(&format!("bodyBalance headLookPos={}", v3(at)));
+        }
+        if let Some(f) = m.fin.as_mut() {
+            if f.t < f.period {
+                let dt = (f.period - f.t).min(DT);
+                f.t += dt;
+                let w = dt / f.period;
+                let parts = [Some(0), self.part_by_tag("SPINE0"), self.part_by_tag("SPINE1"), self.part_by_tag("SPINE2"),
+                             self.part_by_tag("SPINE4").or_else(|| self.part_by_tag("SPINE3"))];
+                let names: Vec<String> = self.build.parts.iter().map(|p| p.name.to_lowercase()).collect();
+                let both = |key: &str| names.iter().enumerate().filter(|(_, n)| n.contains(key)).map(|(i, _)| i).collect::<Vec<_>>();
+                let mut hits: Vec<(usize, f32)> = parts.iter().zip(&f.shares[..5]).filter_map(|(p, &s)| p.map(|p| (p, s))).collect();
+                hits.extend(both("clavicle").into_iter().map(|p| (p, f.shares[5])));
+                hits.extend(both("thigh").into_iter().map(|p| (p, f.shares[6])));
+                if f.lift_each && f.lift.abs() > 1e-6 {
+                    if let Some(s4) = parts[4] {
+                        let p = self.agent.doll.centre(s4);
+                        self.agent.doll.impulse(s4, p, Vec3::Z * f.lift * w);
+                    }
+                }
+                for (p, s) in hits.into_iter().filter(|(_, s)| *s != 0.0) {
+                    let at = self.agent.doll.frames().nth(p).map_or(Vec3::ZERO, |t| t.translation);
+                    self.agent.doll.impulse(p, at, f.f * s * w);
+                }
+            }
+        }
+        let fallen = self.agent.fallen || !self.agent.balancing();
+        if fallen && !m.failed {
+            m.failed = true;
+            self.fire_task("CTaskNMMelee/OnBalanceFailed");
+        }
+        m.t += DT;
+        if m.t < 6.0 {
+            self.rdr2_melee = Some(m);
+        }
+    }
+
     fn xr(&self, i: usize) -> bool {
         self.extra && self.extra_pick & (1 << i) != 0
     }
@@ -3332,6 +3484,12 @@ impl Sim {
             }
             hero::Hit::Bump(_) => ("balance", vec![]),
         };
+        // RDR2 core: a blow runs the game's CTaskNMMelee from the player's physicstasks (`rdr2_melee_start`)
+        if let (hero::Hit::Swing(_, at, j), true) = (&hit, self.agent.rdr2_core.is_some()) {
+            if self.rdr2_melee_start(*at, *j) {
+                return self.say(format!("{what}: RDR2's CTaskNMMelee (health {:.0})", self.health));
+            }
+        }
         let set = match (task, &hit) {
             ("flinch", _) if self.agility < 3 => "MELEE_PASIVE",
             ("flinch", _) => "MELEE",
@@ -6153,7 +6311,7 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
                         shot_task: None, rand: Default::default(), sg_seed: 1, sg_aim: None,
                         log: VecDeque::new(), console: String::new(), script, typing: false,
                         game_shot: String::new(), weapons, weapon: 0, weak: false, sel: 0, over_ui: false, held: true,   show_ui: true, sens: 0.5, rec, health: 200.0, god: false, aim_gun: false, gun: Gun::default(), blast_task: None, burning: 0.0, shock: 0.0, charred: vec![], voxels: vec![], on_fire: None, hero_gun: false, passive: true, homer: None, homer_weapon: None, homer_wait: None, homer_wild: false, gun_ai: false, homer_combat: None, homer_guard: None, homer_rest: 0.0, ammo: 0, reloading: None, taxis: vec![], driving: false, pedals: (0.0, 0.0, false), car_tune: None, lean_stop: None, hurt: [0.0; 4], near_at: -9.0, near_last: -9.0, dived: false, no_dodge: false, dodge_gap: DODGE_GAP, look_stop: None, dodge_at: 0.0, dodging: false, look_after: None, fall: None, hold: None, airborne: false, wet: false, hero_alpha: 0.6, render_scale: 1.0, msaa: 4, msaa_max: 4, shadow_q: 3, frame_ms: 0.0, gpu: String::new(), gpu_now: String::new(), gpus: None, aa: AA_MSAA, smaa_q: 2, dlss_q: 0, fsr_q: 1, fsr_ok: false, xess_q: 1, xess_ok: false, sharpen: 0.0, sharp_by: [0.0; 9], ssao: 0, ao_strength: 1.0, bloom: 0.0, dof: 0.0, contact: 0.0, contact_k: 1.0, vignette: 0.0, lens: 0.0, chroma: 0.0, rt: 0, rt_ok: false, sky: 2, god_rays: false, restir: false, fire: 2, water_q: 1, real_fire: false, voxel_water: false, real_water: false, real_drain: false, pouring: false, real_surface: false, real_ripples: false, water_clear: true, wet_trail: true, water_impact: true, water_faucet: true, real_level: None, flow: vec![], hero_flow: vec![], water_caustics: false, water_spray: false, water_waves: false, water_pixels: false, water_haze: false, water_mirror: false, water_foam: false, water_mist: false, photons: false, water_fine: false, water_depth: true, water_relax: false, water_ghost: false, water_vort: false, water_spray_phys: false, safe: false, fire_light: true, fire_homer: false, shadow_filter: 0, water_wet: false, wet_film: false, wet_drips: false, sky_shade: false, water_traced: false, glass_tint: true, glass_shade: true, water_ripples: true, water_refract: false, flood: None, smoke: true, view_px: UVec2::ONE, defaults: String::new(), upscaler: UP_FSR1, dlss_ok: false, fps_limit: FPS_VSYNC, fullscreen: false, extra: false, rdr2: false, rdr2_core: false, rig_rdr2: false, rig_dir: String::new(), rig_body: String::new(), rdr2_after: vec![], wall_sent: false, rdr2_fire: false, horse: None, horse_file: String::new(), horse_frag: String::new(), riding: false, rdr2_pick: Default::default(), param_edits: Default::default(), param_search: String::new(), param_changed_only: false, extra_pick: 0x1ff, fire_react: true, dive: false, hang: None, was_fallen: false, curled: false, super_punch: false, even: false, crush: None, cab_gas: 0.0, cam: None, look_z: 0.8, film: 0.0, photo: false, soft: true, shadows: true, sun_color: [1.0; 3], fill_k: 1.0, gun_reach: 1.0, gun_up: 0.0, gun_off: Vec3::ZERO, gun_aim_off: Vec3::ZERO, crane: None, crane_to: None, shadow: 0.0, strict: false, stairs_rolled: false, cam_head: false, cam_rig: None, spawn_at: None, tear_k: 1.0, sky_k: 1.0, kept_gun: None, cam_floor: f32::MIN, pov: false, film_vel: Vec3::ZERO, photo_pending: false, on_cue: vec![], photo_follow: false, detached: false, cam_at: None, cam2: None, cam2_queue: vec![], cam2_b: None, meat: None, meat_on: true, meat_wipe: false, skate3_bails: false, step_limit: false, meat_screen: None, shot_scene: String::new(), photo_note: String::new(), script_walk: Vec3::ZERO, throw_speed: None, homer_shot: 0.0, hero_physics: true, hero_doll: None, tackle: None, cuts: vec![], hat: None, dismember: false, jump: None, steam: (0, vec![]), #[cfg(feature = "portal")] portal: portal::Portals::new(), click_at: None,
-                        getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None, rdr2_hf: None, rdr2_push: None,   click_shoots: false,
+                        getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None, rdr2_hf: None, rdr2_push: None, rdr2_melee: None,   click_shoots: false,
                         grab: None, ties: vec![], line_k: 1.0, line_leash: false, line_wrap: true, drag_hold: None, drag_len: 0.0, tie_hover: None, glow: vec![], rings: vec![], ripples: vec![], ripple_wait: vec![], tape: Default::default(), replay: None, throw_at: None, pops: vec![], pop_screen: vec![], show_pops: true, tab: 1, sounds: vec![], sound: true, volume: [1.0, 1.0, 0.35], blood: vec![], pixel_blood: true, gore: false, layers: true, wounds: vec![], show_ripples: false, infinite: false, fx_seed: 1, pointer: None, crowd_hp: vec![], car_hit: vec![], car_reacts: vec![], help: !help_seen(), auto_balance: true, dead: false, hero: None, skate: None, skate_link: skate_files::Link::new(), agility,
                         scene: None, switch_to: None, poke: POKE, game_dir: game_dir.map(str::to_string), walk: true, relock: false, cam_locked: true, walk_dir: Vec3::ZERO, wander: Default::default(), getup_mode: 0, musc: None, learned: None, walk_learned: None, preview_on: false, preview: None, preview_wait: false, preview_keys: (false, false), script_jog: false, watch: None, bench: vec![], homer_id: 0, spawn_body: body, base, crowd_build, body, skin: saved_look(), ped_color: 0, body_alpha: BODY_ALPHA, eyes: true, bone_skin: false, brows: true, skel: true, skel_style: 0, clean: false, sun_dir: saved_sun() };
     sim.auto_balance = sim.script.is_empty();
@@ -6195,6 +6353,31 @@ struct Rdr2Push {
     /// the task has the bumper as its bump entity (+0x388): the flinch and look on him each step. Not for the player's
     /// run into a ped, where the game's had none [R]
     bumper: bool,
+}
+
+/// RDR2's CTaskNMMelee after a blow (`Sim::rdr2_melee_frame`).
+#[derive(Clone, Debug)]
+struct Rdr2Melee {
+    /// s since the blow
+    t: f32,
+    /// OnBalanceFailed sent (+0x370)
+    failed: bool,
+    fin: Option<MeleeFinisher>,
+    /// the file's Update set has messages
+    update: bool,
+}
+
+/// An armed finisher block (§2.5): F at task+0x230, elapsed +0x240.
+#[derive(Clone, Debug)]
+struct MeleeFinisher {
+    f: Vec3,
+    t: f32,
+    period: f32,
+    /// Lift x Strength, straight up at the top spine part
+    lift: f32,
+    lift_each: bool,
+    /// pelvis, spine0, spine1, spine2, top spine, each clavicle, each thigh
+    shares: [f32; 7],
 }
 
 /// 0x1c54378's height bands: above a 20 m probe and falling at 6..15 m/s (HighHighFall) or faster (SuperHighFall).
@@ -10758,6 +10941,7 @@ impl Sim {
         self.fire_frame(1.0 / 60.0);
         self.rdr2_high_fall_frame();
         self.rdr2_push_frame();
+        self.rdr2_melee_frame();
         if self.steps % 2 == 0 {
             self.shot_frame();
             self.blast_frame();
@@ -11089,6 +11273,12 @@ fn headless(mut sim: Sim, n: usize) {
                 (_, Some(b)) => sim.button(b),
                 _ => sim.send(l),
             }
+        }
+        // test hook: RDR2_PUNCH=<frame> is the Hero's blow (30 N s into his chest from the front) at that frame, without a Hero
+        if std::env::var("RDR2_PUNCH").ok().and_then(|f| f.parse::<usize>().ok()) == Some(i) {
+            let fwd = sim.ours().fwd;
+            let chest = sim.part_by_tag("SPINE2").map_or(sim.agent.doll.centre(0), |k| sim.agent.doll.centre(k)) + fwd * 0.12;
+            sim.land(hero::Hit::Swing(10.0, chest, -fwd * hero::MELEE_PUSH), chest + fwd * 0.6, "test  punch to the chest");
         }
         // test hook: RDR2_BUMP=<frame> is the Hero's bump (a run into him from behind) at that frame, without a Hero
         if std::env::var("RDR2_BUMP").ok().and_then(|f| f.parse::<usize>().ok()) == Some(i) {

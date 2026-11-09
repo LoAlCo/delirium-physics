@@ -2435,6 +2435,10 @@ struct RfwRdr2 {
 
 impl ReachForWound {
     fn new(p: &mut P) -> Result<ReachForWound, Error> {
+        // kept by the game's handler, not used here (the table's used: false): a set may send them
+        (p.b("rfwWithPistol", false)?, p.b("bust", false)?, p.f("cupSize", 0.0)?, p.f("bustElbowLift", 0.0)?);
+        // sent by the sets (as a flag), no handler takes it
+        let _ = p.get("?0a09aa12");
         let arm_given = p.get("armStiffness").is_some();
         let arm_stiffness = p.f("armStiffness", 10.0)?;
         Ok(ReachForWound {

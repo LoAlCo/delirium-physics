@@ -1470,15 +1470,16 @@ impl BcrRdr2 {
             predict: f(p, "bracePredictionTime", 0.7)?, min_brace: f(p, "minBraceTime", 0.3)?, back_time: f(p, "timeToBackwardsBrace", 0.5)?,
             absorb: f(p, "reachAbsorbtionTime", 0.15)?, brace_dist: f(p, "braceDistance", 2.0)?, brace_stiff: f(p, "bracearmstiffness", 12.0)?,
             stagger_stop: f(p, "staggerStopTime", 0.0)?, still_clock: b(p, "stillClock", false)?,
-            snap: if b(p, "snap", false)? {
+            // the handler keeps the snap's settings whether or not snap is on (a set may send them with snap=false)
+            snap: {
+                let on = b(p, "snap", false)?;
                 let (mag, random) = (f(p, "snapMag", -0.6)?, f(p, "snapDirectionRandomness", 0.3)?);
                 let mut limbs = [false; 6];
                 for (l, n) in limbs.iter_mut().zip(["snapLeftLeg", "snapRightLeg", "snapLeftArm", "snapRightArm", "snapSpine", "snapNeck"]) {
                     *l = b(p, n, false)?;
                 }
-                Some(BcrSnap { mag, random, hip: i(p, "snapHipType", 0)?, limbs, phased: b(p, "snapPhasedLegs", true)?, duration: f(p, "snapDuration", 0.0)? })
-            } else {
-                None
+                let s = BcrSnap { mag, random, hip: i(p, "snapHipType", 0)?, limbs, phased: b(p, "snapPhasedLegs", true)?, duration: f(p, "snapDuration", 0.0)? };
+                on.then_some(s)
             },
         };
         Ok(BcrRdr2 { small: vec![], p, state: 0, hits: [None; 2], speed: 0.0, wall: None, wall_vel: Vec3::ZERO, tte: 0.0, side: -1.0, impacted: false, phase: false,
