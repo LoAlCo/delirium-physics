@@ -2542,7 +2542,16 @@ impl Sim {
 
     fn fall(&mut self, h: f32) {
         let fr: Vec<Transform> = self.agent.doll.frames().map(|f| f.with_translation(f.translation + Vec3::Z * h)).collect();
-        (self.agent, self.msgs) = (Agent::new(&self.build, Ragdoll::new(&self.build, &fr, Vec3::ZERO), Quat::IDENTITY, 0.3), msg::State::default());
+        // RDR2 core: the game's NM takes a fall over from its falling animation, drifting 0.01-0.13 m/s sideways (rdr2nmx falls,
+        // 2026-11-09): a still drop gives CTaskNMHighFall's PitchInDirectionForce no direction, the game's always has one.
+        // 0.1 m/s here, its direction from the step count.
+        let drift = if self.agent.rdr2_core.is_some() {
+            let a = (self.steps as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU);
+            Vec3::new(a.cos(), a.sin(), 0.0) * 0.1
+        } else {
+            Vec3::ZERO
+        };
+        (self.agent, self.msgs) = (Agent::new(&self.build, Ragdoll::new(&self.build, &fr, drift), Quat::IDENTITY, 0.3), msg::State::default());
         if self.xr(5) {
             let _ = msg::send(&mut self.agent, &self.build, &self.world, &mut self.msgs, "smartFall", &[("start", Value::Bool(true))]);
         }
