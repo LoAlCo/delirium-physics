@@ -212,6 +212,61 @@ pub fn sets(file: &str) -> Option<Vec<Set>> {
     Some(out)
 }
 
+/// A task's tunable force (CTaskNMHighFall's PitchInDirectionForce and its like), as the file gives it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TunableForce {
+    pub enable: bool,
+    pub mag: f32,
+    pub scale_with_velocity: bool,
+    pub velocity_min: f32,
+    pub velocity_max: f32,
+    pub force_at_min_velocity: f32,
+    pub force_at_max_velocity: f32,
+    pub clamp_impulse: bool,
+    pub min_impulse: f32,
+    pub max_impulse: f32,
+    pub delay_ms: f32,
+    pub duration_ms: f32,
+    pub scale_with_upright: bool,
+}
+
+/// `<Item type="<tunables>">`'s force block `block` (e.g. CTaskNMHighFall__Tunables, PitchInDirectionForce).
+pub fn tunable_force(file: &str, tunables: &str, block: &str) -> Option<TunableForce> {
+    let root = parse_xml(file)?;
+    let it = root.kid("Tunables")?.kids.iter().find(|k| k.attr("type") == Some(tunables))?;
+    let b = it.kid(block)?;
+    let f = |n: &str| b.kid(n).and_then(Node::value).and_then(|v| v.parse::<f32>().ok());
+    let t = |n: &str| b.kid(n).and_then(Node::value).map(|v| v == "true");
+    Some(TunableForce {
+        enable: t("Enable")?, mag: f("Mag")?, scale_with_velocity: t("ScaleWithVelocity")?, velocity_min: f("VelocityMin")?,
+        velocity_max: f("VelocityMax")?, force_at_min_velocity: f("ForceAtMinVelocity")?, force_at_max_velocity: f("ForceAtMaxVelocity")?,
+        clamp_impulse: t("ClampImpulse")?, min_impulse: f("MinImpulse")?, max_impulse: f("MaxImpulse")?, delay_ms: f("Delay")?,
+        duration_ms: f("Duration")?, scale_with_upright: t("ScaleWithUpright")?,
+    })
+}
+
+impl TunableForce {
+    /// The impulse's size this step (study/rdr2_highfall_task.md §1, 0x1c66428 [C]): Mag, times the line from ForceAtMinVelocity to
+    /// ForceAtMaxVelocity over the speed's place in [VelocityMin, VelocityMax], times max(0, the trunk's up z), times dt, then clamped.
+    /// No mass scaling. `t_ms` from the task's start; outside [Delay, Delay + Duration] none.
+    pub fn impulse(&self, t_ms: f32, speed: f32, trunk_up_z: f32, dt: f32) -> f32 {
+        if !self.enable || t_ms < self.delay_ms || t_ms > self.delay_ms + self.duration_ms {
+            return 0.0;
+        }
+        let mut m = self.mag;
+        if self.scale_with_velocity {
+            let span = self.velocity_max - self.velocity_min;
+            let x = if span > 0.0 { ((speed - self.velocity_min) / span).clamp(0.0, 1.0) } else { 1.0 };
+            m *= self.force_at_min_velocity + (self.force_at_max_velocity - self.force_at_min_velocity) * x;
+        }
+        if self.scale_with_upright {
+            m *= trunk_up_z.max(0.0);
+        }
+        m *= dt;
+        if self.clamp_impulse { m.max(self.min_impulse).min(self.max_impulse) } else { m }
+    }
+}
+
 /// The file in the folder: an exported physicstasks.
 pub fn read_file(dir: &str) -> Result<String, String> {
     let d = std::fs::read_dir(dir).map_err(|e| format!("{dir}: {e}"))?;
