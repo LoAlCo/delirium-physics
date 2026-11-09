@@ -1608,6 +1608,9 @@ fn rage_refresh(world: &Collision, held: &mut Vec<Held>, shape: gjk::Shape, tm: 
     }
     let age_lim: u16 = std::env::var("NMX_AGE").ok().and_then(|v| v.parse().ok()).unwrap_or(4); // NMXHOOK
     let drops: usize = std::env::var("NMX_DROP").ok().and_then(|v| v.parse().ok()).unwrap_or(1); // NMXHOOK
+    let rf2 = std::env::var_os("NMX_RF2").is_some() && matches!(shape, gjk::Shape::Box(..)); // NMXHOOK
+    let rf2_n = held.len(); // NMXHOOK
+    let mut rf2_why: Vec<String> = vec![]; // NMXHOOK
     for inst in insts.iter().copied().flat_map(|i| std::iter::repeat(i).take(drops)) {
         let (mut slid, mut far): ((Option<usize>, f32), (Option<usize>, f32)) = ((None, 0.0), (None, 0.0));
         for (k, r) in held.iter().enumerate().filter(|(_, r)| r.inst == inst && r.age > age_lim) {
@@ -1638,6 +1641,7 @@ fn rage_refresh(world: &Collision, held: &mut Vec<Held>, shape: gjk::Shape, tm: 
                 }
                 crate::extras_core_rdr2::trace_once("rage spared", || format!("rage manifold: a slid contact stays (0x285b248), {} point moves", if own { "the part's" } else { "the triangle's" }));
             } else {
+                if rf2 { rf2_why.push(format!("slid s{:.1}cm d{:.1}cm a{}", slid.1.sqrt() * 100.0, -held[k].gap * 100.0, held[k].age)); } // NMXHOOK
                 held.swap_remove(k);
                 crate::extras_core_rdr2::trace_once("rage slid", || format!("rage manifold: a contact slid {:.3} m goes", slid.1.sqrt()));
                 continue;
@@ -1645,10 +1649,12 @@ fn rage_refresh(world: &Collision, held: &mut Vec<Held>, shape: gjk::Shape, tm: 
         }
         // a contact spared still lets the most separated go, in the same step (0x2842988 goes on to that test when 0x285b248 keeps its contact)
         if let (Some(k), true) = (far.0, far.1 > 0.04) {
+            if rf2 { rf2_why.push(format!("far d{:.1}cm a{}", -held[k].gap * 100.0, held[k].age)); } // NMXHOOK
             held.swap_remove(k);
             crate::extras_core_rdr2::trace_once("rage far", || format!("rage manifold: a contact {:.3} m off goes", far.1));
         }
     }
+    if rf2 { eprintln!("RF2 x {:.3} {:.3} {:.3} n {} -> {} | {}", bw.x, bw.y, bw.z, rf2_n, held.len(), rf2_why.join(" ; ")); } // NMXHOOK
 }
 
 /// 0x2822930 with 0x282fc10 and 0x28236e4: a new contact takes the place of one on the same triangle within 1 mm, on either body, keeping its
