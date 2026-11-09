@@ -1333,13 +1333,18 @@ impl SmartFall {
         let legs = format!("pedalLegs start=true radius={} angularSpeed={} speedAsymmetry={} pedalLeftLeg={} pedalRightLeg=true \
                             centreForwards={} legStiffness={}", p.f("legRadius", delirium_data::kv!(9))?, p.f("legAngSpeed", delirium_data::kv!(65))?,
                            p.f("legAsymmetry", 0.0)?, p.b("legL", true)?, p.f("forwardOffsetOfLegIK", 0.0)?, p.f("legStrength", delirium_data::kv!(65))?);
-        let orient = (p.b("orientateBodyToFallDirection", true)?, p.f("orientateTwist", delirium_data::kv!(24))?, p.f("orientateMax", delirium_data::kv!(20))?);
+        // RDR2's physicstasks send orientateTwist and hula as flags, GTA IV's as numbers
+        let num = |p: &mut P, n: &str, d: f32| -> Result<f32, Error> {
+            p.get(n).map_or(Ok(d), |v| match v { Value::Bool(b) => Ok(*b as u8 as f32), v => v.f() })
+        };
+        let orient = (p.b("orientateBodyToFallDirection", true)?, num(p, "orientateTwist", delirium_data::kv!(24))?, p.f("orientateMax", delirium_data::kv!(20))?);
+        num(p, "hula", 0.0)?;
         let (brace, max) = (p.f("minSpeedForBrace", delirium_data::kv!(84))?, p.f("maxSpeedForRecoverableFall", delirium_data::kv!(21))?);
         let normal = p.v("landingNormal", Vec3::Z)?.normalize_or(Vec3::Z);
         let (balance, fwd_roll, limp) = (p.b("balance", true)?, p.b("forwardRoll", false)?, p.b("alanRickman", false)?);
         let rp = SfParams::read(p)?;
         let (rds, tumble) = (p.f("rdsForceMag", 2.0)?, p.f("tumble", 0.0)?);
-        for n in ["pdStrength", "pdDamping", "sideD", "arms2LegsPhase", "hula", "aimAngleBase", "forwardVelRotation", "footVelCompScale",
+        for n in ["pdStrength", "pdDamping", "sideD", "arms2LegsPhase", "aimAngleBase", "forwardVelRotation", "footVelCompScale",
                   "rdsTargetLinearVelocity", "rdsTargetLinearVelocityDecayTime"] {
             p.f(n, 0.0)?;
         }
@@ -2469,6 +2474,13 @@ struct SfParams {
     force_head: bool,
     ignore_death: bool,
     splat: f32,
+    /// state 6's enter friction (rdr2_smartfall.md §5.6): read, not applied yet [gap: the masks 0xffe6df5f, 0x102000 and
+    /// 0x900a0 are RDR2 part bits the port doesn't map]
+    #[allow(dead_code)]
+    friction: (bool, f32, f32, bool),
+    #[allow(dead_code)]
+    blend_head_stopped: f32,
+    spread_legs: f32,
 }
 
 impl SfParams {
@@ -2495,6 +2507,10 @@ impl SfParams {
             stop_rolling_time: f(p, "stopRollingTime", 2.0)?, teeter: b(p, "teeter", false)?, teeter_offset: f(p, "teeterOffset", 0.3)?,
             cf_spin: f(p, "cfZAxisSpinReduction", 0.5)?, splat: f(p, "splatWhenStopped", 0.0)?,
             rebound: f(p, "reboundScale", 0.0)?, rebound_mask: rebound_mask(p)?, force_head: b(p, "forceHeadAvoid", false)?, ignore_death: b(p, "ignoredeath", false)?,
+            // changeExtremityFriction is an int in the game's record; the files send it as a flag
+            friction: (b(p, "rdsUseStartingFriction", false)?, f(p, "rdsStartingFriction", 0.0)?, f(p, "rdsStartingFrictionMin", 0.0)?,
+                       p.get("changeExtremityFriction").map_or(Ok(false), |v| match v { Value::Bool(b) => Ok(*b), v => v.f().map(|x| x != 0.0) })?),
+            blend_head_stopped: f(p, "blendHeadWhenStopped", 0.0)?, spread_legs: f(p, "spreadLegs", 0.1)?,
         })
     }
 }
@@ -2898,8 +2914,9 @@ impl SfRdr2 {
                 };
                 self.on.retain(|&n| n != "pedalLegs");
                 self.on.push("pedalLegs");
+                // spread = spreadLegs every tick (rdr2_smartfall.md §5.1 [C])
                 self.out.push(format!("pedalLegs start=true pedalLeftLeg=true pedalRightLeg=true legStiffness={b} adaptivePedal4Dragging=false \
-                                       pedalOffset=0 centreForwards=0 {pedal}"));
+                                       pedalOffset=0 centreForwards=0 spread={} {pedal}", p.spread_legs));
                 let phase = p.arm_phase - if p.arms2legs_sync != 0 { p.arms2legs_phase } else { 0.0 };
                 self.on.retain(|&n| n != "armsWindmillAdaptive");
                 self.on.push("armsWindmillAdaptive");

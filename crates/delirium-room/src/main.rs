@@ -1339,6 +1339,8 @@ struct Sim {
     pusher: Option<(Vec3, Vec3, f32, Vec3)>,
     pile_fuse: Option<(f32, Vec3)>,
     ice: Option<(usize, [f32; 2])>,
+    /// RDR2 core: the game's CTaskNMHighFall running (`rdr2_high_fall_frame`)
+    rdr2_hf: Option<Rdr2HighFall>,
     click_shoots: bool,
     grab: Option<Grab>,
     ties: Vec<Tie>,
@@ -2554,11 +2556,73 @@ impl Sim {
             return;
         }
         self.send("stopAllBehaviours");
+        // RDR2 core: the game's CTaskNMHighFall sends smartFall (not highFall) from the player's physicstasks sets: logged in
+        // the game, 2026-11-09 (study/rdr2_behaviours.md, "High falls"). Without the file, smartFall on RDR2's defaults.
+        if self.agent.rdr2_core.is_some() {
+            return self.rdr2_high_fall_start();
+        }
         delirium::nm::task_high_fall(&mut self.agent, &self.build, &self.world, &self.tp, "*", false);
         if let Some(e) = exit("highfall").filter(|_| self.tasks) {
             (self.exit, self.nm_t, self.failed) = (e, [Some(0.0); 2], [false; 2]);
         }
         self.say("ours  in the air: the game's NMHighFall".into());
+    }
+
+    /// RDR2's CTaskNMHighFall for a plain fall (type InAir), study/rdr2_highfall_task.md: its Start and InAir sets from the
+    /// player's physicstasks, merged by priority (0x1c3e300 [C]); smartFall on RDR2's defaults without the file.
+    fn rdr2_high_fall_start(&mut self) {
+        let file = Self::task_file().ok().and_then(|_| {
+            let dir = std::env::args().skip_while(|a| a != "--tune-dir").nth(1).or_else(|| std::env::var("RDR2_TUNE_DIR").ok()).unwrap_or_default();
+            gametask::read_file(&dir).ok()
+        });
+        let pitch = file.as_deref().and_then(|f| gametask::tunable_force(f, "CTaskNMHighFall__Tunables", "PitchInDirectionForce"));
+        match file {
+            Some(_) => self.fire_task("CTaskNMHighFall/Start+InAir"),
+            None => self.send("smartFall start=true"),
+        }
+        self.rdr2_hf = Some(Rdr2HighFall { t: 0.0, pitch, band: HfBand::None, from_file: file.is_some() });
+        self.say(format!("ours  in the air: RDR2's CTaskNMHighFall (smartFall){}", if pitch.is_some() { "" } else { ", no pitch force (no physicstasks)" }));
+    }
+
+    /// Each step while RDR2's CTaskNMHighFall runs (study/rdr2_highfall_task.md):
+    /// * PitchInDirectionForce (0x1c804b8, 0x1c66428 [C]): an impulse along the flattened COM velocity [P: the ped's velocity],
+    ///   at the part 0x823C16D1 names (the pelvis here [G]), sized by `TunableForce::impulse` with the trunk's up z from
+    ///   the pelvis to the neck [P: bones 0xdb88, 0x37cb]. None without horizontal speed.
+    /// * The height bands (0x1c54378 [C]): a 20 m probe down from the root; above it, falling at 6..15 m/s sends
+    ///   HighHighFallStart once, faster than 15 SuperHighFallStart once, and leaving either band HighHighFallEnd once.
+    fn rdr2_high_fall_frame(&mut self) {
+        const DT: f32 = 1.0 / 60.0;
+        let Some(mut hf) = self.rdr2_hf.take() else { return };
+        let falling = self.agent.extras.on.iter().any(|(n, _)| *n == "smartFall");
+        if self.agent.rdr2_core.is_none() || self.dead || (hf.t > 0.5 && !falling) {
+            return;
+        }
+        let (_, v) = self.agent.doll.com();
+        if let Some(p) = hf.pitch {
+            let flat = Vec3::new(v.x, v.y, 0.0);
+            let parts = &self.build.parts;
+            let neck = parts.iter().position(|p| p.name.ends_with("Neck")).unwrap_or(parts.len() - 1);
+            let trunk = (self.agent.doll.centre(neck) - self.agent.doll.centre(0)).normalize_or_zero();
+            let j = p.impulse(hf.t * 1000.0, flat.length(), trunk.z, DT);
+            if j > 0.0 && flat.length_squared() > 1e-8 {
+                let at = self.agent.doll.centre(0);
+                self.agent.doll.impulse(0, at, flat.normalize() * j);
+            }
+        }
+        if hf.from_file {
+            let root = self.agent.doll.centre(0);
+            let above = self.world.ground(root, 20.0).is_none();
+            let band = if !above || v.z >= -6.0 { HfBand::None } else if v.z < -15.0 { HfBand::Super } else { HfBand::High };
+            match (hf.band, band) {
+                (a, b) if a == b => {}
+                (_, HfBand::High) => self.fire_task("CTaskNMHighFall/HighHighFallStart"),
+                (_, HfBand::Super) => self.fire_task("CTaskNMHighFall/SuperHighFallStart"),
+                (_, HfBand::None) => self.fire_task("CTaskNMHighFall/HighHighFallEnd"),
+            }
+            hf.band = band;
+        }
+        hf.t += DT;
+        self.rdr2_hf = Some(hf);
     }
 
     fn xr(&self, i: usize) -> bool {
@@ -5945,11 +6009,31 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
                         shot_task: None, rand: Default::default(), sg_seed: 1, sg_aim: None,
                         log: VecDeque::new(), console: String::new(), script, typing: false,
                         game_shot: String::new(), weapons, weapon: 0, weak: false, sel: 0, over_ui: false, held: true,   show_ui: true, sens: 0.5, rec, health: 200.0, god: false, aim_gun: false, gun: Gun::default(), blast_task: None, burning: 0.0, shock: 0.0, charred: vec![], voxels: vec![], on_fire: None, hero_gun: false, passive: true, homer: None, homer_weapon: None, homer_wait: None, homer_wild: false, gun_ai: false, homer_combat: None, homer_guard: None, homer_rest: 0.0, ammo: 0, reloading: None, taxis: vec![], driving: false, pedals: (0.0, 0.0, false), car_tune: None, lean_stop: None, hurt: [0.0; 4], near_at: -9.0, near_last: -9.0, dived: false, no_dodge: false, dodge_gap: DODGE_GAP, look_stop: None, dodge_at: 0.0, dodging: false, look_after: None, fall: None, hold: None, airborne: false, wet: false, hero_alpha: 0.6, render_scale: 1.0, msaa: 4, msaa_max: 4, shadow_q: 3, frame_ms: 0.0, gpu: String::new(), gpu_now: String::new(), gpus: None, aa: AA_MSAA, smaa_q: 2, dlss_q: 0, fsr_q: 1, fsr_ok: false, xess_q: 1, xess_ok: false, sharpen: 0.0, sharp_by: [0.0; 9], ssao: 0, ao_strength: 1.0, bloom: 0.0, dof: 0.0, contact: 0.0, contact_k: 1.0, vignette: 0.0, lens: 0.0, chroma: 0.0, rt: 0, rt_ok: false, sky: 2, god_rays: false, restir: false, fire: 2, water_q: 1, real_fire: false, voxel_water: false, real_water: false, real_drain: false, pouring: false, real_surface: false, real_ripples: false, water_clear: true, wet_trail: true, water_impact: true, water_faucet: true, real_level: None, flow: vec![], hero_flow: vec![], water_caustics: false, water_spray: false, water_waves: false, water_pixels: false, water_haze: false, water_mirror: false, water_foam: false, water_mist: false, photons: false, water_fine: false, water_depth: true, water_relax: false, water_ghost: false, water_vort: false, water_spray_phys: false, safe: false, fire_light: true, fire_homer: false, shadow_filter: 0, water_wet: false, wet_film: false, wet_drips: false, sky_shade: false, water_traced: false, glass_tint: true, glass_shade: true, water_ripples: true, water_refract: false, flood: None, smoke: true, view_px: UVec2::ONE, defaults: String::new(), upscaler: UP_FSR1, dlss_ok: false, fps_limit: FPS_VSYNC, fullscreen: false, extra: false, rdr2: false, rdr2_core: false, rig_rdr2: false, rig_dir: String::new(), rig_body: String::new(), nmx_lift: 0.0, rdr2_after: vec![], wall_sent: false, rdr2_fire: false, horse: None, horse_file: String::new(), horse_frag: String::new(), riding: false, rdr2_pick: Default::default(), param_edits: Default::default(), param_search: String::new(), param_changed_only: false, extra_pick: 0x1ff, fire_react: true, dive: false, hang: None, was_fallen: false, curled: false, super_punch: false, even: false, crush: None, cab_gas: 0.0, cam: None, look_z: 0.8, film: 0.0, photo: false, soft: true, shadows: true, sun_color: [1.0; 3], fill_k: 1.0, gun_reach: 1.0, gun_up: 0.0, gun_off: Vec3::ZERO, gun_aim_off: Vec3::ZERO, crane: None, crane_to: None, shadow: 0.0, strict: false, stairs_rolled: false, cam_head: false, cam_rig: None, spawn_at: None, tear_k: 1.0, sky_k: 1.0, kept_gun: None, cam_floor: f32::MIN, pov: false, film_vel: Vec3::ZERO, photo_pending: false, on_cue: vec![], photo_follow: false, detached: false, cam_at: None, cam2: None, cam2_queue: vec![], cam2_b: None, meat: None, meat_on: true, meat_wipe: false, skate3_bails: false, step_limit: false, meat_screen: None, shot_scene: String::new(), photo_note: String::new(), script_walk: Vec3::ZERO, throw_speed: None, homer_shot: 0.0, hero_physics: true, hero_doll: None, tackle: None, cuts: vec![], hat: None, dismember: false, jump: None, steam: (0, vec![]), #[cfg(feature = "portal")] portal: portal::Portals::new(), click_at: None,
-                        getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None,   click_shoots: false,
+                        getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None, rdr2_hf: None,   click_shoots: false,
                         grab: None, ties: vec![], line_k: 1.0, line_leash: false, line_wrap: true, drag_hold: None, drag_len: 0.0, tie_hover: None, glow: vec![], rings: vec![], ripples: vec![], ripple_wait: vec![], tape: Default::default(), replay: None, throw_at: None, pops: vec![], pop_screen: vec![], show_pops: true, tab: 1, sounds: vec![], sound: true, volume: [1.0, 1.0, 0.35], blood: vec![], pixel_blood: true, gore: false, layers: true, wounds: vec![], show_ripples: false, infinite: false, fx_seed: 1, pointer: None, crowd_hp: vec![], car_hit: vec![], car_reacts: vec![], help: !help_seen(), auto_balance: true, dead: false, hero: None, skate: None, skate_link: skate_files::Link::new(), agility,
                         scene: None, switch_to: None, poke: POKE, game_dir: game_dir.map(str::to_string), walk: true, relock: false, cam_locked: true, walk_dir: Vec3::ZERO, wander: Default::default(), getup_mode: 0, musc: None, learned: None, walk_learned: None, preview_on: false, preview: None, preview_wait: false, preview_keys: (false, false), script_jog: false, watch: None, bench: vec![], homer_id: 0, spawn_body: body, base, crowd_build, body, skin: saved_look(), ped_color: 0, body_alpha: BODY_ALPHA, eyes: true, bone_skin: false, brows: true, skel: true, skel_style: 0, clean: false, sun_dir: saved_sun() };
     sim.auto_balance = sim.script.is_empty();
     sim
+}
+
+/// RDR2's CTaskNMHighFall while it runs (`Sim::rdr2_high_fall_frame`).
+#[derive(Clone, Copy, Debug)]
+struct Rdr2HighFall {
+    /// s since the task started
+    t: f32,
+    /// PitchInDirectionForce from the player's physicstasks
+    pitch: Option<gametask::TunableForce>,
+    band: HfBand,
+    /// the sets come from the file (else plain smartFall: no band sets either)
+    from_file: bool,
+}
+
+/// 0x1c54378's height bands: above a 20 m probe and falling at 6..15 m/s (HighHighFall) or faster (SuperHighFall).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HfBand {
+    None,
+    High,
+    Super,
 }
 
 thread_local! {
@@ -10503,6 +10587,7 @@ impl Sim {
         self.soak();
         self.soak_hero(1.0 / 60.0, true);
         self.fire_frame(1.0 / 60.0);
+        self.rdr2_high_fall_frame();
         if self.steps % 2 == 0 {
             self.shot_frame();
             self.blast_frame();
