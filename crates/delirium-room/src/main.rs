@@ -1344,6 +1344,8 @@ struct Sim {
     rdr2_push: Option<Rdr2Push>,
     /// RDR2 core: the game's CTaskNMMelee after a blow (`rdr2_melee_frame`)
     rdr2_melee: Option<Rdr2Melee>,
+    /// RDR2 core: he wears armour (the game's armour over 0: CTaskNMMelee's Armoured set); `armour` toggles it
+    rdr2_armour: bool,
     click_shoots: bool,
     grab: Option<Grab>,
     ties: Vec<Tie>,
@@ -2639,6 +2641,18 @@ impl Sim {
         gametask::read_file(&dir).ok()
     }
 
+    /// He stands on stairs (the ped's intelligence bit 49 in the game [C]; here the stairs flag of the ground under his feet).
+    fn rdr2_on_stairs(&self) -> bool {
+        let feet = self.agent.doll.frames().map(|f| f.translation).fold(Vec3::splat(f32::MAX), |a, b| if b.z < a.z { b } else { a });
+        feet.x != f32::MAX && melee::on_stairs(&self.world, feet)
+    }
+
+    /// The tasks' balance-failure probe: down from the top spine part (0x384e [C]), 2 m [G: its length], onto stairs.
+    fn rdr2_stairs_under_chest(&self) -> bool {
+        let k = self.part_by_tag("SPINE4").or_else(|| self.part_by_tag("SPINE3")).unwrap_or(0);
+        self.world.ground_stairs(self.agent.doll.centre(k), 2.0).is_some_and(|g| g.1)
+    }
+
     /// A part of ours by a tunable's bone name (ID_SKEL_SPINE0 and its like). RDR2's body names its spine Spine0..Spine4,
     /// GTA IV's Spine, Spine1..Spine3: spine0 is GTA IV's bare Spine.
     fn part_by_tag(&self, tag: &str) -> Option<usize> {
@@ -2664,7 +2678,9 @@ impl Sim {
         // The player running into a ped logged (rdr2nmx free log, 2026-11-09, 11 bumps): bodyBalance, balancerCollisionsReaction
         // and bodyBalance's head look only, never shot / reachForWound / shotSnap, which BumpedByPed starts. So the game's task
         // had no bump entity there [R]: StartDefault, and bodyBalance's headLookAtVelProb from lookAtVelProbIfNoBumpTarget.
-        self.fire_task("CTaskNMBalance/StartDefault");
+        // §1.3: the start type's set, OnStairs when he's on stairs (OnSteepSlope and OnMovingGround: not here [the room's ground
+        // doesn't move; the slope's threshold isn't read])
+        self.fire_task(if self.rdr2_on_stairs() { "CTaskNMBalance/StartDefault+OnStairs" } else { "CTaskNMBalance/StartDefault" });
         self.send(&format!("bodyBalance headLookAtVelProb={}", tun.f("lookAtVelProbIfNoBumpTarget", 0.125)));
         let pelvis = self.agent.doll.centre(0);
         let d = (pelvis - from).normalize_or_zero();
@@ -2731,7 +2747,11 @@ impl Sim {
             self.send(&format!("headLook pos={}", v3(head + Vec3::Z * p.tun.f(&format!("fHeadLookZOffset{g}"), 0.0))));
         }
         if fallen && !p.fallen {
+            // §1.7: the stairs probe first: rollDownStairs straight to NM when it finds stairs
             p.fallen = true;
+            if self.rdr2_stairs_under_chest() {
+                self.send("rollDownStairs start=true");
+            }
             self.fire_task("CTaskNMBalance/OnBalanceFailed");
         }
         if p.fallen {
@@ -2791,9 +2811,25 @@ impl Sim {
         let Ok(sets) = Self::task_file() else { return false };
         let tun = gametask::tunables(&file, "CTaskNMMelee__Tunables").unwrap_or_default();
         let kick = self.hero.as_ref().is_some_and(|h| h.keys & 0x80 != 0);
+        let (passive, mounted) = (self.passive, self.riding);
+        let stairs = self.rdr2_on_stairs();
+        // the start's sets in its order (§2.3 1): Start, Passive (type 1: he doesn't fight back), Armoured, FatallyInjured, OnStairs,
+        // Mounted (Seated: the room has no seat but the saddle); then the action's
         let mut want = vec!["CTaskNMMelee/Start"];
+        if passive {
+            want.push("CTaskNMMelee/Passive");
+        }
+        if self.rdr2_armour {
+            want.push("CTaskNMMelee/Armoured");
+        }
         if self.health <= 0.0 {
             want.push("CTaskNMMelee/FatallyInjured");
+        }
+        if stairs {
+            want.push("CTaskNMMelee/OnStairs");
+        }
+        if mounted {
+            want.push("CTaskNMMelee/Mounted");
         }
         if kick {
             want.push("CTaskNMMelee/kick_standing");
@@ -2808,10 +2844,10 @@ impl Sim {
         let local = fr.rotation.inverse() * (at - fr.translation);
         let d = j.normalize_or_zero();
         let mut i = j.length();
-        // the counter impulse (0x1c67a38)
+        // the counter impulse (0x1c67a38), not when mounted
         let (_, v) = self.agent.doll.com();
         let vr = v.with_z(0.0);
-        if vr.length() >= 1.0 {
+        if vr.length() >= 1.0 && !mounted {
             let c = d.dot(vr.normalize());
             if c > 0.0 {
                 let cm = c * vr.length() * self.agent.doll.part_mass(k) * tun.f("fCounterImpulseScale", 1.0);
@@ -2824,6 +2860,11 @@ impl Sim {
         let names: Vec<&str> = want.iter().map(|w| w.rsplit('/').next().unwrap_or(w)).collect();
         let (lines, _) = self.task_lines(&format!("rdr2 task CTaskNMMelee {}", names.join("+")), &merged);
         let mut scaled = d * i;
+        // a lean in the merged list: it ends uniform(Min, Max)LeanInDirectionTime later (§2.3 5)
+        let lean_end = lines.iter().any(|l| l.starts_with("leanInDirection") && l.contains("start=true")).then(|| {
+            let (lo, hi) = (tun.f("MinLeanInDirectionTime", 200.0), tun.f("MaxLeanInDirectionTime", 900.0));
+            self.rand.float_in_range(lo.min(hi), hi.max(lo)) * 1e-3
+        });
         for l in lines {
             let out = if l.starts_with("applyBulletImpulse") {
                 // the set's impulse is three scales: overall, then the hit part's group's
@@ -2842,12 +2883,28 @@ impl Sim {
             self.send(&out);
         }
         self.send(&format!("shotNewBullet bodyPart={k} localHitPointInfo=true hitPoint={} normal={}", v3(local), v3(-d)));
-        // the kick's finisher (0x1c72a8c): F = Strength x the blow's direction (flattened), spread over Period
-        let finisher = kick.then(|| tun.blocks.get("UNK_MEMBER_0x0A5FDA7F").cloned()).flatten().filter(|b| b.get("Enabled").copied().unwrap_or(0.0) != 0.0);
+        // the finisher (0x1c72a8c): F = scale x Strength x the direction (flattened), spread over Period. The kick's (0A5FDA7F)
+        // along the blow, not mounted; mounted (EC633B18, §2.3 2): the direction turned by range A(speed) degrees and the scale
+        // range B(speed), speed the ped's [P on the turn: about the vertical, away from the way he's going here]
+        let range = |key: &str, x: f32| {
+            let r = tun.blocks.get(key).cloned().unwrap_or_default();
+            let g = |n: &str, dv: f32| r.get(n).copied().unwrap_or(dv);
+            let (x0, x1, lo, hi) = (g("UNK_MEMBER_0xAFAAE115", 1.0), g("UNK_MEMBER_0x1EE3ACDB", 10.0), g("MinValue", 0.0), g("MaxValue", 0.0));
+            lo + (if x1 > x0 { ((x - x0) / (x1 - x0)).clamp(0.0, 1.0) } else { 1.0 }) * (hi - lo)
+        };
+        let (key, dir0, scale) = if mounted {
+            let speed = v.length();
+            let deg = range("UNK_MEMBER_0x4BA523D1", speed);
+            let side = if vr.length() > 1e-3 { -d.with_z(0.0).cross(Vec3::Z).dot(vr).signum() } else { 1.0 };
+            (Some("UNK_MEMBER_0xEC633B18"), Quat::from_rotation_z(side * deg.to_radians()) * d, range("UNK_MEMBER_0x62CF4D26", speed))
+        } else {
+            (kick.then_some("UNK_MEMBER_0x0A5FDA7F"), d, 1.0)
+        };
+        let finisher = key.and_then(|k| tun.blocks.get(k).cloned()).filter(|b| b.get("Enabled").copied().unwrap_or(0.0) != 0.0);
         let fin = finisher.and_then(|b| {
             let g = |n: &str| b.get(&format!("UNK_MEMBER_0x{n}")).copied().unwrap_or(0.0);
-            let strength = g("F0E491B0");
-            let dir = if g("8A4EAF7D") != 0.0 { d.with_z(0.0).normalize_or_zero() } else { d };
+            let strength = g("F0E491B0") * scale;
+            let dir = if g("8A4EAF7D") != 0.0 { dir0.with_z(0.0).normalize_or_zero() } else { dir0 };
             (strength > 0.0).then(|| MeleeFinisher { f: dir * strength, t: 0.0, period: g("27B9CF25").max(1e-4), lift: g("1957F018") * strength,
                                                     lift_each: g("ACEE1020") != 0.0,
                                                     shares: [g("7A106F09"), g("43A01A2D"), g("71753340"), g("97B4B4F5"), g("1B036301"), g("AA6E68CE"), g("E8FF7405")] })
@@ -2859,7 +2916,7 @@ impl Sim {
             }
         }
         let update = sets.iter().any(|s| gametask::selects("CTaskNMMelee/Update", &s.path) && !s.messages.is_empty());
-        self.rdr2_melee = Some(Rdr2Melee { t: 0.0, failed: false, fin, update });
+        self.rdr2_melee = Some(Rdr2Melee { t: 0.0, failed: false, fin, update, passive, lean_end, lean_off: false });
         self.say(format!("ours  melee: RDR2's CTaskNMMelee ({}), impulse {:.1} N s on part {k}", names.join("+"), scaled.length()));
         true
     }
@@ -2906,10 +2963,19 @@ impl Sim {
                 }
             }
         }
+        // Passive and not failed: the lean ends at its time (§2.4)
+        if let (true, false, false, Some(end)) = (m.passive, m.failed, m.lean_off, m.lean_end) {
+            if m.t > end {
+                m.lean_off = true;
+                self.send("leanInDirection start=false");
+            }
+        }
         let fallen = self.agent.fallen || !self.agent.balancing();
         if fallen && !m.failed {
+            // §2.6: OnBalanceFailed, and OnBalanceFailedStairs when the probe under the top spine finds stairs
             m.failed = true;
-            self.fire_task("CTaskNMMelee/OnBalanceFailed");
+            let stairs = self.rdr2_stairs_under_chest();
+            self.fire_task(if stairs { "CTaskNMMelee/OnBalanceFailed+OnBalanceFailedStairs" } else { "CTaskNMMelee/OnBalanceFailed" });
         }
         m.t += DT;
         if m.t < 6.0 {
@@ -4930,6 +4996,10 @@ impl Sim {
                 return self.say("room  taxis: gone".into());
             }
             "ice" => return self.ice(),
+            "armour" => {
+                self.rdr2_armour = !self.rdr2_armour;
+                return self.say(format!("room  armour: {} (RDR2 core's melee sends its Armoured set)", if self.rdr2_armour { "on" } else { "off" }));
+            }
             "fall" => return self.fall(3.0),
             "high fall" => return self.fall(HIGH_DROP),
             "clear" => {
@@ -6311,7 +6381,7 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
                         shot_task: None, rand: Default::default(), sg_seed: 1, sg_aim: None,
                         log: VecDeque::new(), console: String::new(), script, typing: false,
                         game_shot: String::new(), weapons, weapon: 0, weak: false, sel: 0, over_ui: false, held: true,   show_ui: true, sens: 0.5, rec, health: 200.0, god: false, aim_gun: false, gun: Gun::default(), blast_task: None, burning: 0.0, shock: 0.0, charred: vec![], voxels: vec![], on_fire: None, hero_gun: false, passive: true, homer: None, homer_weapon: None, homer_wait: None, homer_wild: false, gun_ai: false, homer_combat: None, homer_guard: None, homer_rest: 0.0, ammo: 0, reloading: None, taxis: vec![], driving: false, pedals: (0.0, 0.0, false), car_tune: None, lean_stop: None, hurt: [0.0; 4], near_at: -9.0, near_last: -9.0, dived: false, no_dodge: false, dodge_gap: DODGE_GAP, look_stop: None, dodge_at: 0.0, dodging: false, look_after: None, fall: None, hold: None, airborne: false, wet: false, hero_alpha: 0.6, render_scale: 1.0, msaa: 4, msaa_max: 4, shadow_q: 3, frame_ms: 0.0, gpu: String::new(), gpu_now: String::new(), gpus: None, aa: AA_MSAA, smaa_q: 2, dlss_q: 0, fsr_q: 1, fsr_ok: false, xess_q: 1, xess_ok: false, sharpen: 0.0, sharp_by: [0.0; 9], ssao: 0, ao_strength: 1.0, bloom: 0.0, dof: 0.0, contact: 0.0, contact_k: 1.0, vignette: 0.0, lens: 0.0, chroma: 0.0, rt: 0, rt_ok: false, sky: 2, god_rays: false, restir: false, fire: 2, water_q: 1, real_fire: false, voxel_water: false, real_water: false, real_drain: false, pouring: false, real_surface: false, real_ripples: false, water_clear: true, wet_trail: true, water_impact: true, water_faucet: true, real_level: None, flow: vec![], hero_flow: vec![], water_caustics: false, water_spray: false, water_waves: false, water_pixels: false, water_haze: false, water_mirror: false, water_foam: false, water_mist: false, photons: false, water_fine: false, water_depth: true, water_relax: false, water_ghost: false, water_vort: false, water_spray_phys: false, safe: false, fire_light: true, fire_homer: false, shadow_filter: 0, water_wet: false, wet_film: false, wet_drips: false, sky_shade: false, water_traced: false, glass_tint: true, glass_shade: true, water_ripples: true, water_refract: false, flood: None, smoke: true, view_px: UVec2::ONE, defaults: String::new(), upscaler: UP_FSR1, dlss_ok: false, fps_limit: FPS_VSYNC, fullscreen: false, extra: false, rdr2: false, rdr2_core: false, rig_rdr2: false, rig_dir: String::new(), rig_body: String::new(), rdr2_after: vec![], wall_sent: false, rdr2_fire: false, horse: None, horse_file: String::new(), horse_frag: String::new(), riding: false, rdr2_pick: Default::default(), param_edits: Default::default(), param_search: String::new(), param_changed_only: false, extra_pick: 0x1ff, fire_react: true, dive: false, hang: None, was_fallen: false, curled: false, super_punch: false, even: false, crush: None, cab_gas: 0.0, cam: None, look_z: 0.8, film: 0.0, photo: false, soft: true, shadows: true, sun_color: [1.0; 3], fill_k: 1.0, gun_reach: 1.0, gun_up: 0.0, gun_off: Vec3::ZERO, gun_aim_off: Vec3::ZERO, crane: None, crane_to: None, shadow: 0.0, strict: false, stairs_rolled: false, cam_head: false, cam_rig: None, spawn_at: None, tear_k: 1.0, sky_k: 1.0, kept_gun: None, cam_floor: f32::MIN, pov: false, film_vel: Vec3::ZERO, photo_pending: false, on_cue: vec![], photo_follow: false, detached: false, cam_at: None, cam2: None, cam2_queue: vec![], cam2_b: None, meat: None, meat_on: true, meat_wipe: false, skate3_bails: false, step_limit: false, meat_screen: None, shot_scene: String::new(), photo_note: String::new(), script_walk: Vec3::ZERO, throw_speed: None, homer_shot: 0.0, hero_physics: true, hero_doll: None, tackle: None, cuts: vec![], hat: None, dismember: false, jump: None, steam: (0, vec![]), #[cfg(feature = "portal")] portal: portal::Portals::new(), click_at: None,
-                        getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None, rdr2_hf: None, rdr2_push: None, rdr2_melee: None,   click_shoots: false,
+                        getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None, rdr2_hf: None, rdr2_push: None, rdr2_melee: None, rdr2_armour: false,   click_shoots: false,
                         grab: None, ties: vec![], line_k: 1.0, line_leash: false, line_wrap: true, drag_hold: None, drag_len: 0.0, tie_hover: None, glow: vec![], rings: vec![], ripples: vec![], ripple_wait: vec![], tape: Default::default(), replay: None, throw_at: None, pops: vec![], pop_screen: vec![], show_pops: true, tab: 1, sounds: vec![], sound: true, volume: [1.0, 1.0, 0.35], blood: vec![], pixel_blood: true, gore: false, layers: true, wounds: vec![], show_ripples: false, infinite: false, fx_seed: 1, pointer: None, crowd_hp: vec![], car_hit: vec![], car_reacts: vec![], help: !help_seen(), auto_balance: true, dead: false, hero: None, skate: None, skate_link: skate_files::Link::new(), agility,
                         scene: None, switch_to: None, poke: POKE, game_dir: game_dir.map(str::to_string), walk: true, relock: false, cam_locked: true, walk_dir: Vec3::ZERO, wander: Default::default(), getup_mode: 0, musc: None, learned: None, walk_learned: None, preview_on: false, preview: None, preview_wait: false, preview_keys: (false, false), script_jog: false, watch: None, bench: vec![], homer_id: 0, spawn_body: body, base, crowd_build, body, skin: saved_look(), ped_color: 0, body_alpha: BODY_ALPHA, eyes: true, bone_skin: false, brows: true, skel: true, skel_style: 0, clean: false, sun_dir: saved_sun() };
     sim.auto_balance = sim.script.is_empty();
@@ -6365,6 +6435,11 @@ struct Rdr2Melee {
     fin: Option<MeleeFinisher>,
     /// the file's Update set has messages
     update: bool,
+    /// type 1: he doesn't fight back
+    passive: bool,
+    /// s at which a set's leanInDirection ends (+0x3a8), and whether it has
+    lean_end: Option<f32>,
+    lean_off: bool,
 }
 
 /// An armed finisher block (§2.5): F at task+0x230, elapsed +0x240.
