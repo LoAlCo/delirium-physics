@@ -2542,16 +2542,7 @@ impl Sim {
 
     fn fall(&mut self, h: f32) {
         let fr: Vec<Transform> = self.agent.doll.frames().map(|f| f.with_translation(f.translation + Vec3::Z * h)).collect();
-        // RDR2 core: the game's NM takes a fall over from its falling animation, drifting 0.01-0.13 m/s sideways (rdr2nmx falls,
-        // 2026-11-09): a still drop gives CTaskNMHighFall's PitchInDirectionForce no direction, the game's always has one.
-        // 0.1 m/s here, its direction from the step count.
-        let drift = if self.agent.rdr2_core.is_some() {
-            let a = (self.steps as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU);
-            Vec3::new(a.cos(), a.sin(), 0.0) * 0.1
-        } else {
-            Vec3::ZERO
-        };
-        (self.agent, self.msgs) = (Agent::new(&self.build, Ragdoll::new(&self.build, &fr, drift), Quat::IDENTITY, 0.3), msg::State::default());
+        (self.agent, self.msgs) = (Agent::new(&self.build, Ragdoll::new(&self.build, &fr, Vec3::ZERO), Quat::IDENTITY, 0.3), msg::State::default());
         if self.xr(5) {
             let _ = msg::send(&mut self.agent, &self.build, &self.world, &mut self.msgs, "smartFall", &[("start", Value::Bool(true))]);
         }
@@ -2595,8 +2586,9 @@ impl Sim {
 
     /// Each step while RDR2's CTaskNMHighFall runs (study/rdr2_highfall_task.md):
     /// * PitchInDirectionForce (0x1c804b8, 0x1c66428 [C]): an impulse along the flattened COM velocity [P: the ped's velocity],
-    ///   at the part 0x823C16D1 names (the pelvis here [G]), sized by `TunableForce::impulse` with the trunk's up z from
-    ///   the pelvis to the neck [P: bones 0xdb88, 0x37cb]. None without horizontal speed.
+    ///   at the part 0x823C16D1 names (the top spine part [R], below), sized by `TunableForce::impulse` with the trunk's up z
+    ///   from the pelvis to the neck [P: bones 0xdb88, 0x37cb]. None without horizontal speed; the least drift gives it one,
+    ///   as the game's falling animation hands over 0.01-0.13 m/s.
     /// * The height bands (0x1c54378 [C]): a 20 m probe down from the root; above it, falling at 6..15 m/s sends
     ///   HighHighFallStart once, faster than 15 SuperHighFallStart once, and leaving either band HighHighFallEnd once.
     fn rdr2_high_fall_frame(&mut self) {
@@ -2610,12 +2602,16 @@ impl Sim {
         if let Some(p) = hf.pitch {
             let flat = Vec3::new(v.x, v.y, 0.0);
             let parts = &self.build.parts;
-            let neck = parts.iter().position(|p| p.name.ends_with("Neck")).unwrap_or(parts.len() - 1);
+            let find = |keys: &[&str]| keys.iter().find_map(|k| parts.iter().position(|p| p.name.contains(k)));
+            let neck = find(&["Neck"]).unwrap_or(parts.len() - 1);
+            // the part 0x823C16D1 names: the top spine part. Logged drops gained angular momentum about the side axis at
+            // 0.28-0.38 m x the momentum they gained, the top spine part's height over the COM (0.29-0.40 m) [R]
+            let chest = find(&["Spine4", "Spine3"]).unwrap_or(0);
             let trunk = (self.agent.doll.centre(neck) - self.agent.doll.centre(0)).normalize_or_zero();
             let j = p.impulse(hf.t * 1000.0, flat.length(), trunk.z, DT);
             if j > 0.0 && flat.length_squared() > 1e-8 {
-                let at = self.agent.doll.centre(0);
-                self.agent.doll.impulse(0, at, flat.normalize() * j);
+                let at = self.agent.doll.centre(chest);
+                self.agent.doll.impulse(chest, at, flat.normalize() * j);
             }
         }
         if hf.from_file {
