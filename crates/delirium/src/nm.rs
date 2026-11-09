@@ -1616,7 +1616,7 @@ impl Agent {
     pub fn step_pre(&mut self, build: &Build, world: &Collision, dt: f32, obstacles: &[Obstacle], others: &[Capsule], pre: &mut dyn FnMut(&mut Ragdoll, f32)) {
         self.feedback.clear();
         (self.doll.ob_hits.clear(), self.doll.ob_hit_left.clear(), self.doll.ob_push.clear(), self.doll.contact.clear());
-        let n = substeps(dt);
+        let n = rdr2_split(substeps(dt), dt, self.rdr2_standing());
         for k in 0..n {
             pre(&mut self.doll, dt / n as f32);
             self.substep(build, world, dt / n as f32, obstacles, others);
@@ -1629,7 +1629,7 @@ impl Agent {
     pub fn step_follow(&mut self, build: &Build, world: &Collision, dt: f32, obstacles: &[Obstacle], others: &[Capsule]) {
         self.feedback.clear();
         (self.doll.ob_hits.clear(), self.doll.ob_hit_left.clear(), self.doll.ob_push.clear(), self.doll.contact.clear());
-        let n = substeps(dt);
+        let n = rdr2_split(substeps(dt), dt, self.rdr2_standing());
         for _ in 0..n {
             self.behave(build, world, dt / n as f32, obstacles);
             self.physics(build, world, dt / n as f32, obstacles, others);
@@ -1656,7 +1656,8 @@ impl Agent {
     pub fn step_group(agents: &mut [(&mut Agent, usize, &Build, &[Obstacle], &[Capsule])], world: &Collision, dt: f32, group: &mut crate::ragdoll::Group,
                       pre: &mut dyn FnMut(usize, &mut Ragdoll, f32)) {
         agents.iter_mut().for_each(|a| { a.0.feedback.clear(); a.0.doll.ob_hits.clear(); a.0.doll.ob_hit_left.clear(); a.0.doll.ob_push.clear(); a.0.doll.contact.clear(); });
-        let n = substeps(dt);
+        // one flag for the simulator: a standing RDR2 ped splits the whole group's frame, as 0x7037ec does
+        let n = rdr2_split(substeps(dt), dt, agents.iter().any(|a| a.0.rdr2_standing()));
         let h = dt / n as f32;
         for k in 0..n {
             let last = k + 1 == n;
@@ -3340,6 +3341,20 @@ fn substeps(dt: f32) -> usize {
         return crate::ragdoll::SUBSTEPS;
     }
     (dt * delirium_data::kv!(27) * crate::ragdoll::SUBSTEPS as f32).round().clamp(1.0, delirium_data::kv!(65)) as usize
+}
+
+/// RDR2 core: 0x7037ec runs a frame's physics as 2 slices of half the step when the step is at least 1/60 (.rdata 0x338e2d0) and the
+/// simulator's flag ([[0x5978610] + 0x10] + 0x14) is set [C]. Logged in the game, the flag is on from the hit until the standing phase
+/// ends: in 12 leg shots the long frames ran whole again within 2 frames of the balancer going or the fall behaviours starting [R].
+/// Here that's a balancer running and not fallen [P]. The room's frame is 1/60, so a standing RDR2 ped steps at 1/120.
+fn rdr2_split(n: usize, dt: f32, standing: bool) -> usize {
+    if standing && dt / n as f32 >= 1.0 / 60.0 { n * 2 } else { n }
+}
+
+impl Agent {
+    fn rdr2_standing(&self) -> bool {
+        self.rdr2_core.is_some() && self.balance.is_some() && !self.fallen
+    }
 }
 
 #[allow(non_snake_case)]
