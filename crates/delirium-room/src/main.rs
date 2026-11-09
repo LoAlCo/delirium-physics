@@ -1340,6 +1340,8 @@ struct Sim {
     ice: Option<(usize, [f32; 2])>,
     /// RDR2 core: the game's CTaskNMHighFall running (`rdr2_high_fall_frame`)
     rdr2_hf: Option<Rdr2HighFall>,
+    /// RDR2 core: the game's CTaskNMBalance after a bump (`rdr2_push_frame`)
+    rdr2_push: Option<Rdr2Push>,
     click_shoots: bool,
     grab: Option<Grab>,
     ties: Vec<Tie>,
@@ -2629,6 +2631,140 @@ impl Sim {
         self.rdr2_hf = Some(hf);
     }
 
+    /// The player's physicstasks file's text, from --tune-dir or RDR2_TUNE_DIR.
+    fn task_file_text() -> Option<String> {
+        let dir = std::env::args().skip_while(|a| a != "--tune-dir").nth(1).or_else(|| std::env::var("RDR2_TUNE_DIR").ok())?;
+        gametask::read_file(&dir).ok()
+    }
+
+    /// A part of ours by a tunable's bone name (ID_SKEL_SPINE0 and its like). RDR2's body names its spine Spine0..Spine4,
+    /// GTA IV's Spine, Spine1..Spine3: spine0 is GTA IV's bare Spine.
+    fn part_by_tag(&self, tag: &str) -> Option<usize> {
+        let want = tag.trim_start_matches("ID_").trim_start_matches("SKEL_").to_lowercase();
+        let names: Vec<String> = self.build.parts.iter().map(|p| p.name.to_lowercase()).collect();
+        names.iter().position(|n| n.contains(&want))
+            .or_else(|| (want == "spine0").then(|| names.iter().position(|n| n.ends_with("_spine") || n == "spine")).flatten())
+    }
+
+    /// RDR2's CTaskNMBalance on a bump by a ped (study/rdr2_push_melee_tasks.md §1): StartDefault and BumpedByPed from the
+    /// player's physicstasks (0x1c3de44 [C]), then the bump as a bullet (0x1c90db8 [C]): shotNewBullet on the part the tunables
+    /// name, at InitialBumpOffset in its frame, its normal away from the bumper. The bullet's speed (InitialBumpForce, a few
+    /// hundredths) isn't a parameter of ours. False without the file: the room's own bump then.
+    fn rdr2_push_start(&mut self, from: Vec3) -> bool {
+        if let Some(p) = self.rdr2_push.as_mut() {
+            p.touch = p.t;
+            return true;
+        }
+        let Some(file) = Self::task_file_text() else { return false };
+        let tun = gametask::tunables(&file, "CTaskNMBalance__Tunables").unwrap_or_default();
+        let bump = gametask::tunable_force(&file, "CTaskNMBalance__Tunables", "InitialBumpForce");
+        let part = tun.texts.get("UNK_MEMBER_0x94590EEE").and_then(|t| self.part_by_tag(t)).or_else(|| self.part_by_tag("SPINE0")).unwrap_or(0);
+        // The player running into a ped logged (rdr2nmx free log, 2026-11-09, 11 bumps): bodyBalance, balancerCollisionsReaction
+        // and bodyBalance's head look only, never shot / reachForWound / shotSnap, which BumpedByPed starts. So the game's task
+        // had no bump entity there [R]: StartDefault, and bodyBalance's headLookAtVelProb from lookAtVelProbIfNoBumpTarget.
+        self.fire_task("CTaskNMBalance/StartDefault");
+        self.send(&format!("bodyBalance headLookAtVelProb={}", tun.f("lookAtVelProbIfNoBumpTarget", 0.125)));
+        let pelvis = self.agent.doll.centre(0);
+        let d = (pelvis - from).normalize_or_zero();
+        if bump.is_some_and(|b| b.enable) && d != Vec3::ZERO {
+            let off = tun.vecs.get("InitialBumpOffset").copied().unwrap_or_default();
+            self.send(&format!("shotNewBullet bodyPart={part} localHitPointInfo=true hitPoint={} normal={}", v3(Vec3::from(off)), v3(d)));
+        }
+        self.rdr2_push = Some(Rdr2Push { t: 0.0, pushed: false, touch: 0.0, began: 0.0, too_long: false, fallen: false, rolling: None,
+                                         catch_sent: false, tun, bump, part, bumper: false });
+        true
+    }
+
+    /// Each step while RDR2's CTaskNMBalance runs (§1.5, 0x1c50cc0, and §1.6, 0x1c7db58 [C]), the Hero as the bumper:
+    /// pushed while he touches (within 0.7 m [P: the game's contact list]); OnBeingPushed (OnGround when fallen) at a push's
+    /// first step, OnNotBeingPushed 150 ms (400 fallen) after the last contact, OnBeingPushedOnGroundTooLong after 1 s fallen;
+    /// stayUpright's forceStrength from the speed, every step; upperBodyFlinch with the arm on his side (when he's ahead and
+    /// close) and headLook on him; OnBalanceFailed when the balancer gives up, then RollingFall over 4 m/s and CatchFall
+    /// timeToCatchfallMS later under 5 m/s; InitialBumpForce's impulses Delay..Delay+Duration ms into a push.
+    fn rdr2_push_frame(&mut self) {
+        const DT: f32 = 1.0 / 60.0;
+        let Some(mut p) = self.rdr2_push.take() else { return };
+        if self.agent.rdr2_core.is_none() || self.dead {
+            return;
+        }
+        let (_, v) = self.agent.doll.com();
+        let pelvis = self.agent.doll.centre(0);
+        let hero = self.hero.as_ref().map(|h| (h.feet, h.vel, h.head()));
+        let touching = hero.is_some_and(|(f, ..)| (f - pelvis).with_z(0.0).length() < 0.7);
+        let fallen = self.agent.fallen || !self.agent.balancing();
+        let ms = |n: &str, d: f32| p.tun.f(n, d) * 1e-3;
+        if touching {
+            p.touch = p.t;
+            if !p.pushed {
+                (p.pushed, p.began) = (true, p.t);
+                self.fire_task(if fallen { "CTaskNMBalance/OnBeingPushedOnGround" } else { "CTaskNMBalance/OnBeingPushed" });
+            }
+        } else if p.pushed && p.t - p.touch > if fallen { ms("NotBeingPushedOnGroundDelayMS", 400.0) } else { ms("NotBeingPushedDelayMS", 150.0) } {
+            (p.pushed, p.too_long) = (false, false);
+            self.fire_task("CTaskNMBalance/OnNotBeingPushed");
+        }
+        if fallen && p.pushed && !p.too_long && p.t - p.began > ms("BeingPushedOnGroundTooLongMS", 1000.0) {
+            p.too_long = true;
+            self.fire_task("CTaskNMBalance/OnBeingPushedOnGroundTooLong");
+        }
+        let (lo, hi) = (p.tun.f("MinVel", 2.0), p.tun.f("MaxVel", 7.0));
+        if !fallen && p.tun.f("ScaleStayUprightWithVel", 1.0) != 0.0 && hi > lo {
+            let x = ((v.length() - lo) / (hi - lo)).clamp(0.0, 1.0);
+            let (a, b) = (p.tun.f("StayUprightAtMinVel", 8.0), p.tun.f("StayUprightAtMaxVel", 4.0));
+            self.send(&format!("stayUpright useForces=true forceStrength={}", a + (b - a) * x));
+        }
+        if let (Some((feet, _, head)), true) = (hero, p.bumper) {
+            let g = if fallen { "OnGround" } else { "" };
+            // the bumper's bones 14 and 0 [G: his chest and his head here]
+            let chest = feet + Vec3::Z * 1.3;
+            let flinch_at = chest + Vec3::Z * p.tun.f(&format!("fFlinchTargetZOffset{g}"), 0.0);
+            if (pelvis - chest).with_z(0.0).length_squared() < p.tun.f(&format!("fMaxTargetDistToUpdateFlinch{g}"), if fallen { 1.5 } else { 1.1 }) {
+                let e = (feet.with_z(pelvis.z) - pelvis).normalize_or_zero();
+                let fwd = self.ours().fwd;
+                let right = fwd.cross(Vec3::Z);
+                let ahead = fwd.dot(e) > p.tun.f(&format!("fMinForwardVectorToFlinch{g}"), if fallen { -1.0 } else { 0.2 });
+                let left = ahead && right.dot(e) < 0.0;
+                self.send(&format!("upperBodyFlinch useLeftArm={left} useRightArm={} pos={}", ahead && !left, v3(flinch_at)));
+            }
+            self.send(&format!("headLook pos={}", v3(head + Vec3::Z * p.tun.f(&format!("fHeadLookZOffset{g}"), 0.0))));
+        }
+        if fallen && !p.fallen {
+            p.fallen = true;
+            self.fire_task("CTaskNMBalance/OnBalanceFailed");
+        }
+        if p.fallen {
+            let s = v.length();
+            if p.rolling.is_none() && s > 4.0 {
+                p.rolling = Some(p.t);
+                self.fire_task("CTaskNMBalance/RollingFall");
+            }
+            if let (Some(r), false) = (p.rolling, p.catch_sent) {
+                if p.t > r + ms("timeToCatchfallMS", 3000.0) && s < 5.0 {
+                    p.catch_sent = true;
+                    self.fire_task("CTaskNMBalance/CatchFall");
+                }
+            }
+        }
+        if let (Some(b), true, Some((feet, hv, _))) = (p.bump, p.pushed, hero) {
+            let d = (pelvis - feet).with_z(0.0).normalize_or_zero();
+            let parts = &self.build.parts;
+            let neck = parts.iter().position(|q| q.name.contains("Neck")).unwrap_or(parts.len() - 1);
+            let up = (self.agent.doll.centre(neck) - pelvis).normalize_or_zero().z;
+            let j = b.impulse((p.t - p.began) * 1000.0, hv.dot(d).abs(), up, DT);
+            if j > 0.0 && d != Vec3::ZERO {
+                let fr = self.agent.doll.frames().nth(p.part).unwrap_or_default();
+                let off = Vec3::from(p.tun.vecs.get("InitialBumpOffset").copied().unwrap_or_default());
+                self.agent.doll.impulse(p.part, fr.translation + fr.rotation * off, d * j);
+            }
+        }
+        p.t += DT;
+        // the task's end: up and still, or settled after its catchFall, a while after the last contact
+        let done = !p.pushed && p.t - p.touch > 3.0 && ((!fallen && v.length() < 0.3) || p.catch_sent || p.t - p.touch > 10.0);
+        if !done {
+            self.rdr2_push = Some(p);
+        }
+    }
+
     fn xr(&self, i: usize) -> bool {
         self.extra && self.extra_pick & (1 << i) != 0
     }
@@ -3174,6 +3310,12 @@ impl Sim {
 
     fn land(&mut self, hit: hero::Hit, head: Vec3, what: &str) {
         self.sounds.push(sfx::Snd::Punch);
+        // RDR2 core: a bump runs the game's CTaskNMBalance from the player's physicstasks (`rdr2_push_start`)
+        if let (hero::Hit::Bump(from), true) = (&hit, self.agent.rdr2_core.is_some()) {
+            if self.rdr2_push_start(*from) {
+                return self.say(format!("{what}: RDR2's CTaskNMBalance (bumped by a ped)"));
+            }
+        }
         let pelvis = self.agent.doll.frames().next().map_or(Vec3::ZERO, |f| f.translation);
         let ours = self.ours();
         let now = self.steps as f32 / 60.0;
@@ -6011,7 +6153,7 @@ fn load(a: &[String], args: &[String], game_dir: Option<&str>, script: VecDeque<
                         shot_task: None, rand: Default::default(), sg_seed: 1, sg_aim: None,
                         log: VecDeque::new(), console: String::new(), script, typing: false,
                         game_shot: String::new(), weapons, weapon: 0, weak: false, sel: 0, over_ui: false, held: true,   show_ui: true, sens: 0.5, rec, health: 200.0, god: false, aim_gun: false, gun: Gun::default(), blast_task: None, burning: 0.0, shock: 0.0, charred: vec![], voxels: vec![], on_fire: None, hero_gun: false, passive: true, homer: None, homer_weapon: None, homer_wait: None, homer_wild: false, gun_ai: false, homer_combat: None, homer_guard: None, homer_rest: 0.0, ammo: 0, reloading: None, taxis: vec![], driving: false, pedals: (0.0, 0.0, false), car_tune: None, lean_stop: None, hurt: [0.0; 4], near_at: -9.0, near_last: -9.0, dived: false, no_dodge: false, dodge_gap: DODGE_GAP, look_stop: None, dodge_at: 0.0, dodging: false, look_after: None, fall: None, hold: None, airborne: false, wet: false, hero_alpha: 0.6, render_scale: 1.0, msaa: 4, msaa_max: 4, shadow_q: 3, frame_ms: 0.0, gpu: String::new(), gpu_now: String::new(), gpus: None, aa: AA_MSAA, smaa_q: 2, dlss_q: 0, fsr_q: 1, fsr_ok: false, xess_q: 1, xess_ok: false, sharpen: 0.0, sharp_by: [0.0; 9], ssao: 0, ao_strength: 1.0, bloom: 0.0, dof: 0.0, contact: 0.0, contact_k: 1.0, vignette: 0.0, lens: 0.0, chroma: 0.0, rt: 0, rt_ok: false, sky: 2, god_rays: false, restir: false, fire: 2, water_q: 1, real_fire: false, voxel_water: false, real_water: false, real_drain: false, pouring: false, real_surface: false, real_ripples: false, water_clear: true, wet_trail: true, water_impact: true, water_faucet: true, real_level: None, flow: vec![], hero_flow: vec![], water_caustics: false, water_spray: false, water_waves: false, water_pixels: false, water_haze: false, water_mirror: false, water_foam: false, water_mist: false, photons: false, water_fine: false, water_depth: true, water_relax: false, water_ghost: false, water_vort: false, water_spray_phys: false, safe: false, fire_light: true, fire_homer: false, shadow_filter: 0, water_wet: false, wet_film: false, wet_drips: false, sky_shade: false, water_traced: false, glass_tint: true, glass_shade: true, water_ripples: true, water_refract: false, flood: None, smoke: true, view_px: UVec2::ONE, defaults: String::new(), upscaler: UP_FSR1, dlss_ok: false, fps_limit: FPS_VSYNC, fullscreen: false, extra: false, rdr2: false, rdr2_core: false, rig_rdr2: false, rig_dir: String::new(), rig_body: String::new(), rdr2_after: vec![], wall_sent: false, rdr2_fire: false, horse: None, horse_file: String::new(), horse_frag: String::new(), riding: false, rdr2_pick: Default::default(), param_edits: Default::default(), param_search: String::new(), param_changed_only: false, extra_pick: 0x1ff, fire_react: true, dive: false, hang: None, was_fallen: false, curled: false, super_punch: false, even: false, crush: None, cab_gas: 0.0, cam: None, look_z: 0.8, film: 0.0, photo: false, soft: true, shadows: true, sun_color: [1.0; 3], fill_k: 1.0, gun_reach: 1.0, gun_up: 0.0, gun_off: Vec3::ZERO, gun_aim_off: Vec3::ZERO, crane: None, crane_to: None, shadow: 0.0, strict: false, stairs_rolled: false, cam_head: false, cam_rig: None, spawn_at: None, tear_k: 1.0, sky_k: 1.0, kept_gun: None, cam_floor: f32::MIN, pov: false, film_vel: Vec3::ZERO, photo_pending: false, on_cue: vec![], photo_follow: false, detached: false, cam_at: None, cam2: None, cam2_queue: vec![], cam2_b: None, meat: None, meat_on: true, meat_wipe: false, skate3_bails: false, step_limit: false, meat_screen: None, shot_scene: String::new(), photo_note: String::new(), script_walk: Vec3::ZERO, throw_speed: None, homer_shot: 0.0, hero_physics: true, hero_doll: None, tackle: None, cuts: vec![], hat: None, dismember: false, jump: None, steam: (0, vec![]), #[cfg(feature = "portal")] portal: portal::Portals::new(), click_at: None,
-                        getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None, rdr2_hf: None,   click_shoots: false,
+                        getup, rises: [None, None], still: [0.0; 2], tasks: false, exit: (*SHOT_EXIT()), nm_t: [None, None], failed: [false; 2], last: [Vec3::ZERO; 2], room, look: true, avoid: false, eye: Vec3::new(0.0, -4.0, 1.5), hover: None, map, crowd: vec![], stress: false, group: Default::default(), cars: vec![], lanes: None, pusher: None, pile_fuse: None, ice: None, rdr2_hf: None, rdr2_push: None,   click_shoots: false,
                         grab: None, ties: vec![], line_k: 1.0, line_leash: false, line_wrap: true, drag_hold: None, drag_len: 0.0, tie_hover: None, glow: vec![], rings: vec![], ripples: vec![], ripple_wait: vec![], tape: Default::default(), replay: None, throw_at: None, pops: vec![], pop_screen: vec![], show_pops: true, tab: 1, sounds: vec![], sound: true, volume: [1.0, 1.0, 0.35], blood: vec![], pixel_blood: true, gore: false, layers: true, wounds: vec![], show_ripples: false, infinite: false, fx_seed: 1, pointer: None, crowd_hp: vec![], car_hit: vec![], car_reacts: vec![], help: !help_seen(), auto_balance: true, dead: false, hero: None, skate: None, skate_link: skate_files::Link::new(), agility,
                         scene: None, switch_to: None, poke: POKE, game_dir: game_dir.map(str::to_string), walk: true, relock: false, cam_locked: true, walk_dir: Vec3::ZERO, wander: Default::default(), getup_mode: 0, musc: None, learned: None, walk_learned: None, preview_on: false, preview: None, preview_wait: false, preview_keys: (false, false), script_jog: false, watch: None, bench: vec![], homer_id: 0, spawn_body: body, base, crowd_build, body, skin: saved_look(), ped_color: 0, body_alpha: BODY_ALPHA, eyes: true, bone_skin: false, brows: true, skel: true, skel_style: 0, clean: false, sun_dir: saved_sun() };
     sim.auto_balance = sim.script.is_empty();
@@ -6028,6 +6170,31 @@ struct Rdr2HighFall {
     band: HfBand,
     /// the sets come from the file (else plain smartFall: no band sets either)
     from_file: bool,
+}
+
+/// RDR2's CTaskNMBalance after a bump (`Sim::rdr2_push_frame`).
+#[derive(Clone, Debug)]
+struct Rdr2Push {
+    /// s since the task started
+    t: f32,
+    /// being pushed (task flag 0x80)
+    pushed: bool,
+    /// t of the last contact
+    touch: f32,
+    /// t the push began (+0x408)
+    began: f32,
+    too_long: bool,
+    fallen: bool,
+    /// t RollingFall went (+0x400)
+    rolling: Option<f32>,
+    catch_sent: bool,
+    tun: gametask::Tunables,
+    bump: Option<gametask::TunableForce>,
+    /// the bump's part (the tunables' 0x94590EEE)
+    part: usize,
+    /// the task has the bumper as its bump entity (+0x388): the flinch and look on him each step. Not for the player's
+    /// run into a ped, where the game's had none [R]
+    bumper: bool,
 }
 
 /// 0x1c54378's height bands: above a 20 m probe and falling at 6..15 m/s (HighHighFall) or faster (SuperHighFall).
@@ -10590,6 +10757,7 @@ impl Sim {
         self.soak_hero(1.0 / 60.0, true);
         self.fire_frame(1.0 / 60.0);
         self.rdr2_high_fall_frame();
+        self.rdr2_push_frame();
         if self.steps % 2 == 0 {
             self.shot_frame();
             self.blast_frame();
@@ -10921,6 +11089,12 @@ fn headless(mut sim: Sim, n: usize) {
                 (_, Some(b)) => sim.button(b),
                 _ => sim.send(l),
             }
+        }
+        // test hook: RDR2_BUMP=<frame> is the Hero's bump (a run into him from behind) at that frame, without a Hero
+        if std::env::var("RDR2_BUMP").ok().and_then(|f| f.parse::<usize>().ok()) == Some(i) {
+            let (pelvis, fwd) = (sim.agent.doll.centre(0), sim.ours().fwd);
+            let head = pelvis - fwd * 0.6 + Vec3::Z * 0.8;
+            sim.land(hero::Hit::Bump(pelvis - fwd * 0.6), head, "test  bump from behind");
         }
         // test hook: RDR2_HOLD_INCOMING=<frame> makes the pose at that frame the incoming animation from then on
         // test hook: RDR2_TURN=<frame>:ax,ay,az,deg,dz turns the whole doll about its pelvis and lifts it, still (to reach what needs him upside down, on a side or deep)

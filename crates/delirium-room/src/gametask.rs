@@ -245,6 +245,42 @@ pub fn tunable_force(file: &str, tunables: &str, block: &str) -> Option<TunableF
     })
 }
 
+/// A tunables item's plain members: numbers and flags (`<X value="..."/>`, true/false as 1/0), vectors (`<X x= y= z=/>`) and
+/// text members (`<X>name</X>`), by their names as the file gives them.
+#[derive(Clone, Debug, Default)]
+pub struct Tunables {
+    pub nums: std::collections::HashMap<String, f32>,
+    pub vecs: std::collections::HashMap<String, [f32; 3]>,
+    pub texts: std::collections::HashMap<String, String>,
+}
+
+impl Tunables {
+    pub fn f(&self, n: &str, d: f32) -> f32 {
+        self.nums.get(n).copied().unwrap_or(d)
+    }
+}
+
+pub fn tunables(file: &str, tunables: &str) -> Option<Tunables> {
+    let root = parse_xml(file)?;
+    let it = root.kid("Tunables")?.kids.iter().find(|k| k.attr("type") == Some(tunables))?;
+    let mut out = Tunables::default();
+    for k in &it.kids {
+        if let Some(v) = k.value() {
+            let x = match v { "true" => Some(1.0), "false" => Some(0.0), v => v.parse().ok() };
+            if let Some(x) = x {
+                out.nums.insert(k.tag.clone(), x);
+            }
+        } else if let (Some(x), Some(y), Some(z)) = (k.attr("x"), k.attr("y"), k.attr("z")) {
+            if let (Ok(x), Ok(y), Ok(z)) = (x.parse(), y.parse(), z.parse()) {
+                out.vecs.insert(k.tag.clone(), [x, y, z]);
+            }
+        } else if k.kids.is_empty() && !k.text.is_empty() {
+            out.texts.insert(k.tag.clone(), k.text.clone());
+        }
+    }
+    Some(out)
+}
+
 impl TunableForce {
     /// The impulse's size this step (study/rdr2_highfall_task.md §1, 0x1c66428 [C]): Mag, times the line from ForceAtMinVelocity to
     /// ForceAtMaxVelocity over the speed's place in [VelocityMin, VelocityMax], times max(0, the trunk's up z), times dt, then clamped.
