@@ -1689,6 +1689,15 @@ impl Agent {
     /// RDR2's physics and NM run three steps per 1/30 s: ctx+0x47b8 += dt with the dt of each step, read .0102, .0102, .0129 across a 1/30 s (`rdr2_core3.md` 1.3). So the core's per-step laws (twist follows .2 a step,
     /// a contact goes a step, a limit row's 5%, the limb rates) run at 90 a second, whatever the caller's step. The caller's dt is banked: at 1/60 that's one step, then two. Their dt is a fixed 1/90; the muscle's softness stays 1/60 (0x2a4e944).
     pub(crate) fn core_steps(&mut self, dt: f32) -> (usize, f32) {
+        // 0x7037ec: 2 slices of half the step when it's at least 1/60 (.rdata 0x338e2d0) and the simulator's flag ([[0x5978610] + 0x10] + 0x14)
+        // is set [C]; the flag is on from the hit until the standing phase ends (12 recorded leg shots) [R]: a balancer running, not fallen
+        if std::env::var_os("NMX_SPLIT").is_some() { // NMXHOOK
+            let n = substeps(dt);
+            let standing = self.balance.is_some() && !self.fallen;
+            let n = if standing && dt / n as f32 >= 1.0 / 60.0 { 2 * n } else { n };
+            if std::env::var_os("NMX_SPLITLOG").is_some() { eprintln!("SPLIT t {:.4} n {} standing {}", self.time, n, standing); } // NMXHOOK
+            return (n, dt / n as f32);
+        }
         if env_90_off() {
             let n = substeps(dt);
             return (n, dt / n as f32);
