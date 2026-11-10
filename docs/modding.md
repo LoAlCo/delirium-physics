@@ -633,6 +633,9 @@ Vectors are `x,y,z`. "mask" is a body-part string (see
 
 ### Extra messages: from Red Dead Redemption 2
 
+How RDR2 puts these together for each situation (shot, fall, bump, melee...) and how to get the same in your game:
+[rdr2-study-notes.md](rdr2-study-notes.md).
+
 Written from how RDR2's Euphoria behaves (none of its code), so what each does is Delirium's reading of it, not
 RDR2's own. Most parameter names are RDR2's; a few are Delirium's own where a behaviour needs a setting RDR2's table
 doesn't show (rdr2Sit's seat and stirrups, wallCollision's wall, keyframe's hold and the like). A default is RDR2's
