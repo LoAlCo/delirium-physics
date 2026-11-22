@@ -286,6 +286,8 @@ NM_API int32_t nm_rdr2_set(const char* name, float value);
 NM_API int32_t nm_agent_rdr2_shot(NmAgent* a, const NmWorld* w, int32_t part, const float* at, const float* dir);
 /* RDR2's melee reaction (meleeReact, softened so a punch staggers and rarely drops) to a blow on part `part` at `at` (world) along `dir`, instead of a flinch; rdr2Balance stays on (see nm_rdr2_set). Returns how many messages started (0 with "melee" off). */
 NM_API int32_t nm_agent_rdr2_melee(NmAgent* a, const NmWorld* w, int32_t part, const float* at, const float* dir);
+/* A GTA 6 body on the RDR2 core: nm_character_from_rdr2's body (from `xml_path`: fred.xml or wilma.xml) with GTA 6's mass distribution from `ragdoll_path` (the player's own decoded GTA 6 ragdoll, "gta6-ragdoll-1" JSON). With `build_path` it carries a build fitted to GTA 6's proportions (limbs and trunk), its masses shared out as GTA 6's. `symmetric` != 0 averages left and right masses. Into `buf` as usual. */
+NM_API int32_t nm_character_from_gta6(const char* ragdoll_path, const char* xml_path, const char* base_json, const char* build_path, int32_t symmetric, char* buf, int32_t len);
 
 #ifdef __cplusplus
 }

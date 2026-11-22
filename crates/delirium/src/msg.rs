@@ -595,6 +595,14 @@ pub fn find(name: &str) -> Option<&'static Message> {
 }
 
 pub fn send(a: &mut Agent, build: &Build, world: &Collision, st: &mut State, msg: &str, params: &[(&str, Value)]) -> Result<usize, Error> {
+    let frames: Vec<Vec3> = if crate::extras_gta6::is(msg) { a.doll.frames().map(|t| t.translation).collect() } else { vec![] };
+    if let Some(lines) = crate::extras_gta6::expand(msg, params, &|k| frames.get(k).copied().unwrap_or(Vec3::ZERO)) {
+        let mut unused = 0;
+        for (m, ps) in lines? {
+            unused += send(a, build, world, st, m, &ps)?;
+        }
+        return Ok(unused);
+    }
     if let Some(r) = a.extras.send(msg, params) {
         return r;
     }

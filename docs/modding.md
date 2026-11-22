@@ -706,6 +706,39 @@ Delirium's own, unchanged.
 
 Rust callers use `delirium::extras_rdr2::Reactions` (`on_shot`, `on_melee`), which returns the messages to send.
 
+### Extra messages: from GTA 6
+
+GTA 6's own Euphoria behaviours aren't in its data files, but its reaction animation sets are. Each message here is
+named after one of those sets and runs on the behaviours above (the RDR2 extras and the core set): sending it sends a
+few of them, with Delirium's own values; none of GTA 6's code or numbers. Like every extra they do nothing until sent
+with `start=true`; `start=false` stops what they started. The send's return value adds up the messages it sent.
+
+| Message | What it does | Sends | Key parameters |
+|---|---|---|---|
+| `gta6BulletImpact` | A bullet hit: shot, snap, spin, then the hit place's reaction and a reach to the wound. | `shot`, `shotSnap`, `shotSpin`, `shotInjuredLeg` / `shotInjuredArm` / `shotInGuts` / `shotFromBehind`, `reachForWound` | `bodyPart`, `hitPoint`, `bulletDir`, `toughness` (0 normal, 1 tough, 2 very tough), `fromBehind`, `reach` |
+| `gta6ShotgunKnockdown` | A shotgun blast to the chest, gut or a leg. | `shot`, `applyImpulse`, `shotSnap`, `shotInGuts` / `shotInjuredLeg` | `area` (0 chest, 1 gut, 2 left leg, 3 right leg), `bulletDir`, `force` |
+| `gta6HitReact` | A hit he takes on his feet: a melee reaction unarmed, a snap and flinch holding a weapon. | `meleeReact`, or `shotSnap` + `upperBodyFlinch` + `bodyBalance` | `weapon` (0 none, 1 pistol, 2 rifle), `style` (0 normal, 1 tough, 2 swat), `hitPart`, `hitPoint`, `hitNormal` |
+| `gta6RecoverBalance` | Catching himself after a hit or a bump. | `bodyBalance`, `rdr2Balance`, `armsWindmillAdaptive` | `armed`, `windmill` |
+| `gta6Stumble` | Staggering, maybe down to the knees. | `stumble`, `shotFallToKnees` | `staggerTime`, `toKnees` |
+| `gta6Trip` | Tripping forwards, ending on all fours. | `staggerFall`, `setFallingReaction` | `handsAndKnees` |
+| `gta6LowSpeedImpact` | Bumped (a slow car, a person): light and medium he stays up, heavy knocks him over. | `applyImpulse`, `bodyBalance` / `staggerFall` | `strength` (0 to 2), `dir`, `at` |
+| `gta6Freefall` | A long fall. | `highFall` | `armsUp` |
+| `gta6StuntFall` | A fall that picks its landing reaction. | `smartFall` | `forwardRoll` |
+| `gta6FallOverFence` | Tipping over a fence. | `fallOverWall` | `fencePoint`, `fenceEdge` |
+| `gta6Roll` | Rolling, tucked or loose. | `bodyRollUp` / `rollDownStairs` | `tucked` |
+| `gta6Writhe` | Writhing on the floor, or hurt and fading. | `bodyWrithe` / `injuredOnGround` | `dying` |
+| `gta6Burning` | On fire: staggers flailing, or writhes when down. | `stumble` + `armsWindmill` / `bodyWrithe` | `onGround` |
+| `gta6Electrocuted` | Electrocuted. | `electrocute` | `stunMag` |
+| `gta6VehicleTumble` | Thrown from a vehicle: tumbles, or goes limp when knocked out. | `rollDownStairs` / `bodyRelax` | `knockedOut` |
+| `gta6ReachForInjury` | A hand (or both) to a wound. | `reachForWound` | `hitPart`, `hitPoint`, `bothHands` |
+
+GTA 6 bodies: `nm_character_from_gta6` builds an RDR2 body (`nm_character_from_rdr2`: RDR2's joint limits and muscles,
+from fred.xml or wilma.xml) and gives it GTA 6's mass distribution and proportions (thighs, shins, upper arms,
+forearms and trunk) from your own decoded GTA 6 ragdoll, a `gta6-ragdoll-1` JSON: `{"format": "gta6-ragdoll-1",
+"parts": [{"bone": "SKEL_Pelvis", "mass": ...}, ...], "bones": {"SKEL_Pelvis": [x, y, z], ...}}` with a part for each
+of the 21 ragdoll bones (`gta6::BONE_OF`) and the skeleton's bone positions. GTA 6's left parts weigh more than its
+right ones; `symmetric` averages them. `examples/gta6_body.rs` builds one and tries every message above on it.
+
 Parameters marked unused in the listing are accepted (and counted in the return
 value of `nm_msg_send`) but do not change anything.
 

@@ -3,6 +3,7 @@
 pub mod character;
 pub mod rdr2;
 pub mod rig;
+pub mod gta6;
 
 use delirium_data::taskparams::TaskParams;
 use delirium::collision::Collision;

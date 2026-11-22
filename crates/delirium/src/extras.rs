@@ -4,6 +4,7 @@ use bevy_transform::components::Transform;
 
 pub fn messages() -> impl Iterator<Item = &'static Message> {
     MESSAGES.iter().chain(&crate::extras_fall::MESSAGES).chain(&crate::extras_held::MESSAGES).chain(&crate::extras_rdr2::MESSAGES)
+        .chain(&crate::extras_gta6::MESSAGES)
 }
 
 pub static MESSAGES: [Message; 3] = [
@@ -92,6 +93,10 @@ pub struct Extras {
 
 impl Extras {
     pub fn send(&mut self, msg: &str, params: &[(&str, Value)]) -> Option<Result<usize, Error>> {
+        // GTA 6 behaviours aren't extras of their own: msg::send turns them into the messages they stand for
+        if crate::extras_gta6::is(msg) {
+            return None;
+        }
         let name = messages().find(|m| m.name == msg)?.name;
         let mut p = P { params, used: vec![] };
         if name == "injury" {
@@ -274,7 +279,10 @@ pub struct P<'a, 'b> {
     used: Vec<&'b str>,
 }
 
-impl<'b> P<'_, 'b> {
+impl<'a, 'b> P<'a, 'b> {
+    pub(crate) fn new(params: &'a [(&'b str, Value)]) -> Self {
+        P { params, used: vec![] }
+    }
     fn get(&mut self, name: &str) -> Option<&Value> {
         let (n, v) = self.params.iter().find(|(n, _)| *n == name)?;
         self.used.push(n);
@@ -295,7 +303,7 @@ impl<'b> P<'_, 'b> {
     pub fn i(&mut self, name: &str, d: i32) -> Result<i32, Error> {
         self.get(name).map_or(Ok(d), Value::i)
     }
-    fn done(&self) -> Result<(), Error> {
+    pub(crate) fn done(&self) -> Result<(), Error> {
         match self.params.iter().all(|(n, _)| self.used.contains(n)) {
             true => Ok(()),
             false => Err(Error::Param),

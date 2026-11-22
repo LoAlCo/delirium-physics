@@ -12,7 +12,7 @@ const PART_OF: [usize; 21] = [0, 1, 4, 5, 2, 6, 7, 3, 8, 9, 10, 13, 20, 11, 14, 
 /// number the legs, spine and arms in Delirium's order with the neck and head last.
 const PART_OF_OLD: [usize; 21] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 19, 20, 11, 12, 13, 14, 15, 16, 17, 18];
 /// Each Delirium part's parent part (joint j joins part j + 1 to this).
-const PARENT: [usize; 21] = [0, 0, 1, 2, 0, 4, 5, 0, 7, 8, 9, 10, 11, 10, 13, 14, 15, 10, 17, 18, 19];
+pub(crate) const PARENT: [usize; 21] = [0, 0, 1, 2, 0, 4, 5, 0, 7, 8, 9, 10, 11, 10, 13, 14, 15, 10, 17, 18, 19];
 
 type M3 = [[f32; 3]; 3];
 
