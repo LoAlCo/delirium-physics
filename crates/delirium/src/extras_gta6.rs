@@ -61,7 +61,7 @@ pub static MESSAGES: [Message; 16] = [
         Param { name: "dying", kind: Kind::Bool, used: true, doc: "hurt and fading on the floor rather than thrashing (false)" },
     ] },
     Message { name: "gta6Burning", params: &[
-        Param { name: "onGround", kind: Kind::Bool, used: true, doc: "already down: he writhes; false: staggers flailing (false)" },
+        Param { name: "onGround", kind: Kind::Bool, used: true, doc: "already down: he skips the stagger and rolls (false)" },
     ] },
     Message { name: "gta6Electrocuted", params: &[
         Param { name: "stunMag", kind: Kind::Float, used: true, doc: "each jolt's kick, as electrocute's (0.25)" },
@@ -276,12 +276,12 @@ fn build(msg: &str, p: &mut P, at: &dyn Fn(usize) -> Vec3) -> Result<Vec<Line>, 
             }
         }
         "gta6Burning" => {
+            // RDR2's onFire: staggers flailing, then down, rolls to put the flames out
+            let mut fire = vec![on()];
             if p.b("onGround", false)? {
-                out.push(("bodyWrithe", vec![on()]));
-            } else {
-                out.push(("stumble", vec![on(), ("staggerTime", Float(3.0)), ("useArmsBrace", Bool(false))]));
-                out.push(("armsWindmill", vec![on()]));
+                fire.push(("staggerTime", Float(0.0)));
             }
+            out.push(("onFire", fire));
         }
         "gta6Electrocuted" => {
             let mag = p.f("stunMag", 0.25)?;

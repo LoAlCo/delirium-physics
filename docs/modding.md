@@ -727,7 +727,7 @@ with `start=true`; `start=false` stops what they started. The send's return valu
 | `gta6FallOverFence` | Tipping over a fence. | `fallOverWall` | `fencePoint`, `fenceEdge` |
 | `gta6Roll` | Rolling, tucked or loose. | `bodyRollUp` / `rollDownStairs` | `tucked` |
 | `gta6Writhe` | Writhing on the floor, or hurt and fading. | `bodyWrithe` / `injuredOnGround` | `dying` |
-| `gta6Burning` | On fire: staggers flailing, or writhes when down. | `stumble` + `armsWindmill` / `bodyWrithe` | `onGround` |
+| `gta6Burning` | On fire: staggers flailing, then rolls on the ground (RDR2's onFire). | `onFire` | `onGround` |
 | `gta6Electrocuted` | Electrocuted. | `electrocute` | `stunMag` |
 | `gta6VehicleTumble` | Thrown from a vehicle: tumbles, or goes limp when knocked out. | `rollDownStairs` / `bodyRelax` | `knockedOut` |
 | `gta6ReachForInjury` | A hand (or both) to a wound. | `reachForWound` | `hitPart`, `hitPoint`, `bothHands` |
