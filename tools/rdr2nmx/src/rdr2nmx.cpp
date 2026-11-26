@@ -365,7 +365,9 @@ constexpr int HEALTH = 400, DAMAGE = 60;
 const Scenario SCENARIOS[] = {
     {"capture", "shot_leg and real_shot three times each, alternating, each to its own file, with the hooks (Mode B)"},
     {"falls", "a townsman dropped from 4, 8, 15 and 30 m, twice each, 6 m ahead of the player, 8 s logged each (Mode A)"},
-    {"pushes", "3 bumps (a townsman sprints through another) then 3 fist fights (one fights a passive one), 5 m ahead (Mode A)"},
+    {"falls_more", "18 drops: 10-20 and 50 m still, 15 m moving forwards and backwards, twice each, 12 s logged each (Mode A)"},
+    {"player_falls", "the player put 15 and 30 m up, twice each, invincible for the run, 10 s logged each (Mode A)"},
+    {"pushes","3 bumps (a townsman sprints through another) then 3 fist fights (one fights a passive one), 5 m ahead (Mode A)"},
     {"real_shot", "a clone of the player 4 m ahead, 3 s to settle, one bullet (60 of 400 health) at the chest from 3 m in front, 6 s logged"},
     {"shot_back", "the same, the bullet from behind"},
     {"shot_leg", "the same, the bullet at the left thigh from the front"},
@@ -375,7 +377,7 @@ const Scenario SCENARIOS[] = {
 };
 constexpr int CAPTURE_RUNS = 3;
 constexpr DWORD CAPTURE_GAP_MS = 1000;   // between runs, so the last ped is gone
-int g_pick = 0;   // capture
+int g_pick = 2;   // falls_more (the next capture)
 volatile bool g_run, g_abort, g_free, g_dump;
 
 // Agents whose rig is already in the open file: NM inserts an agent only when the ped ragdolls, so the rig is
@@ -553,10 +555,13 @@ void run_capture() {
 // One drop: the townsman stands 6 m ahead for 1 s (model in, standing), then is put `h` m above the ground there, still,
 // and left to the game: its own fall and NM tasks (CTaskNMHighFall) run as they would. 2000 health so a 30 m landing
 // isn't a death.
-void run_drop(float h, const char* file, const char* note) {
+// `speed`: with it the townsman faces across the player's view (to the player's left) and is let go moving that fast along
+// his own facing (negative: backwards), so a moving fall tips him onto his front or his back; `ms` is how long the
+// fall and landing are logged.
+void run_drop(float h, const char* file, const char* note, float speed = 0.0f, int ms = 8000) {
     Ped player = PLAYER::PLAYER_PED_ID();
     Vector3 at = ENTITY::GET_OFFSET_FROM_ENTITY_IN_WORLD_COORDS(player, 0.0f, 6.0f, 0.0f);
-    float heading = ENTITY::GET_ENTITY_HEADING(player);
+    float heading = ENTITY::GET_ENTITY_HEADING(player) + (speed != 0.0f ? 90.0f + 180.0f : 0.0f);
     float ground = at.z;
     float g = 0.0f;
     if (GAMEPLAY::GET_GROUND_Z_FOR_3D_COORD(at.x, at.y, at.z + 3.0f, &g, FALSE) && fabsf(g - at.z) < 3.0f) ground = g;
@@ -584,9 +589,10 @@ void run_drop(float h, const char* file, const char* note) {
     log_frames(1000, ped, frame);
     ENTITY::SET_ENTITY_COORDS(ped, at.x, at.y, ground + h, FALSE, FALSE, FALSE, FALSE);
     ENTITY::SET_ENTITY_HEADING(ped, heading + 180.0f);
-    ENTITY::SET_ENTITY_VELOCITY(ped, 0.0f, 0.0f, 0.0f);
-    say("%s: up %.0f m (ground %.2f)", file, h, ground);
-    log_frames(8000, ped, frame);
+    float rad = (heading + 180.0f) * 3.14159265f / 180.0f;   // the ped's facing (heading + 180 above)
+    ENTITY::SET_ENTITY_VELOCITY(ped, -sinf(rad) * speed, cosf(rad) * speed, 0.0f);
+    say("%s: up %.0f m (ground %.2f), moving %.1f m/s", file, h, ground, speed);
+    log_frames(ms, ped, frame);
     say("%s: health after the landing %d of 2000", file, ENTITY::GET_ENTITY_HEALTH(ped));
     g_out.close();
     PED::DELETE_PED(&ped);
@@ -692,6 +698,68 @@ void run_falls() {
     say("falls: done%s in %.1f s", g_abort ? " (aborted)" : "", (GetTickCount() - t0) / 1000.0);
 }
 
+// More falls, for the hand-over height, the bands, moving falls and the settling after the landing (12 s logged each).
+void run_falls_more() {
+    if (!story_only()) { say("not in story mode: no falls"); return; }
+    DWORD t0 = GetTickCount();
+    struct Drop { float h, speed; int runs; const char* what; };
+    const Drop D[] = {
+        {10, 0, 2, "still"}, {12, 0, 2, "still"}, {13, 0, 2, "still"}, {14, 0, 2, "still"}, {16, 0, 2, "still"},
+        {20, 0, 2, "still"}, {50, 0, 2, "still"}, {15, 3, 2, "moving forwards"}, {15, -3, 2, "moving backwards"},
+    };
+    say("falls_more: 18 drops, about 5 min; stand somewhere open with 12 m clear ahead and to each side");
+    for (const Drop& d : D) {
+        for (int i = 1; i <= d.runs && !g_abort; i++) {
+            if (disabled()) { say("falls_more: DISABLE file: stopped"); return; }
+            char file[64];
+            if (d.speed == 0) sprintf_s(file, "fall2_%dm_%d", (int)d.h, i);
+            else sprintf_s(file, "fall2_%dm_%s_%d", (int)d.h, d.speed > 0 ? "fwd" : "back", i);
+            char note[200];
+            sprintf_s(note, "a townsman dropped from %.0f m, %s%s (run %d of %d)", d.h, d.what,
+                      d.speed != 0 ? " at 3 m/s, across the player's view" : ", facing the player", i, d.runs);
+            run_drop(d.h, file, note, d.speed, 12000);
+            DWORD gap = GetTickCount() + CAPTURE_GAP_MS;
+            while (GetTickCount() < gap && !g_abort) WAIT(0);
+        }
+    }
+    say("falls_more: done%s in %.1f s", g_abort ? " (aborted)" : "", (GetTickCount() - t0) / 1000.0);
+}
+
+// The player (Arthur) put 15 and 30 m up where he stands, still, twice each, invincible for the run (the setting he had
+// is put back after), 10 s logged each: to compare the player's falls with the townsmen's.
+void run_player_falls() {
+    if (!story_only()) { say("not in story mode: no falls"); return; }
+    DWORD t0 = GetTickCount();
+    Player pl = PLAYER::PLAYER_ID();
+    BOOL was = PLAYER::GET_PLAYER_INVINCIBLE(pl);
+    PLAYER::SET_PLAYER_INVINCIBLE(pl, TRUE);
+    say("player_falls: 15 and 30 m, twice each, about 50 s; stand somewhere open, off your horse");
+    for (float h : {15.0f, 30.0f}) {
+        for (int i = 1; i <= 2 && !g_abort; i++) {
+            if (disabled()) break;
+            Ped me = PLAYER::PLAYER_PED_ID();
+            Vector3 at = ENTITY::GET_ENTITY_COORDS(me, TRUE, FALSE);
+            char file[64]; sprintf_s(file, "player_fall_%dm_%d", (int)h, i);
+            char note[160]; sprintf_s(note, "the player put %.0f m up where he stood, still (run %d of 2)", h, i);
+            if (!g_out.open(file, note)) break;
+            g_rigged = 0;
+            globals();
+            uint32_t frame = 0;
+            log_frames(500, me, frame);
+            ENTITY::SET_ENTITY_COORDS(me, at.x, at.y, at.z + h, FALSE, FALSE, FALSE, FALSE);
+            ENTITY::SET_ENTITY_VELOCITY(me, 0.0f, 0.0f, 0.0f);
+            say("%s: up %.0f m", file, h);
+            log_frames(10000, me, frame);
+            g_out.close();
+            say("%s: done%s", file, g_abort ? " (aborted)" : "");
+            DWORD gap = GetTickCount() + 3000;   // time to get up
+            while (GetTickCount() < gap && !g_abort) WAIT(0);
+        }
+    }
+    PLAYER::SET_PLAYER_INVINCIBLE(pl, was);
+    say("player_falls: done%s in %.1f s", g_abort ? " (aborted)" : "", (GetTickCount() - t0) / 1000.0);
+}
+
 void on_key(DWORD key, WORD, BYTE, BOOL, BOOL, BOOL, BOOL up) {
     if (up) return;
     bool ctrl = GetAsyncKeyState(VK_CONTROL) & 0x8000;
@@ -718,6 +786,8 @@ void main_loop() {
             const Scenario& s = SCENARIOS[g_pick];
             if (!strcmp(s.name, "capture")) run_capture();
             else if (!strcmp(s.name, "falls")) run_falls();
+            else if (!strcmp(s.name, "falls_more")) run_falls_more();
+            else if (!strcmp(s.name, "player_falls")) run_player_falls();
             else if (!strcmp(s.name, "pushes")) run_pushes();
             else run_scenario(s.name, s.name, s.note);
         }

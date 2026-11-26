@@ -66,8 +66,10 @@ They run in front of the player.
 
 | Name | What it does |
 |---|---|
-| `capture` (default) | Leg and chest shots, three each, alternating, each to its own file, with the hooks. |
+| `capture` | Leg and chest shots, three each, alternating, each to its own file, with the hooks. |
 | `falls` | A townsman dropped from 4, 8, 15 and 30 m, twice each. |
+| `falls_more` (default) | 18 drops, 12 s logged each: from 10, 12, 13, 14, 16, 20 and 50 m still, and from 15 m moving 3 m/s forwards and backwards, twice each. About 5 minutes; needs 12 m clear ahead and to each side. |
+| `player_falls` | The player put 15 and 30 m up where he stands, twice each. He's invincible for the run, and his setting is put back after. |
 | `pushes` | Bumps and fist fights between townsmen. In our tests they didn't ragdoll, so use F11 and do it yourself instead. |
 | `real_shot` | A clone of the player, one chest shot (60 of 400 health) from 3 m. |
 | `shot_back` | The same shot, from behind. |
